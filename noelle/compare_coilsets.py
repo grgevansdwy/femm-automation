@@ -1,55 +1,29 @@
 # =============================================================================
-# compare_coilsets.py
+# compare_coilsets.py                                            Noel Hosking
 #
-# WHAT THIS SCRIPT DOES
-#   Compares wireless-power "coilsets". A coilset is a 3-coil link:
-#       Loop  (L1) -- the PA-driven drive loop
-#       Tank  (L2) -- a free-floating resonator on the transmit side
-#       RC    (L3) -- the receive coil, on the load side
-#   For each coilset it drives FEMM (2-D axisymmetric magnetostatic, 6.78 MHz,
-#   millimetres) to extract the full self/mutual inductance matrix at a range
-#   of RC-to-transmitter separations, feeds those into a closed-form 3-mesh
-#   circuit model, and renders everything into one large matplotlib dashboard
-#   plus a text log under ./results/ID<timestamp>/.
+# Compares 3-coil wireless-power links: Loop (L1, PA-driven) -> Tank (L2, free
+# resonator) -> RC (L3, receiver). For each coilset, drives FEMM (2-D
+# axisymmetric, 6.78 MHz, mm) to extract the self/mutual inductance matrix over
+# a range of RC separations, solves a 3-mesh circuit model on the result, and
+# writes one matplotlib dashboard + a text log to ./results/ID<timestamp>/.
 #
-# PIPELINE, top to bottom
-#   1. Global constants: frequency, fixed impedances, matching network, plot box
-#   2. Result accumulator lists (one entry appended per coilset)
-#   3. Matplotlib figure: a 6x4 grid carved into 3 big panes + line charts
-#   4. `parameters` full-factorial sweep dict  (LEGACY - see note there)
-#   5. Named coilset variants cloned from coil_configs.py
-#   6. MAIN SIMULATION LOOP over coilset_array:
-#        a. one FEMM circuit per physical turn
-#        b. draw RC / Tank / Loop, then ferrite, shields, backplanes
-#        c. solo inductances -> assembled inductances -> tuning capacitors
-#        d. sweep RC distance: 3 FEMM solves per distance -> L/M/k -> circuit math
-#        e. one final solve at the real currents -> ferrite/shield/trace losses
-#        f. plot the config, then delete all geometry + circuits for the next one
-#   7. Axis labels, the two summary tables, save SVG, show, close FEMM
+# Layout: constants -> accumulators -> figure grid -> `parameters` (LEGACY) ->
+# named variants -> MAIN SIMULATION LOOP -> tables, save SVG, close FEMM.
+#
+# Per coilset the main loop: registers one FEMM circuit per turn, draws the
+# coils and ferrite/shields, measures solo then assembled inductances, computes
+# tuning caps, sweeps RC distance (3 solves each) for L/M/k and circuit math,
+# then one final solve for losses.
 #
 # CONVENTIONS
-#   - All FEMM geometry is in millimetres; y is the axis of revolution direction
-#     (the "distance" axis), x is radius. Nothing may cross x = 0.
+#   - Geometry in mm. x = radius, y = axis of revolution. Nothing crosses x=0.
 #   - Currents are PEAK amps unless the name ends in _RMS.
-#   - "TC" = transmit coil side (Loop + Tank), "RC" = receive coil side.
-#   - Helper functions all live in femm_model.py (imported as nff).
-#
-# NOTE ON THE COMMENTS BELOW
-#   Blocks marked UNUSED / DEAD are assigned but never read anywhere in this
-#   file. They are flagged rather than removed so nothing is deleted behind
-#   your back - each one is safe to delete once you have confirmed no other
-#   script imports this module.
+#   - "TC" = transmit side (Loop + Tank), "RC" = receive side.
 # =============================================================================
-    #Noel Hosking
 
-# --- Imports ---------------------------------------------------------------
-# femm  : the FEMM python wrapper. mi_* = model/input window (pre-processor),
-#         mo_* = output window (post-processor, only valid after mi_analyze).
-# cc    : coil_configs.py - library of ready-made CoilSet objects (cc.Gen3, ...)
-# nff   : femm_model.py - all drawing/solving/post-processing helpers
-# lta   : LTspice hand-off, used only by the commented-out "New Way" MPP solve
-# UNUSED IMPORTS (safe to delete): random, sys, NamedTuple, dataclass,
-#   Pool, cpu_count. `fields`, `iter`(itertools) and CoilSet ARE used.
+# nff = femm_model (drawing/solving/extraction), cc = coil_configs (CoilSet
+# library), lta = LTspice MPP hand-off (only the commented-out "New Way" path).
+# femm: mi_* = pre-processor, mo_* = post-processor (valid after mi_analyze).
 import femm
 import matplotlib.pyplot as plt
 import matplotlib.transforms as xfrms
@@ -85,12 +59,11 @@ omega = 2*np.pi*freq
 R_source = 0
 R_load = 5.70729148134063-17.6847088416818j #complex impedance of 50Ohm load and OC matching network    
 R_load_1kW = 65.9178168237154+3.56064781719504j #1kW
-# FEMM "group" numbers. Every drawn entity is tagged with one of these so an
-# entire coil - plus any ferrite/shield/backplane drawn into the same group -
-# can be selected and translated as one unit. This is how the RC is moved to
-# each test distance without redrawing it.
-# UNUSED: rc_backplane_group / tc_backplane_group - the backplanes are drawn
-# into rc_group / loop_group instead, so they travel with their coil.
+# FEMM group numbers: tag every shape so a whole coil (plus its ferrite/shield/
+# backplane) can be selected and translated as one unit. This is how the RC is
+# moved to each test distance without redrawing it.
+# UNUSED: rc_backplane_group / tc_backplane_group - backplanes go into
+# rc_group / loop_group instead, so they travel with their coil.
 loop_group = 1
 tank_group = 2
 rc_group = 3
@@ -121,14 +94,10 @@ C_match_OC = 1380e-12 #pF
 # RC feed cable, as R + jwL of an RG8x run.
 Z_cable_RC = .22 + (1j*omega*139e-9) #RG8x
 
-# Power-amplifier side.
-# Z_pa : PA output impedance seen by the loop.
-# Vs   : fundamental component of the PA's square-wave output (4/pi * Vpa),
-#        i.e. first-harmonic approximation, since the circuit math is phasor.
-# UNUSED: Pout.
-# NOTE Vpa stays fixed at 200 V on the active "OLD WAY" path, which is why the
-#      VPA chart comes out flat. It is only recomputed by the commented-out
-#      LTspice max-power-point block further down.
+# PA side. Z_pa = output impedance seen by the loop. Vs = fundamental of the
+# square-wave output (4/pi * Vpa), first-harmonic approximation.
+# GOTCHA: Vpa is fixed at 200 V on the active "OLD WAY" path, which is why the
+# VPA chart is flat. Only the commented-out LTspice MPP block recomputes it.
 Z_pa = 0.102210554024676 + 26.0367108593328j
 Pout = 1000
 #efficiency = .85    
@@ -222,13 +191,11 @@ efficiency_tests = []
 #                   very end of the script (order must match `rows`).
 config_results = []
 
-#Window/Fig
-# One 6x4 subplot grid is created, then most cells are removed and merged into
-# three large panes:
-#   cols 0-1, rows 0-2 -> config_pane  (table of INPUT parameters per config)
-#   cols 0-1, rows 3-5 -> results_pane (table of OUTPUT results per config)
-#   col 3,    rows 4-5 -> disp_pane    (coil cross-section drawing)
-# The surviving single cells in columns 2 and 3 are the line charts.
+# A 6x4 subplot grid, with most cells merged into three big panes:
+#   config_pane  (cols 0-1, rows 0-2) input parameter table
+#   results_pane (cols 0-1, rows 3-5) output results table
+#   disp_pane    (col 3,    rows 4-5) coil cross-section
+# Surviving single cells in columns 2-3 are the line charts.
 fig2, bxs = plt.subplots(6, 4, num=f'Sim-{timestamp}')
 vpa_pane = bxs[0,3]
 ipa_pane = bxs[0,2]
@@ -254,23 +221,13 @@ config_pane = fig2.add_subplot(bs[0:3, 0:2])
 results_pane = fig2.add_subplot(bs2[3:6, 0:2])
 disp_pane = fig2.add_subplot(bs[4:, 3]) 
 
-# ---------------------------------------------------------------------------
-# LEGACY FULL-FACTORIAL SWEEP TABLE
-# Every key is one CoilSet field, IN THE SAME ORDER AS THE CoilSet DATACLASS,
-# and every value is the list of settings to try for it. itertools.product over
-# these values builds one CoilSet per combination further down.
-#
-# IMPORTANT: that generated list is thrown away - `coilset_array` is
-# reassigned to an explicit list of named configs before the simulation runs.
-# So these numbers no longer drive the simulation. They are still read for
-#   (a) the no_*_present flags that prune rows from the config table, and
-#   (b) parameter_count and the config table's row labels.
-# To change what is simulated, edit the coilset_array assignment (or the
-# config in coil_configs.py), not this dict.
-#
-# The trailing "#0, #1, ..." numbers are stale positional indices from an older
-# constructor signature; they stop matching after #29.
-# ---------------------------------------------------------------------------
+# LEGACY FULL-FACTORIAL SWEEP TABLE ------------------------------------------
+# One key per CoilSet field, in dataclass order; values are the settings to try.
+# These no longer drive the simulation - coilset_array is reassigned below. The
+# dict IS still read for the no_*_present table-pruning flags and for
+# parameter_count / config-table row labels, so it cannot simply be deleted.
+# To change what runs, edit coilset_array (or coil_configs.py), not this.
+# The trailing "#0, #1, ..." indices are stale past #29.
 run_count = 0
 parameters = {
     'config_name' : [""],
@@ -388,15 +345,10 @@ for i in range(0, parameter_count):
 # (Python 3.7+ dicts are insertion-ordered, so the risk is not the dict - it is
 #  that this key order must stay in lockstep with the CoilSet field order.)
 
-# ---------------------------------------------------------------------------
-# NAMED CONFIG VARIANTS
-# Each block clones a baseline from coil_configs.py and tweaks a few fields.
-# None of them run unless they appear in the coilset_array assignment below.
-# Currently UNUSED (kept as a menu of past experiments): Gen2_4Layer,
-# Gen3_backplane, Gen3_4mm_RC_ferrite, Gen3_2mm_RC_ferrite,
-# Gen3_2mm_61_RC_ferrite, new_coil_6_turn, new_coil_7_turn, new_coil_8_turn.
-# Delete only if you are sure you will not want to re-run those comparisons.
-# ---------------------------------------------------------------------------
+# NAMED CONFIG VARIANTS ------------------------------------------------------
+# Each clones a baseline from coil_configs.py and tweaks a few fields. None run
+# unless listed in coilset_array below. All are currently unused - kept as a
+# menu of past experiments to re-run.
 #Special Configs
 ###############################
 #5-turn V1 HP tank, George Coil (3-turn RC 100mm), 130mm Loop 
@@ -408,11 +360,8 @@ Gen2_4Layer.num_tank_layers = 4
 
 # RevA1_no_tank.num_tank_turns = 0
 
-# NOTE: the "MAIN LOOP" banner below is misleading. This only BUILDS the swept
-# coilset list from `parameters`; the real simulation loop is much further
-# down, after nff.init_femm(). Because coilset_array is reassigned below, this
-# loop is currently wasted work (it still validates that the dict and the
-# CoilSet signature agree, which is the one reason to keep it).
+# NOTE: this banner is misleading - the real simulation loop is further down,
+# after nff.init_femm().
 #######MAIN LOOP
 
 
@@ -489,10 +438,9 @@ nff.init_femm()
 
 
 # ===========================================================================
-# MAIN SIMULATION LOOP
-# One iteration == one coilset == one column in both tables and one colour in
-# every chart. Each iteration must leave the FEMM model empty again, because
-# all configs share a single FEMM document.
+# MAIN SIMULATION LOOP - one iteration per coilset = one table column, one
+# chart colour. Each iteration MUST leave the FEMM model empty again: all
+# configs share a single FEMM document.
 # ===========================================================================
 num_configs = len(list(coilset_array))
 for coilset in coilset_array:
@@ -527,14 +475,12 @@ for coilset in coilset_array:
     plot_color = cm(1.*run_count/num_configs)
     colors.append(plot_color)
 
-    #modify the ferrite to have the x,y permeability for this run
-    # FEMM material property slots: 1/2 = mu_x / mu_y, 5 = conductivity,
-    # 10/11 = loss tangents (hysteresis lag angle).
-    # GOTCHA: both the TC and the RC ferrite use this one shared 'Ferrite'
-    # material, so the RC ferrite silently inherits the TANK's permeability and
-    # loss angle - coilset.rc_mu and coilset.rc_loss_angle are set by some
-    # configs but never applied here. Add a second material if the two ferrites
-    # must differ.
+    # Set ferrite permeability for this run. FEMM property slots: 1/2 = mu_x /
+    # mu_y, 5 = conductivity, 10/11 = loss tangents.
+    # GOTCHA: TC and RC share this one 'Ferrite' material, so the RC ferrite
+    # silently inherits the TANK's mu and loss angle - coilset.rc_mu and
+    # rc_loss_angle are set by some configs but never applied. Needs a second
+    # material if the two must differ.
     femm.mi_modifymaterial('Ferrite', 1, coilset.tank_mu)
     femm.mi_modifymaterial('Ferrite', 2, coilset.tank_mu)
     femm.mi_modifymaterial('Ferrite', 5, 1e-11) #conductivity
@@ -542,8 +488,8 @@ for coilset in coilset_array:
     femm.mi_modifymaterial('Ferrite', 11, coilset.tc_loss_angle)
     femm.mi_zoom(0, -100, 100, 100)
 
-    # Dead scratch from an earlier discrete-ferrite-bar study (which is not
-    # representable in an axisymmetric model anyway). Reference only.
+    # Scratch from a discrete-ferrite-bar study (not representable in an
+    # axisymmetric model anyway). Reference only.
     #ferrite_y_distance = coilset.tank_PCB_thickness + coilset.tank_ferrite_y_offset+coilset.loop_PCB_thickness+coilset.loop_offset+(2*trace_thickness)
     #ferrite_inner_r = int(bar_width / (2*np.tan(np.pi/ferrite_qty)))
     #if (ferrite_inner_r > tank_inner_r):
@@ -565,11 +511,9 @@ for coilset in coilset_array:
     rc_test_distances = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
 
     #DRAWING RC
-    # draw_and_plot_coil_traces() draws the spiral as a stack of rectangles in
-    # the FEMM model AND sketches it onto disp_pane. It returns the radius of
-    # every trace and the y of every layer, both needed later for per-trace
-    # loss integration. Order matters only for readability - the group tag on
-    # the last argument is what binds each shape to its coil.
+    # draw_and_plot_coil_traces() draws the spiral into FEMM and sketches it on
+    # disp_pane, returning per-trace radii and per-layer y (needed later for
+    # loss integration). The group tag (last arg) binds each shape to its coil.
     # Vertical layout: RC face-down at the first test distance (hence the
     # negative PCB thickness), tank at y = 0, loop below the tank.
     rc_turn_radii, rc_trace_ys = nff.draw_and_plot_coil_traces(coilset.rc_radius, coilset.num_rc_turns, coilset.num_parallel_rc_traces, coilset.rc_trace_width, coilset.rc_trace_spacing, coilset.rc_turn_spacing, rc_test_distances[0], coilset.rc_trace_thickness, 'trace', 'rc', disp_pane, plot_color, "-", coilset.num_rc_layers, -coilset.rc_PCB_thickness, rc_group)
@@ -668,13 +612,11 @@ for coilset in coilset_array:
     #------------------------------------------------------------------------------------------------------------#
     #Simulation v
     # Per-distance result lists, reset for every config.
-    # DEAD in this block: Ypa_tests (its only append is commented out),
-    # fixed_Y_Vpas, L_loop_displays (assigned, never plotted),
-    # loop/tank/rc_frequency_shifts (computed and stored, never read),
-    # L_loop_vs_distance / L_tank_vs_distance / L_rc_vs_distance (the
-    # *_displays_vs_distance versions are what actually get logged),
-    # vratio_lateral_tests and tank_resonant_f_vs_lateral_offset (the lateral
-    # sweep that fed them was removed, so tank_lateral_tuning_pane draws empty).
+    # Several are dead: Ypa_tests, fixed_Y_Vpas, L_loop_displays,
+    # */frequency_shifts, L_*_vs_distance (the *_displays_vs_distance versions
+    # are what get logged), and vratio_lateral_tests /
+    # tank_resonant_f_vs_lateral_offset (their lateral sweep was removed, so
+    # tank_lateral_tuning_pane draws empty).
     itank_tests = []
     iloop_tests = []
     irc_tests = []
@@ -788,16 +730,12 @@ for coilset in coilset_array:
     starting_rc_distance = rc_test_distances[0]
     rc_y_translations = [rc_test_distance-rc_test_distances[0] for rc_test_distance in rc_test_distances]
 
-        # THREE FEMM solves per distance - one per driven coil. get_inductances
-        # only recovers the row of the inductance matrix belonging to whichever
-        # coil is carrying current, so:
-        #   solve 1 (loop driven) -> L11, M12, M13
-        #   solve 2 (tank driven) -> L22, M23, M21
-        #   solve 3 (RC   driven) -> L33, M31, M32
-        # M12 vs M21 (and M13 vs M31) should agree by reciprocity - they are all
-        # logged so the disagreement doubles as a solver sanity check.
-        # get_inductances translates the group, solves, then translates back, so
-        # the model geometry is unchanged when it returns.
+        # THREE FEMM solves per distance, one per driven coil - get_inductances
+        # only recovers the matrix row for whichever coil carries current:
+        #   loop driven -> L11, M12, M13 | tank -> L22, M23, M21 | RC -> L33, M31, M32
+        # M12 vs M21 should agree by reciprocity; both are logged so the
+        # disagreement doubles as a solver sanity check. get_inductances
+        # translates, solves, and translates back, leaving geometry unchanged.
     for rc_y_translation in rc_y_translations:
         
         loop_inductances = nff.get_inductances(loop_group, loop_turn_current, 0, 0, coilset.num_loop_turns, tank_group, 0, 0, 0, coilset.num_tank_turns, rc_group, 0, 0, rc_y_translation, coilset.num_rc_turns)
