@@ -142,16 +142,6 @@ def get_winding_center(winding_index, num_windings_in_set, winding_mean_center, 
     return winding_mean_center + ( ( ( (2*winding_index) - (num_windings_in_set-1) ) * indv_winding_center_to_center_distance) / 2)
 
 
-def draw_and_plot_coil_traces_test(central_radius, number_of_turns, number_of_parallel_traces, trace_spacing, turn_spacing):
-    coil_turns = []
-    for turn_index in range(number_of_turns):
-        traces_in_turn = []
-        turn_center = get_winding_center(turn_index, number_of_turns, central_radius, turn_spacing)
-        for trace_index in range(number_of_parallel_traces):
-            trace_center = get_winding_center(trace_index, number_of_parallel_traces, turn_center, trace_spacing)
-            traces_in_turn.append(trace_center)
-        coil_turns.append(traces_in_turn)
-    return coil_turns
 
 
 def draw_and_plot_coil_traces(central_radius, number_of_turns, number_of_parallel_traces, trace_width, trace_spacing, turn_spacing, top_of_trace, winding_thickness, wire_or_trace, femm_circuit_name, plot_name, plot_color, line_style, layer_count, pcb_thickness, circuit_group):
@@ -289,11 +279,6 @@ def resonant_frequency(inductance, capacitance):
     f = 1/(2*np.pi*np.sqrt(inductance*capacitance))
     return f
 
-def rc_ys_offset(rc_ys, offset, original_offset):
-    output = []
-    for rc_y in rc_ys:
-        output.append(rc_y-original_offset+offset)
-    return output
 
 def set_circuit_currents(loop_current, num_loop_turns, tank_current, num_tank_turns, rc_current, num_rc_turns):
     for i in range(num_loop_turns):

@@ -55,21 +55,15 @@ import matplotlib.pyplot as plt
 import matplotlib.transforms as xfrms
 from matplotlib.font_manager import FontProperties
 import numpy as np
-import random
+from dataclasses import fields
 from quantiphy import Quantity
 import coil_configs as cc
 import noel_FEMM_functions as nff
 import datetime
 from pathlib import Path
-import itertools as iter
-import sys
-from typing import NamedTuple
-from dataclasses import dataclass, fields
-
-from multiprocessing import Pool, cpu_count
 
 
-from noel_FEMM_functions import CoilSet 
+
 import ltspiceautomator.ltspice_automator as lta
 
 
@@ -189,20 +183,6 @@ colors = []
 configs = []
 tank_ferrite_max_flux = []
 rc_ferrite_max_flux = []
-# DEAD: tank_turn_radii is rebound inside the main loop from
-# draw_and_plot_coil_traces, so this initialisation is never read.
-# DEAD: k12s .. L_tanks below are never appended to and never read - the
-# per-distance lists (k12_vs_distance, ...) inside the main loop replaced them.
-tank_turn_radii = []
-k12s = []
-k13s = []
-k23s = []
-M12s = []
-M13s = []
-M23s = []
-L_rcs = []
-L_loops = []
-L_tanks = []
 k13_displays = []
 k12_displays = []
 k23_displays = []
@@ -210,8 +190,6 @@ M12_displays = []
 M13_displays = []
 M23_displays = []
 L_rc_displays = []
-# DEAD: `f` is never used.
-f = []
 L_loop_solo_displays = []
 L_tank_solo_displays = []
 # COPY/PASTE SLIP: L_rc_solo_displays is declared four times in a row. Keep one.
@@ -229,32 +207,7 @@ L_rc_fully_assembled_displays = []
 
 
 
-# DEAD BLOCK: none of the list_of_* accumulators below are appended to or read
-# anywhere. They are leftovers from an older parameter-sweep report format.
-# The whole block is safe to delete.
-list_of_distances = []
-list_of_ferrite_thicknesses = []
-list_of_permeabilities = []
-list_of_ferrite_outer_radii = []
-list_of_wall_heights = []
-list_of_wall_y_distances = []
-list_of_ferrite_gaps = []
-list_of_num_discrete_ferrites = []
-list_of_loop_radii = []
-list_of_loop_offsets = []
-list_of_tank_inner_rs = []
-list_of_backplane_y_distance = []
-list_of_backplane_present = []
-list_of_loop_central_rs = []
-list_of_num_loops_in_parallel = []
-# Live table accumulators.
-# DEAD: iloop_max_displays / itank_max_displays / irc_max_displays.
-# DEAD: tc_backplane_losses / rc_backplane_losses - backplane loss is never
-#       integrated; only ferrite and shield blocks are.
 current_mag_displays = []
-iloop_max_displays = []
-itank_max_displays = []
-irc_max_displays = []
 loop_losses = []
 tank_losses = []
 rc_losses = []
@@ -262,16 +215,12 @@ tc_ferrite_losses = []
 rc_ferrite_losses = []
 rc_shield_losses = []
 tc_shield_losses = []
-tc_backplane_losses = []
-rc_backplane_losses = []
 total_losses = []
 efficiency_tests = []
 
 # config_results  : the rows of the bottom-left results table, filled in at the
 #                   very end of the script (order must match `rows`).
-# DEAD: config_parameters.
 config_results = []
-config_parameters = []
 
 #Window/Fig
 # One 6x4 subplot grid is created, then most cells are removed and merged into
@@ -438,7 +387,6 @@ for i in range(0, parameter_count):
 #risky since dicts are not guaranteed to be ordered
 # (Python 3.7+ dicts are insertion-ordered, so the risk is not the dict - it is
 #  that this key order must stay in lockstep with the CoilSet field order.)
-paramset = list(parameters.values())
 
 # ---------------------------------------------------------------------------
 # NAMED CONFIG VARIANTS
@@ -466,9 +414,6 @@ Gen2_4Layer.num_tank_layers = 4
 # loop is currently wasted work (it still validates that the dict and the
 # CoilSet signature agree, which is the one reason to keep it).
 #######MAIN LOOP
-coilset_array = []
-for config in iter.product(*paramset):
-    coilset_array.append(CoilSet(*config)) #the * unpacks the run_config array and passes each element as an individual argument
 
 
 
