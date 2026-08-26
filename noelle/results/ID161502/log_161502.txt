@@ -1,0 +1,78 @@
+
+
+
+Run 1/2; Gen2 
+
+---------------------------------
+---------------------------------
+CoilSet(config_name='Gen2 \n', tank_ferrite_present=0, tank_ferrite_y_offset=0, tank_ferrite_thickness=0, tank_mu=1, tank_ferrite_outer_r=100, rc_ferrite_present=0, rc_ferrite_y_offset=0, rc_ferrite_thickness=0, rc_mu=1, rc_ferrite_outer_r=1, backplane=0, backplane_y_distance=6, loop_offset=10, loop_r=65, num_loop_turns=1, num_parallel_loop_traces=5, num_loop_layers=2, loop_trace_spacing=4.464, loop_turn_spacing=0, tank_center_r=72.688, num_tank_turns=5, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0, tank_turn_spacing=7.444, rc_radius=56, num_rc_turns=3, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=6.457, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.544, loop_trace_width=3.175, rc_trace_width=3.175, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=100, tc_shield=0, tc_shield_y_distance=0, tc_shield_radius=0, tc_shield_thickness=0, rc_shield=0, rc_shield_y_distance=0, rc_shield_radius=0, rc_shield_thickness=0, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07, rc_loss_angle=0.0125, tc_loss_angle=0.0125)
+
+---------------------------------
+Inductances:
+L_rc: 1.8583 uH
+
+L_loop: 219.61 nH
+L_tank: 5.347 uH
+
+Parameters vs Distance:
+RC Test Distances (mm): [30]
+L_loops: [Quantity('219.6069198397 nH')]
+L_tanks: [Quantity('5.347030603647 uH')]
+L_rcs: [Quantity('1.858268833997 uH')]
+k13s: [0.22944355780253184]
+k23s: [0.3179038775317396]
+k12s: [0.6353315080703881]
+
+Mutual Inductances:
+M13: [1.4657272099514115e-07]
+M23: [1.0020893154663098e-06]
+M12: [6.884616273968325e-07]
+M21: [6.884615434737872e-07]
+M32: [1.0020892197423762e-06]
+M31: [1.4657271142591719e-07]
+C1: 2.4606390438602895e-09
+C2: 1.0401269175656415e-10
+C3: 2.9016807561291576e-10
+Z1: (0.422210554024676+32.32729275528202j)
+Z2: (2+2.0977531361849344j)
+Z3: (94.8942434916507+35.517584832665186j)
+Magnitude of normalized currents: 2.816139298014386
+
+
+
+Run 2/2; 300W_OG 
+
+---------------------------------
+---------------------------------
+CoilSet(config_name='300W_OG \n', tank_ferrite_present=0, tank_ferrite_y_offset=0, tank_ferrite_thickness=0, tank_mu=1, tank_ferrite_outer_r=100, rc_ferrite_present=0, rc_ferrite_y_offset=0, rc_ferrite_thickness=0, rc_mu=1, rc_ferrite_outer_r=1, backplane=0, backplane_y_distance=6, loop_offset=0, loop_r=50, num_loop_turns=1, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=0, loop_turn_spacing=0, tank_center_r=71.818, num_tank_turns=5, num_parallel_tank_traces=1, num_tank_layers=1, tank_trace_spacing=0, tank_turn_spacing=7.112, rc_radius=71, num_rc_turns=4, num_parallel_rc_traces=1, num_rc_layers=1, rc_trace_spacing=0, rc_turn_spacing=5.334, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=3.175, loop_trace_width=2.54, rc_trace_width=3.175, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=100, tc_shield=0, tc_shield_y_distance=0, tc_shield_radius=0, tc_shield_thickness=0, rc_shield=0, rc_shield_y_distance=0, rc_shield_radius=0, rc_shield_thickness=0, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07, rc_loss_angle=0.0125, tc_loss_angle=0.0125)
+
+---------------------------------
+Inductances:
+L_rc: 4.5703 uH
+
+L_loop: 309.09 nH
+L_tank: 6.0867 uH
+
+Parameters vs Distance:
+RC Test Distances (mm): [30]
+L_loops: [Quantity('309.0923070966 nH')]
+L_tanks: [Quantity('6.086705459736 uH')]
+L_rcs: [Quantity('4.570266773196 uH')]
+k13s: [0.19859853039084585]
+k23s: [0.37410613051936353]
+k12s: [0.39607055119399975]
+
+Mutual Inductances:
+M13: [2.3604287958213102e-07]
+M23: [1.9731347438953652e-06]
+M12: [5.432600810106269e-07]
+M21: [5.43260056788819e-07]
+M32: [1.9731346968117713e-06]
+M31: [2.3604287864707483e-07]
+C1: 1.7480060205286994e-09
+C2: 9.151166231138486e-11
+C3: 1.1881724574750713e-10
+Z1: (0.422210554024676+32.250122739951436j)
+Z2: (2+2.7779056406865834j)
+Z3: (94.8942434916507+34.38181915138882j)
+Magnitude of normalized currents: 3.9095454731211907

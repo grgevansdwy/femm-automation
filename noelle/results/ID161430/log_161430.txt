@@ -1,0 +1,228 @@
+
+
+
+Run 1/6; 
+---------------------------------
+---------------------------------
+CoilSet(config_name='', tank_ferrite_present=1, tank_ferrite_y_offset=0, tank_ferrite_thickness=1, tank_mu=184.5, tank_ferrite_outer_r=100, rc_ferrite_present=1, rc_ferrite_y_offset=0, rc_ferrite_thickness=1, rc_mu=184.5, rc_ferrite_outer_r=70, backplane=0, backplane_y_distance=20, loop_offset=-1.6, loop_r=50, num_loop_turns=4, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=4.464, loop_turn_spacing=10, tank_center_r=72.688, num_tank_turns=0, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0.508, tank_turn_spacing=7.444, rc_radius=30, num_rc_turns=5, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=3.3, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.554, loop_trace_width=3.175, rc_trace_width=3.3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=20, tc_shield=1, tc_shield_y_distance=3, tc_shield_radius=105, tc_shield_thickness=1, rc_shield=1, rc_shield_y_distance=0, rc_shield_radius=60, rc_shield_thickness=1, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+
+---------------------------------
+Inductances:
+L_rc: 3.2708 uH
+
+L_loop: 3.5164 uH
+L_tank: 0 H
+
+Parameters vs Distance:
+RC Test Distances (mm): [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
+L_loops: [Quantity('4.217362543661 uH'), Quantity('3.951304996017 uH'), Quantity('3.794622342399 uH'), Quantity('3.696746699114 uH'), Quantity('3.63416757485 uH'), Quantity('3.597004282214 uH'), Quantity('3.571615611089 uH'), Quantity('3.556425199364 uH'), Quantity('3.542565698976 uH'), Quantity('3.524113302052 uH'), Quantity('3.516400601715 uH')]
+L_tanks: [Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H')]
+L_rcs: [Quantity('4.325878255624 uH'), Quantity('3.859713027598 uH'), Quantity('3.62427198255 uH'), Quantity('3.491292271125 uH'), Quantity('3.408308854575 uH'), Quantity('3.369258448267 uH'), Quantity('3.339036723441 uH'), Quantity('3.323233842862 uH'), Quantity('3.301217568618 uH'), Quantity('3.278327050309 uH'), Quantity('3.270846801795 uH')]
+k13s: [0.5015019523708372, 0.43645196103611966, 0.37329574175623365, 0.31629661044374063, 0.2671226879017058, 0.22473788824067642, 0.18946606670152288, 0.15960058302912353, 0.1353660476073842, 0.06056716598314364, 0.029649260315442495]
+k23s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+k12s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+
+Mutual Inductances:
+M13: [2.1420531507032854e-06, 1.7044498748947438e-06, 1.3843557423012106e-06, 1.1363117257748472e-06, 9.401187665677783e-07, 7.823731472623992e-07, 6.542961929439054e-07, 5.486833276748201e-07, 4.629198237705354e-07, 2.058677523301837e-07, 1.0055256132831778e-07]
+M23: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M12: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M21: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M32: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M31: [2.140268868436902e-06, 1.7031225240945503e-06, 1.3833333054680994e-06, 1.135503293958836e-06, 9.394682395410781e-07, 7.818391788279635e-07, 6.538515445822912e-07, 5.483122465090785e-07, 4.62604843020213e-07, 2.0572179044573256e-07, 1.0047738449168699e-07]
+C1: 1.538901738313212e-10
+C2: 0
+C3: 1.6541585453422194e-10
+Z1: (0.422210554024676+29.77203647583539j)
+Z2: 1
+Z3: (43.746910267132016-5.378233590282087j)
+Magnitude of normalized currents: 0.6464042088077008
+
+
+
+Run 2/6; 
+---------------------------------
+---------------------------------
+CoilSet(config_name='', tank_ferrite_present=1, tank_ferrite_y_offset=0, tank_ferrite_thickness=1, tank_mu=184.5, tank_ferrite_outer_r=100, rc_ferrite_present=1, rc_ferrite_y_offset=0, rc_ferrite_thickness=1, rc_mu=184.5, rc_ferrite_outer_r=70, backplane=0, backplane_y_distance=20, loop_offset=-1.6, loop_r=50, num_loop_turns=4, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=4.464, loop_turn_spacing=10, tank_center_r=72.688, num_tank_turns=0, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0.508, tank_turn_spacing=7.444, rc_radius=30, num_rc_turns=7, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=3.3, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.554, loop_trace_width=3.175, rc_trace_width=3.3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=20, tc_shield=1, tc_shield_y_distance=3, tc_shield_radius=105, tc_shield_thickness=1, rc_shield=1, rc_shield_y_distance=0, rc_shield_radius=60, rc_shield_thickness=1, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+
+---------------------------------
+Inductances:
+L_rc: 5.2528 uH
+
+L_loop: 3.5145 uH
+L_tank: 0 H
+
+Parameters vs Distance:
+RC Test Distances (mm): [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
+L_loops: [Quantity('4.002809197511 uH'), Quantity('3.820079332035 uH'), Quantity('3.708893113077 uH'), Quantity('3.641439594472 uH'), Quantity('3.595765449789 uH'), Quantity('3.569766459064 uH'), Quantity('3.547503346866 uH'), Quantity('3.540401013502 uH'), Quantity('3.529201269845 uH'), Quantity('3.517703842031 uH'), Quantity('3.514534093279 uH')]
+L_tanks: [Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H')]
+L_rcs: [Quantity('6.952427422853 uH'), Quantity('6.21512068811 uH'), Quantity('5.827903120245 uH'), Quantity('5.614258584527 uH'), Quantity('5.485865977988 uH'), Quantity('5.407462164375 uH'), Quantity('5.34927234195 uH'), Quantity('5.321185695864 uH'), Quantity('5.298110846074 uH'), Quantity('5.266134872303 uH'), Quantity('5.25281915692 uH')]
+k13s: [0.5201345473515163, 0.45259167289044616, 0.387463507822762, 0.3286644092815215, 0.27716546766308436, 0.2335084227569843, 0.19676403135141457, 0.16588202992139647, 0.14059258531638552, 0.06331830877793776, 0.03120632910241552]
+k23s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+k12s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+
+Mutual Inductances:
+M13: [2.7438879790462783e-06, 2.2052992686789733e-06, 1.8013957200307826e-06, 1.4860568990093179e-06, 1.2309981333431496e-06, 1.025933467569499e-06, 8.571453500496517e-07, 7.199954914555182e-07, 6.079406040579074e-07, 2.725241111382337e-07, 1.3408271312265001e-07]
+M23: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M12: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M21: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M32: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M31: [2.7387704677684034e-06, 2.2014164197635318e-06, 1.7983582343014708e-06, 1.4836329706457189e-06, 1.2290374288816048e-06, 1.0243213821044622e-06, 8.557995227543698e-07, 7.18872206717914e-07, 6.069878759230902e-07, 2.72078518182655e-07, 1.3385298282404634e-07]
+C1: 1.535741130320203e-10
+C2: 0
+C3: 1.0295920111329652e-10
+Z1: (0.422210554024676+29.378593696058257j)
+Z2: 1
+Z3: (43.746910267132016-7.0310929600549565j)
+Magnitude of normalized currents: 0.6729383720592278
+
+
+
+Run 3/6; 
+---------------------------------
+---------------------------------
+CoilSet(config_name='', tank_ferrite_present=1, tank_ferrite_y_offset=0, tank_ferrite_thickness=1, tank_mu=184.5, tank_ferrite_outer_r=100, rc_ferrite_present=1, rc_ferrite_y_offset=0, rc_ferrite_thickness=1, rc_mu=184.5, rc_ferrite_outer_r=70, backplane=0, backplane_y_distance=20, loop_offset=-1.6, loop_r=50, num_loop_turns=4, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=4.464, loop_turn_spacing=10, tank_center_r=72.688, num_tank_turns=0, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0.508, tank_turn_spacing=7.444, rc_radius=30, num_rc_turns=9, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=3.3, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.554, loop_trace_width=3.175, rc_trace_width=3.3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=20, tc_shield=1, tc_shield_y_distance=3, tc_shield_radius=105, tc_shield_thickness=1, rc_shield=1, rc_shield_y_distance=0, rc_shield_radius=60, rc_shield_thickness=1, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+
+---------------------------------
+Inductances:
+L_rc: 7.202 uH
+
+L_loop: 3.5133 uH
+L_tank: 0 H
+
+Parameters vs Distance:
+RC Test Distances (mm): [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
+L_loops: [Quantity('3.799533340655 uH'), Quantity('3.686829774454 uH'), Quantity('3.622421075427 uH'), Quantity('3.582026813286 uH'), Quantity('3.558990143662 uH'), Quantity('3.542580110319 uH'), Quantity('3.532529557451 uH'), Quantity('3.527617239615 uH'), Quantity('3.521371035019 uH'), Quantity('3.512340481559 uH'), Quantity('3.513315818644 uH')]
+L_tanks: [Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H')]
+L_rcs: [Quantity('9.44180776114 uH'), Quantity('8.494003461904 uH'), Quantity('7.987841094259 uH'), Quantity('7.698129050571 uH'), Quantity('7.521189078673 uH'), Quantity('7.407350245055 uH'), Quantity('7.337179801956 uH'), Quantity('7.2988773636 uH'), Quantity('7.254875901009 uH'), Quantity('7.217289001814 uH'), Quantity('7.201988276497 uH')]
+k13s: [0.5386227424997703, 0.4672877707669983, 0.3993699144904108, 0.3385868953292113, 0.2856404242900872, 0.24070582437516128, 0.20285363791167443, 0.1710491948667634, 0.14477688951026918, 0.06521201453647757, 0.03222856345928575]
+k23s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+k12s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+
+Mutual Inductances:
+M13: [3.226096794473423e-06, 2.614972796677876e-06, 2.148273244541323e-06, 1.7779811611142738e-06, 1.4778362510200776e-06, 1.2330420262617227e-06, 1.032738300498742e-06, 8.679401838845453e-07, 7.317624657852431e-07, 3.2833181643260196e-07, 1.6211595107999816e-07]
+M23: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M12: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M21: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M32: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M31: [3.2164019281165107e-06, 2.607526154500343e-06, 2.14238010130303e-06, 1.7732302293450057e-06, 1.4739601475537215e-06, 1.2298391516396754e-06, 1.0300726632472416e-06, 8.656875976272415e-07, 7.298586102939721e-07, 3.274445603595977e-07, 1.616571745763692e-07]
+C1: 1.5360925696134541e-10
+C2: 0
+C3: 7.516544872664937e-11
+Z1: (0.422210554024676+29.36166598355899j)
+Z2: 1
+Z3: (43.746910267132016-8.30166450693141j)
+Magnitude of normalized currents: 0.7093127177489466
+
+
+
+Run 4/6; 
+---------------------------------
+---------------------------------
+CoilSet(config_name='', tank_ferrite_present=1, tank_ferrite_y_offset=0, tank_ferrite_thickness=1, tank_mu=184.5, tank_ferrite_outer_r=100, rc_ferrite_present=1, rc_ferrite_y_offset=0, rc_ferrite_thickness=1, rc_mu=184.5, rc_ferrite_outer_r=70, backplane=0, backplane_y_distance=20, loop_offset=-1.6, loop_r=50, num_loop_turns=8, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=4.464, loop_turn_spacing=10, tank_center_r=72.688, num_tank_turns=0, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0.508, tank_turn_spacing=7.444, rc_radius=30, num_rc_turns=5, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=3.3, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.554, loop_trace_width=3.175, rc_trace_width=3.3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=20, tc_shield=1, tc_shield_y_distance=3, tc_shield_radius=105, tc_shield_thickness=1, rc_shield=1, rc_shield_y_distance=0, rc_shield_radius=60, rc_shield_thickness=1, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+
+---------------------------------
+Inductances:
+L_rc: 3.2727 uH
+
+L_loop: 8.6948 uH
+L_tank: 0 H
+
+Parameters vs Distance:
+RC Test Distances (mm): [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
+L_loops: [Quantity('9.777690532563 uH'), Quantity('9.393684417527 uH'), Quantity('9.153286758082 uH'), Quantity('9.000179748678 uH'), Quantity('8.899209508848 uH'), Quantity('8.829974786439 uH'), Quantity('8.785845974803 uH'), Quantity('8.754206600618 uH'), Quantity('8.7346293742 uH'), Quantity('8.703924410121 uH'), Quantity('8.694801374176 uH')]
+L_tanks: [Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H')]
+L_rcs: [Quantity('4.25238955887 uH'), Quantity('3.828322873154 uH'), Quantity('3.607273856913 uH'), Quantity('3.480660271553 uH'), Quantity('3.411735991769 uH'), Quantity('3.364457848769 uH'), Quantity('3.33174134469 uH'), Quantity('3.318301778286 uH'), Quantity('3.304250506967 uH'), Quantity('3.283039685571 uH'), Quantity('3.272675121022 uH')]
+k13s: [0.4936126590038179, 0.424270850146697, 0.3618590342198747, 0.30779434542618006, 0.26186293804431265, 0.22314083784245828, 0.1900622402364661, 0.1620702461542339, 0.13872780653262826, 0.06642995391065959, 0.034045929456158655]
+k23s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+k12s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+
+Mutual Inductances:
+M13: [3.182885049456698e-06, 2.5442832352712197e-06, 2.0793017117013667e-06, 1.7227293256886948e-06, 1.4429040765510059e-06, 1.2162317511505866e-06, 1.0283081448075602e-06, 8.735135125010975e-07, 7.45284764305781e-07, 3.5510727750746996e-07, 1.8161280875098666e-07]
+M23: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M12: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M21: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M32: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M31: [3.181467925767818e-06, 2.542973599108609e-06, 2.078141610515778e-06, 1.721716690277203e-06, 1.4420290651243402e-06, 1.2154763515845225e-06, 1.0276551857830374e-06, 8.729502961466982e-07, 7.447993247334999e-07, 3.548638225904054e-07, 1.8148263721365788e-07]
+C1: 6.207901064300981e-11
+C2: 0
+C3: 1.6496166689728356e-10
+Z1: (0.422210554024676+24.776485269851204j)
+Z2: 1
+Z3: (43.746910267132016-5.691067139127306j)
+Magnitude of normalized currents: 0.41804786372231934
+
+
+
+Run 5/6; 
+---------------------------------
+---------------------------------
+CoilSet(config_name='', tank_ferrite_present=1, tank_ferrite_y_offset=0, tank_ferrite_thickness=1, tank_mu=184.5, tank_ferrite_outer_r=100, rc_ferrite_present=1, rc_ferrite_y_offset=0, rc_ferrite_thickness=1, rc_mu=184.5, rc_ferrite_outer_r=70, backplane=0, backplane_y_distance=20, loop_offset=-1.6, loop_r=50, num_loop_turns=8, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=4.464, loop_turn_spacing=10, tank_center_r=72.688, num_tank_turns=0, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0.508, tank_turn_spacing=7.444, rc_radius=30, num_rc_turns=7, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=3.3, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.554, loop_trace_width=3.175, rc_trace_width=3.3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=20, tc_shield=1, tc_shield_y_distance=3, tc_shield_radius=105, tc_shield_thickness=1, rc_shield=1, rc_shield_y_distance=0, rc_shield_radius=60, rc_shield_thickness=1, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+
+---------------------------------
+Inductances:
+L_rc: 5.2455 uH
+
+L_loop: 8.6901 uH
+L_tank: 0 H
+
+Parameters vs Distance:
+RC Test Distances (mm): [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
+L_loops: [Quantity('9.429455098879 uH'), Quantity('9.145926883331 uH'), Quantity('8.978909825887 uH'), Quantity('8.8791832281 uH'), Quantity('8.811740309226 uH'), Quantity('8.769406712304 uH'), Quantity('8.739557098667 uH'), Quantity('8.719602414084 uH'), Quantity('8.706079827308 uH'), Quantity('8.697791608009 uH'), Quantity('8.690097606474 uH')]
+L_tanks: [Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H')]
+L_rcs: [Quantity('6.840982394712 uH'), Quantity('6.161228156799 uH'), Quantity('5.800155313068 uH'), Quantity('5.599887388731 uH'), Quantity('5.469533656015 uH'), Quantity('5.398178681145 uH'), Quantity('5.352012169927 uH'), Quantity('5.3144712217 uH'), Quantity('5.301859165182 uH'), Quantity('5.268183569676 uH'), Quantity('5.245505041041 uH')]
+k13s: [0.5096851255214866, 0.43900845646775793, 0.37550181191264553, 0.3199391501729446, 0.27242179897286595, 0.23196660247199125, 0.197681681186348, 0.16944186299369038, 0.14466542073510535, 0.06916401576967524, 0.03587476777375395]
+k23s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+k12s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+
+Mutual Inductances:
+M13: [4.0935914253591655e-06, 3.2954930060261524e-06, 2.709840027083707e-06, 2.2560231028089946e-06, 1.8912452524696294e-06, 1.5960048093043654e-06, 1.3519781850827785e-06, 1.1534508385651501e-06, 9.828565823503506e-07, 4.6818247155492307e-07, 2.422116789160037e-07]
+M23: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M12: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M21: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M32: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M31: [4.089407997379215e-06, 3.291528214041855e-06, 2.706284929795463e-06, 2.2529040521812485e-06, 1.888540035182731e-06, 1.593662687852979e-06, 1.3499629094524818e-06, 1.151709950202502e-06, 9.813531695325958e-07, 4.6742681239959947e-07, 2.4180253350112993e-07]
+C1: 6.203458683893939e-11
+C2: 0
+C3: 1.030388834790504e-10
+Z1: (0.422210554024676+24.305317975451256j)
+Z2: 1
+Z3: (43.746910267132016-7.1663604523237945j)
+Magnitude of normalized currents: 0.42952521295021523
+
+
+
+Run 6/6; 
+---------------------------------
+---------------------------------
+CoilSet(config_name='', tank_ferrite_present=1, tank_ferrite_y_offset=0, tank_ferrite_thickness=1, tank_mu=184.5, tank_ferrite_outer_r=100, rc_ferrite_present=1, rc_ferrite_y_offset=0, rc_ferrite_thickness=1, rc_mu=184.5, rc_ferrite_outer_r=70, backplane=0, backplane_y_distance=20, loop_offset=-1.6, loop_r=50, num_loop_turns=8, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=4.464, loop_turn_spacing=10, tank_center_r=72.688, num_tank_turns=0, num_parallel_tank_traces=1, num_tank_layers=2, tank_trace_spacing=0.508, tank_turn_spacing=7.444, rc_radius=30, num_rc_turns=9, num_parallel_rc_traces=1, num_rc_layers=2, rc_trace_spacing=0, rc_turn_spacing=3.3, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=5.554, loop_trace_width=3.175, rc_trace_width=3.3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.6, rc_backplane=0, rc_backplane_y_distance=20, tc_shield=1, tc_shield_y_distance=3, tc_shield_radius=105, tc_shield_thickness=1, rc_shield=1, rc_shield_y_distance=0, rc_shield_radius=60, rc_shield_thickness=1, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+
+---------------------------------
+Inductances:
+L_rc: 7.1943 uH
+
+L_loop: 8.6867 uH
+L_tank: 0 H
+
+Parameters vs Distance:
+RC Test Distances (mm): [10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
+L_loops: [Quantity('9.063727656646 uH'), Quantity('8.885474151411 uH'), Quantity('8.792085200412 uH'), Quantity('8.743777543968 uH'), Quantity('8.714840506025 uH'), Quantity('8.699278848208 uH'), Quantity('8.69211443029 uH'), Quantity('8.680950665462 uH'), Quantity('8.679206738384 uH'), Quantity('8.691260829942 uH'), Quantity('8.686712493011 uH')]
+L_tanks: [Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H'), Quantity('0 H')]
+L_rcs: [Quantity('9.310813079761 uH'), Quantity('8.425238259225 uH'), Quantity('7.949726707693 uH'), Quantity('7.669029022321 uH'), Quantity('7.503649307457 uH'), Quantity('7.398693110276 uH'), Quantity('7.33441949207 uH'), Quantity('7.289426492473 uH'), Quantity('7.261093202029 uH'), Quantity('7.209584030402 uH'), Quantity('7.194298983203 uH')]
+k13s: [0.522873373965058, 0.45118681269662547, 0.3864781161401883, 0.3297756272767688, 0.2811149234937065, 0.2394473284057321, 0.2043760788444681, 0.17420831671844386, 0.1493678446933349, 0.0719315293749158, 0.037330814224507944]
+k23s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+k12s: [nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan]
+
+Mutual Inductances:
+M13: [4.80334471085164e-06, 3.903802133736984e-06, 3.231074345235293e-06, 2.7004634008769726e-06, 2.273264068384858e-06, 1.921007801774115e-06, 1.631832780240105e-06, 1.3857956982841217e-06, 1.185763660804427e-06, 5.693978067634797e-07, 2.9511373833556063e-07]
+M23: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M12: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M21: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+M32: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+M31: [4.794998950978756e-06, 3.895833804859171e-06, 3.2238868933690213e-06, 2.6941423970961197e-06, 2.2677586189119256e-06, 1.91624924272846e-06, 1.627712929170773e-06, 1.3822792720139308e-06, 1.1826997596040075e-06, 5.678531553311738e-07, 2.942894088001749e-07]
+C1: 6.204450387165126e-11
+C2: 0
+C3: 7.522439357440069e-11
+Z1: (0.422210554024676+24.221595383808843j)
+Z2: 1
+Z3: (43.746910267132016-8.384514079075267j)
+Magnitude of normalized currents: 0.45324825521029877

@@ -1,0 +1,11 @@
+__pycache__
+*.fft
+*.log
+*.net
+*.plt
+*.raw
+coilsim/*.ans
+coilsim/*.fem
+LTspice/1KW_System/1KW_System.inc
+LTspice/1KW_System/tmp
+scripts/vendor

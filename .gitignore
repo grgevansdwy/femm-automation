@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# FEMM scratch written to the repo root by a run.
+# Real saved models under Branches_and_one_offs/ are NOT ignored - they are
+# tracked on purpose so deleting them stays undoable.
+tmp.fem
+tmp.ans
+
+# LTspice byproducts
+*.raw
+*.net
+*.fft
+*.plt
