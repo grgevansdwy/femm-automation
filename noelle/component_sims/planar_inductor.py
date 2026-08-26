@@ -7,6 +7,11 @@ from matplotlib.font_manager import FontProperties
 import numpy as np
 import random
 from quantiphy import Quantity
+# noel_FEMM_functions lives one level up, in noelle/. Make it importable
+# when this script is run from inside component_sims/.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import noel_FEMM_functions as nff
 import datetime
 from pathlib import Path
