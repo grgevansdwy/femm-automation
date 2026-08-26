@@ -4,7 +4,6 @@ import math
 from typing import NamedTuple
 from dataclasses import dataclass, fields
 import itertools
-import coil_configs as cc
 
 @dataclass
 class CoilSet():

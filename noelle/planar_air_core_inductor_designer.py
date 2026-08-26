@@ -5,7 +5,6 @@ from matplotlib.font_manager import FontProperties
 import numpy as np
 import random
 from quantiphy import Quantity
-import coil_configs as cc
 import noel_FEMM_functions as nff
 import datetime
 from pathlib import Path
