@@ -7,12 +7,12 @@ from matplotlib.font_manager import FontProperties
 import numpy as np
 import random
 from quantiphy import Quantity
-# noel_FEMM_functions lives one level up, in noelle/. Make it importable
+# femm_model lives one level up, in noelle/. Make it importable
 # when this script is run from inside component_sims/.
 import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
-import noel_FEMM_functions as nff
+import femm_model as nff
 import datetime
 from pathlib import Path
 import itertools as iter
@@ -20,7 +20,7 @@ import sys
 from typing import NamedTuple
 from dataclasses import dataclass, fields
 
-from noel_FEMM_functions import CoilSet
+from femm_model import CoilSet
 import ferrite_and_core_info as fci
 
 freq = 100e3 #6.78e6 

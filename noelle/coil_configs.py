@@ -1,4 +1,4 @@
-import noel_FEMM_functions as nff
+import femm_model as nff
 
 #Special Configs
 ###############################

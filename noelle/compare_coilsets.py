@@ -1,5 +1,5 @@
 # =============================================================================
-# Coil_Comparison_FEM.py
+# compare_coilsets.py
 #
 # WHAT THIS SCRIPT DOES
 #   Compares wireless-power "coilsets". A coilset is a 3-coil link:
@@ -32,7 +32,7 @@
 #     (the "distance" axis), x is radius. Nothing may cross x = 0.
 #   - Currents are PEAK amps unless the name ends in _RMS.
 #   - "TC" = transmit coil side (Loop + Tank), "RC" = receive coil side.
-#   - Helper functions all live in noel_FEMM_functions.py (imported as nff).
+#   - Helper functions all live in femm_model.py (imported as nff).
 #
 # NOTE ON THE COMMENTS BELOW
 #   Blocks marked UNUSED / DEAD are assigned but never read anywhere in this
@@ -46,7 +46,7 @@
 # femm  : the FEMM python wrapper. mi_* = model/input window (pre-processor),
 #         mo_* = output window (post-processor, only valid after mi_analyze).
 # cc    : coil_configs.py - library of ready-made CoilSet objects (cc.Gen3, ...)
-# nff   : noel_FEMM_functions.py - all drawing/solving/post-processing helpers
+# nff   : femm_model.py - all drawing/solving/post-processing helpers
 # lta   : LTspice hand-off, used only by the commented-out "New Way" MPP solve
 # UNUSED IMPORTS (safe to delete): random, sys, NamedTuple, dataclass,
 #   Pool, cpu_count. `fields`, `iter`(itertools) and CoilSet ARE used.
@@ -58,7 +58,7 @@ import numpy as np
 from dataclasses import fields
 from quantiphy import Quantity
 import coil_configs as cc
-import noel_FEMM_functions as nff
+import femm_model as nff
 import datetime
 from pathlib import Path
 

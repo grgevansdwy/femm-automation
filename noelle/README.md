@@ -13,7 +13,7 @@ To run this script, your environment must have the following installed:
 *   **Custom Local Modules:** The script relies on specific local Python files that must be in the same directory or Python path:
     *   `femm`: The Python API to control FEMM (usually pyFEMM).
     *   `coil_configs` (`cc`): Contains predefined dataclasses/objects defining coil geometries.
-    *   `noel_FEMM_functions` (`nff`): Contains custom helper functions to interact with FEMM (drawing coils, extracting flux, reading inductances).
+    *   `femm_model` (`nff`): Contains custom helper functions to interact with FEMM (drawing coils, extracting flux, reading inductances).
     *   `ltspiceautomator` (`lta`): A custom wrapper to run SPICE simulations for evaluating the Maximum Power Point (MPP).
 
 ## 3. How the Code Works
@@ -40,7 +40,7 @@ The code's execution flow can be broken down into the following phases:
     *   Saves the final composite figure as a high-resolution SVG file in a timestamped `results` directory.
 
 ## 4. How to Use the Script
-1.  **Set Up the Workspace:** Ensure FEMM is installed on your Windows machine and `pyFEMM` is installed in your Python environment. Make sure `coil_configs.py` and `noel_FEMM_functions.py` are present in your working directory.
+1.  **Set Up the Workspace:** Ensure FEMM is installed on your Windows machine and `pyFEMM` is installed in your Python environment. Make sure `coil_configs.py` and `femm_model.py` are present in your working directory.
 2.  **Define Your Coils:** To test new coils, either:
     *   Modify the `parameters` dictionary to test permutations.
     *   Add new coil configurations to the `coilset_array` directly (e.g., `new_coil = cc.copy_coilset(cc.Gen2_coil)` and modify its attributes).

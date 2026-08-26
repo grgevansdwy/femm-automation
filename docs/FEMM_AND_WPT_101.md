@@ -111,7 +111,7 @@ chassis). This is why every `CoilSet` in the repo has ferrite thickness, radius,
 
 **Saturation:** ferrite has a limit. Above roughly **0.3 T** (for NiZn), it stops amplifying — µr
 collapses toward 1 and the material starts behaving like air, plus it heats badly. This is exactly
-why `noel_FEMM_functions.py` has `get_peak_flux_density_of_rect()` — it scans across the ferrite
+why `femm_model.py` has `get_peak_flux_density_of_rect()` — it scans across the ferrite
 plate reading B and reports the worst point, so the designer can check they haven't saturated it.
 
 ### 1.3 Flux — "how much field goes through this hoop"
@@ -131,7 +131,7 @@ the **flux linkage**:
 ```
 
 **This is the single most important quantity in this repo**, because it is literally what FEMM hands
-back. In `noel_FEMM_functions.py`:
+back. In `femm_model.py`:
 
 ```python
 flux_linkage += np.real(femm.mo_getcircuitproperties(circuit_name+str(i))[2])
@@ -178,7 +178,7 @@ or ferrite nearby → more inductance. It does not depend on the current you pus
 Real coils here are in the **microhenry (µH)** and **nanohenry (nH)** range.
 
 **This one equation is what the entire FEMM half of the repo computes.** Look at
-`noel_FEMM_functions.py:106`:
+`femm_model.py:106`:
 
 ```python
 def loop_inductance(circuit_name, num_turns_of_induced, driving_current):
@@ -285,7 +285,7 @@ At that **resonant frequency**, the L and C vanish from the circuit's point of v
 is the small parasitic resistance R. A small driving voltage can now push an enormous current, because
 almost nothing is opposing it.
 
-You will find exactly this in `noel_FEMM_functions.py`:
+You will find exactly this in `femm_model.py`:
 
 ```python
 def resonant_capacitance(inductance, frequency):
@@ -295,7 +295,7 @@ def resonant_frequency(inductance, capacitance):
     return 1/(2*np.pi*np.sqrt(inductance*capacitance))  # f₀ = 1/(2π√(LC))
 ```
 
-And in `Coil_Comparison_FEM.py`, after FEMM reports the inductances, the code immediately computes
+And in `compare_coilsets.py`, after FEMM reports the inductances, the code immediately computes
 the capacitor each coil needs:
 
 ```python
@@ -380,7 +380,7 @@ For copper at 6.78 MHz: **δ ≈ 25 µm**.
 Now look at the code: `loop_trace_thickness = 0.07` mm = **70 µm** — that's "2 oz copper".
 The conductor is only ~2.8 skin depths thick, and the current is hugging the top and bottom surfaces.
 **Making the copper thicker barely helps.** The comment `#.035 - 1oz, .07 - 2oz` in
-`Coil_Comparison_FEM.py` is someone tracking exactly this tradeoff.
+`compare_coilsets.py` is someone tracking exactly this tradeoff.
 
 This is also why `em_sim/femm_coils.py` bothers with `TraceTrapezoid` — modelling the *actual etched
 trapezoidal cross-section* of a PCB trace (45° sidewalls) rather than a rectangle, because at these
@@ -405,7 +405,7 @@ switch that turns eddy-current physics on.
 **Equivalent Series Resistance** is the single resistance value that accounts for all conduction
 losses at the operating frequency. It's what you plug into `P = I²R`.
 
-`noel_FEMM_functions.py:116` extracts it from the FEMM solution:
+`femm_model.py:116` extracts it from the FEMM solution:
 
 ```python
 def loop_ESR(circuit_name, num_turns_of_induced, driving_current):
@@ -437,7 +437,7 @@ rc_shield, ...
 ```
 
 The sim answers: *"if the robot's aluminium body is 20 mm behind the receive coil, how far does my
-resonant frequency move, and how much power do I lose?"* `Coil_Comparison_FEM.py` computes exactly
+resonant frequency move, and how much power do I lose?"* `compare_coilsets.py` computes exactly
 this as `tank_frequency_shifts`, `rc_frequency_shifts`, etc.
 
 In `init_femm()`, aluminium is defined explicitly with its conductivity — because conductivity is
@@ -953,7 +953,7 @@ once, and both phases become straightforward.
 
 ### Phase 0 — Unblock (days)
 
-1. **The main script cannot run.** `Coil_Comparison_FEM.py:22` does
+1. **The main script cannot run.** `compare_coilsets.py:22` does
    `import ltspiceautomator.ltspice_automator as lta`, but `ltspiceautomator/` is an empty,
    uninitialised private submodule. Either clone it, vendor it, or make the import lazy — the LTspice
    path is already commented out at the call site, so nothing needs it today.
@@ -963,7 +963,7 @@ once, and both phases become straightforward.
    so ~33 MB of solver output sits in the tree. Delete the stray `tmp.ans`/`tmp.fem`. Fix the broken
    `genki/scripts/coilbot` symlink. Rename `-toroidal_inductor.py` (a leading dash is a shell hazard)
    and delete it — it's byte-identical to `archive---toroidal_inductor.py`.
-4. **Untangle the circular import** between `noel_FEMM_functions` and `coil_configs`. It works today
+4. **Untangle the circular import** between `femm_model` and `coil_configs`. It works today
    only by import ordering, and a GUI's import graph will break it.
 
 ### Phase 1 — Build a real engine (the critical path)
@@ -972,7 +972,7 @@ This is the work that matters. Everything else depends on it.
 
 **1.1 — Make the simulation a function.**
 
-Right now `Coil_Comparison_FEM.py` is 1320 lines of top-level statements that execute on import and
+Right now `compare_coilsets.py` is 1320 lines of top-level statements that execute on import and
 call `plt.show()` at the end. Nothing can import it. The target:
 
 ```python
@@ -1051,7 +1051,7 @@ Add units and valid ranges as field metadata while you're there — `dataclasses
 
 **1.6 — Make the sweep explicit again.**
 
-`Coil_Comparison_FEM.py` builds a full-factorial `coilset_array` via `itertools.product`, then
+`compare_coilsets.py` builds a full-factorial `coilset_array` via `itertools.product`, then
 line ~365 throws it away: `coilset_array = [cc.TR302_and_225_000056]`. The sweep machinery is
 enabled and disabled by commenting lines. Make it a real, declarative `SweepSpec` object.
 
@@ -1178,7 +1178,7 @@ This is the "second phase" goal, and it is *achievable* — but be clear-eyed ab
 
 ### Consolidation to do along the way
 
-There are currently **three** `CoilSet` definitions (`noel_FEMM_functions`, `genki_femm_simple`,
+There are currently **three** `CoilSet` definitions (`femm_model`, `genki_femm_simple`,
 `em_sim/femm_coils`), **two** ferrite/core databases (`ferrite_and_core_info.py` and a duplicate
 inside `em_sim/femm_toroid.py`), **two** complete FEMM coil-drawing implementations, **three**
 toroidal scripts (two byte-identical), and **two** `planar_inductor.py`. Pick one lineage per
@@ -1200,9 +1200,9 @@ answer is: keep Noel's physics, adopt Genki's structure.**
    you'll immediately understand what block labels and boundary conditions are for.
 2. **Run `genki/em_sim/femm_coils.py --freq-khz 6780`.** It's 282 readable lines that do the complete
    inductance-and-coupling extraction. Watch FEMM draw. Then read the file top to bottom.
-3. **Read `noel_FEMM_functions.py`** — particularly `init_femm`, `loop_inductance`, and
+3. **Read `femm_model.py`** — particularly `init_femm`, `loop_inductance`, and
    `get_inductances`. That's the whole method in ~120 lines.
-4. **Then** open `Coil_Comparison_FEM.py`. It'll be much less intimidating once you know that the
+4. **Then** open `compare_coilsets.py`. It'll be much less intimidating once you know that the
    1320 lines are mostly plumbing around those three functions.
 
 **Reference material:**

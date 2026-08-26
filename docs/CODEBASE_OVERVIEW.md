@@ -87,13 +87,13 @@ side-effecting script**. Section 5 lists the specific obstacles.
 
 | File | What it is |
 |---|---|
-| `HOW-TO.md` | The only real doc in the repo. Explains prerequisites, the 5-phase execution flow of `Coil_Comparison_FEM.py`, and how to run it. Slightly stale (it says `rc_test_distances` is hardcoded to `[30]`; it is actually a 12-point sweep). **Read this first.** |
+| `HOW-TO.md` | The only real doc in the repo. Explains prerequisites, the 5-phase execution flow of `compare_coilsets.py`, and how to run it. Slightly stale (it says `rc_test_distances` is hardcoded to `[30]`; it is actually a 12-point sweep). **Read this first.** |
 
 ### 2.2 The core three files
 
 These are the heart of the repo. Everything else orbits them.
 
-#### `Coil_Comparison_FEM.py` — 1320 lines — *the main program*
+#### `compare_coilsets.py` — 1320 lines — *the main program*
 
 The full 3-coil WPT sweep. There are no functions and no `if __name__ == '__main__'`; it is a flat
 script that executes top to bottom on import. Structure:
@@ -129,7 +129,7 @@ script that executes top to bottom on import. Structure:
 7. **Output (tail):** sets the figure to 36×12 in, saves
    `./results/ID{DDHHMM}/ID{DDHHMM}.svg` at 400 dpi, `plt.show()`, `femm.closefemm()`.
 
-#### `noel_FEMM_functions.py` — 531 lines — *the FEMM abstraction layer* (`nff`)
+#### `femm_model.py` — 531 lines — *the FEMM abstraction layer* (`nff`)
 
 The reusable library. **This is the file a GUI/automation layer should be built on.**
 
@@ -155,8 +155,8 @@ The reusable library. **This is the file a GUI/automation layer should be built 
   places the far-field air label and an ABC boundary at r = 400 mm.
 - `print_and_log` — tee to stdout and to `./results/ID{ts}/log_{ts}.txt`.
 
-> ⚠️ **Circular import:** `noel_FEMM_functions` imports `coil_configs`, and `coil_configs` imports
-> `noel_FEMM_functions`. It works only because of import ordering. Worth untangling.
+> ⚠️ **Circular import:** `femm_model` imports `coil_configs`, and `coil_configs` imports
+> `femm_model`. It works only because of import ordering. Worth untangling.
 
 #### `coil_configs.py` — 984 lines — *the design library* (`cc`)
 
@@ -193,7 +193,7 @@ Single-purpose scripts that reuse `nff` / `fci`. All are edit-the-constants-then
 | `transformer.py` (193 lines) | Wire-wound transformer modelling. Contains the cleanest small helpers in the repo: `draw_round_wire` (2 nodes + 2 arcs), `draw_coil_grid` (a rectangular winding window filled with discrete turns), `draw_wire_column`, `draw_polygon`. |
 | `stacked_air_core_inductor_designer.py` (118) | Minimal, self-contained (no `nff`). Stacked flat-strip air-core inductor at 6.78 MHz / 45 A peak. Wire 10 × 2 mm, 4 turns, 3 mm spacing. Directly calls `openfemm`/`mi_probdef`/`makeABC`. |
 | `planar_air_core_inductor_designer.py` (65) | Shortest FEMM script here. Uses `nff.init_femm()`, redefines Ferrite to µ = 125 / loss angle 0.012544, stacks AluFoil + ferrite slabs, and draws a 3-turn 45 A coil. |
-| `genki_femm_simple.py` (261 lines) | **The clean-room rewrite, and the most instructive file in the repo.** Same physics as `Coil_Comparison_FEM.py` for loop+tank only, but with private helpers (`_get_winding_radii_turns_and_parallel_traces`, `_draw_and_plot_coil_traces`, `_get_inductance`, `_get_inductances`) and a real `main()`. Its `CoilSet` is a trimmed ~20-field version. Carries TODO links to the FEMM user manual and pyfemm PDF. **This is the best structural template for a rewritten, GUI-drivable core.** |
+| `genki_femm_simple.py` (261 lines) | **The clean-room rewrite, and the most instructive file in the repo.** Same physics as `compare_coilsets.py` for loop+tank only, but with private helpers (`_get_winding_radii_turns_and_parallel_traces`, `_draw_and_plot_coil_traces`, `_get_inductance`, `_get_inductances`) and a real `main()`. Its `CoilSet` is a trimmed ~20-field version. Carries TODO links to the FEMM user manual and pyfemm PDF. **This is the best structural template for a rewritten, GUI-drivable core.** |
 
 ### 2.5 `Branches_and_one_offs/` — the experiment graveyard
 
@@ -202,7 +202,7 @@ Single-purpose scripts that reuse `nff` / `fci`. All are edit-the-constants-then
 
 | File | What it is |
 |---|---|
-| `inductance+coupling.py` (647) / `inductance+coupling_axi.py` (524) | The evolutionary ancestors of `Coil_Comparison_FEM.py` — planar vs axisymmetric formulations of the coupling extraction. |
+| `inductance+coupling.py` (647) / `inductance+coupling_axi.py` (524) | The evolutionary ancestors of `compare_coilsets.py` — planar vs axisymmetric formulations of the coupling extraction. |
 | `embedded_loop_exploration.py` (603) | Study of embedding the drive loop within the tank PCB stackup. |
 | `tank_and_loop-ferrite.py` (421) | Tank + loop with ferrite, pre-refactor. |
 | `radial_bar_ferrite_sweep.py` (340) | Sweeps *discrete radial ferrite bars* (count/width) instead of a solid plate — the `num_discrete_ferrites` idea still referenced by dead code in the main script. |
@@ -219,7 +219,7 @@ Single-purpose scripts that reuse `nff` / `fci`. All are edit-the-constants-then
 |---|---|
 | `results/` (~59 MB, 114 dirs) | One directory per run. `ID{DDHHMM}/` names are **day-hour-minute only — no month or year, so they collide and sort meaninglessly.** Each holds an `.svg` composite figure (104 total) and a `log_*.txt` (114 total). Four dirs are hand-named milestones: `Gen2_baseline`, `Gen3 as designed May29_25`, `Gen3 POR Jun10_25`, `Ujjwals_DD_120mm_RC`. **No machine-readable results anywhere — no CSV, no JSON.** Every number ever computed is locked inside an SVG or a prose log. |
 | `tmp.fem`, `tmp.ans` (1.2 MB) | Last FEMM model + solution, written to the repo root by a run. Untracked scratch. |
-| `ltspiceautomator/` | **Empty.** Declared in `.gitmodules` as a submodule of `git@bitbucket.org:example-org/ltspiceautomator.git`, never initialised. `Coil_Comparison_FEM.py` does `import ltspiceautomator.ltspice_automator as lta` at line 22 — so **the main script cannot currently be imported or run at all** without cloning that private repo. |
+| `ltspiceautomator/` | **Empty.** Declared in `.gitmodules` as a submodule of `git@bitbucket.org:example-org/ltspiceautomator.git`, never initialised. `compare_coilsets.py` does `import ltspiceautomator.ltspice_automator as lta` at line 22 — so **the main script cannot currently be imported or run at all** without cloning that private repo. |
 | `.gitmodules` | The submodule declaration above. |
 | `.gitignore` | A generic template (Node, Java, Maven, JetBrains…) barely adapted. Does **not** ignore `*.ans`, `*.fem`, `results/`, or `__pycache__/` — which is why the multi-megabyte solution files are sitting in the tree. |
 
@@ -243,7 +243,7 @@ so they run standalone with `uv run script.py` — no shared virtualenv needed. 
 
 | File | What it is |
 |---|---|
-| `femm_coils.py` (282) | **The clean counterpart to `Coil_Comparison_FEM.py`.** Loop+tank inductance/coupling extraction, `--freq-khz` on the CLI. Notable design: `TraceTrapezoid` models the *etched* trapezoidal cross-section of a real PCB trace (45°/90° sidewalls) rather than a rectangle; `TraceCircle` for round wire; `CoilType` enum maps coil → FEMM group; `Coil.draw()`, `CoilSet.draw()`; `Result` dataclass with `pprint()` emitting R11/R22/L11/L22/M12/k. **`PositionTweak` is a context manager** that translates FEMM groups on `__enter__` and restores them on `__exit__` — a much cleaner solution than the main repo's manual ±300 mm shifts. Includes the real `225-35 RevA` geometry (5 tank turns at r = 61.928…90.376 mm, 100/125 mil traces, 1 oz copper, 1.6 mm separation). |
+| `femm_coils.py` (282) | **The clean counterpart to `compare_coilsets.py`.** Loop+tank inductance/coupling extraction, `--freq-khz` on the CLI. Notable design: `TraceTrapezoid` models the *etched* trapezoidal cross-section of a real PCB trace (45°/90° sidewalls) rather than a rectangle; `TraceCircle` for round wire; `CoilType` enum maps coil → FEMM group; `Coil.draw()`, `CoilSet.draw()`; `Result` dataclass with `pprint()` emitting R11/R22/L11/L22/M12/k. **`PositionTweak` is a context manager** that translates FEMM groups on `__enter__` and restores them on `__exit__` — a much cleaner solution than the main repo's manual ±300 mm shifts. Includes the real `225-35 RevA` geometry (5 tank turns at r = 61.928…90.376 mm, 100/125 mil traces, 1 oz copper, 1.6 mm separation). |
 | `femm_caps.py` (104) | Models the **physical resonant capacitors** (2.55 × 1.9 × 3.47 mm bodies) as copper blocks in the coil field, to capture their parasitic interaction. Imports `femm_coils`. |
 | `femm_toroid.py` (177) | Toroid sim. Header is explicit: *"THIS CODE IS MOSTLY JUST COPIED FROM NOEL'S REPO. It's not been edited / reviewed yet."* A partial duplicate of `toroidal_inductor.py` with locally re-declared `toroidal_core_shape`/`ferrite` dataclasses (T157, mix `-6`). |
 
@@ -256,7 +256,7 @@ behaviour.
 |---|---|
 | `1KW_System/automate.py` (387) + `1KW_System.asc` | The main circuit automation. Runs the 1 kW system schematic, does harmonic analysis (harmonics 5 → 300 MHz/6.78 MHz for EMI), custom variable-timestep integrators (`np_vartime_avg`, `np_vartime_rms`) because LTspice output is non-uniformly sampled, `resonant_c()`, and plots amplitude-vs-frequency. |
 | `1KW_System_PPTPhi2/automate.py` (184) + `PPTPhi2.asc` | Same pattern for the **Φ2 (class-Φ2) power amplifier** topology. |
-| `Archive/FindMPP/ltspice_automator.py` (262) | **The MPP searcher — this is what `Coil_Comparison_FEM.py` imports as `lta`** (in submodule form). Encodes the real system limits as constants: `VPA_MAX=202`, `IPA_MAX=10`, `VDS_MAX=650` (GaNFET datasheet), `VRECT_MAX=87`, `PBATT_MAX=1020`, `IRECT_MAX=PBATT_MAX/71`, `VBATT_MAX=54` (16s LiFePO4). Sweeps `RLOADDC_LIST = range(1,31)` to find maximum power point. |
+| `Archive/FindMPP/ltspice_automator.py` (262) | **The MPP searcher — this is what `compare_coilsets.py` imports as `lta`** (in submodule form). Encodes the real system limits as constants: `VPA_MAX=202`, `IPA_MAX=10`, `VDS_MAX=650` (GaNFET datasheet), `VRECT_MAX=87`, `PBATT_MAX=1020`, `IRECT_MAX=PBATT_MAX/71`, `VBATT_MAX=54` (16s LiFePO4). Sweeps `RLOADDC_LIST = range(1,31)` to find maximum power point. |
 | `Archive/*.asc` | `1KW_System_ACLoad`, `1KW_System_DCLoad`, `1KW_System_AC`, `1KW_System_AC_simplified`, `1KW_System_EMI`, `1KW_System_EMI2`. |
 
 ### 3.3 `TopDonTC001/` — thermal camera automation
@@ -325,10 +325,10 @@ Mostly *not* FEMM. This is the working engineer's toolbox around the hardware.
                           ferrite_and_core_info.py  ── materials + core geometry DB
                                     │
                                     ▼
-  coil_configs.py  ◄──────►  noel_FEMM_functions.py  ── FEMM drawing / extraction / validation
+  coil_configs.py  ◄──────►  femm_model.py  ── FEMM drawing / extraction / validation
    (named designs)   (circular)          │
         │                                ▼
-        └──────────────►  Coil_Comparison_FEM.py  ──► FEMM (pyFEMM, axisymmetric, 6.78 MHz)
+        └──────────────►  compare_coilsets.py  ──► FEMM (pyFEMM, axisymmetric, 6.78 MHz)
                                     │                        │
                                     │                        └──► L/M matrix, flux, block losses
                                     ▼
@@ -353,7 +353,7 @@ is a human editing a file.
 ### Runtime requirements
 
 - **FEMM** (Windows software; the scripts assume a local FEMM install driven through `pyfemm`).
-  Note `Coil_Comparison_FEM.py` writes Windows-ish paths and expects a GUI FEMM window — HOW-TO
+  Note `compare_coilsets.py` writes Windows-ish paths and expects a GUI FEMM window — HOW-TO
   warns *"do not click inside the FEMM window while it is running."*
 - **Python:** `pyfemm`, `numpy`, `matplotlib`, `scipy`, `quantiphy`, `sympy`, `pandas`,
   `coloredlogs`, `spicelib`, `opencv-python`, `pyserial`, `PyQt6`, `pysmithchart`, plus the internal
@@ -368,9 +368,9 @@ is a human editing a file.
 Concrete, file-specific obstacles, ordered by how much they block automation:
 
 1. **The private submodule breaks the main script.** `ltspiceautomator/` is empty; line 22 of
-   `Coil_Comparison_FEM.py` imports it unconditionally. Nothing runs until it is cloned or the
+   `compare_coilsets.py` imports it unconditionally. Nothing runs until it is cloned or the
    import is made lazy/optional.
-2. **No entry points.** `Coil_Comparison_FEM.py`, `planar_inductor.py`,
+2. **No entry points.** `compare_coilsets.py`, `planar_inductor.py`,
    `stacked_air_core_inductor_designer.py` and friends execute on import and call `plt.show()` at
    the end. A GUI cannot `import` them; it can only shell out. The fix is a `run(coilset, sweep) ->
    Results` function — `genki_femm_simple.py:main()` and `em_sim/femm_coils.py:main()` already show
@@ -379,7 +379,7 @@ Concrete, file-specific obstacles, ordered by how much they block automation:
    `coil_configs.py` literals, and in constants at the top of every standalone script. A GUI needs
    these as **data** (JSON/YAML/TOML) with `CoilSet` as the schema. `CoilSet` being a dataclass makes
    this a small step: `dataclasses.asdict` / `fields()` can generate the form automatically.
-4. **~90 module-level accumulator lists** in `Coil_Comparison_FEM.py` are the results model. They
+4. **~90 module-level accumulator lists** in `compare_coilsets.py` are the results model. They
    should become a `Results` dataclass (one per config, one per distance point). Until then, nothing
    can be re-plotted, cached, compared, or exported without re-running the solve.
 5. **Results are write-only.** 114 runs, 104 SVGs, 114 prose logs, **zero structured data.** Emitting
@@ -397,7 +397,7 @@ Concrete, file-specific obstacles, ordered by how much they block automation:
    `ferrite` definitions (`ferrite_and_core_info.py` and `em_sim/femm_toroid.py`), and two entire FEMM
    coil-drawing implementations across the two repos. Pick one lineage per concept before wrapping a UI
    around it.
-9. **Circular import** between `noel_FEMM_functions` and `coil_configs` — will bite as soon as import
+9. **Circular import** between `femm_model` and `coil_configs` — will bite as soon as import
    order changes (which a GUI's import graph will do).
 10. **Repo hygiene.** No dependency manifest in `femm_coil_simulation`; `.gitignore` doesn't cover
     `*.ans`/`*.fem`/`results/`, so ~33 MB of solver output and a stray `tmp.ans` sit in the tree; a

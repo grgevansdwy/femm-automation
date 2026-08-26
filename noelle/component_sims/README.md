@@ -1,7 +1,7 @@
 # component_sims/
 
 Single-component FEMM simulations. **Not part of the 3-coil WPT link** that
-`../Coil_Comparison_FEM.py` models — these size individual magnetics parts.
+`../compare_coilsets.py` models — these size individual magnetics parts.
 
 Kept for reference; nothing in the WPT path imports them.
 
@@ -13,12 +13,13 @@ Kept for reference; nothing in the WPT path imports them.
 | `toroidal_inductor.py` | Toroid on a real core (T184, mix -6) at 6.78 MHz |
 | `transformer.py` | Wire-wound transformer; has the cleanest small drawing helpers in the repo (`draw_round_wire`, `draw_coil_grid`) |
 | `stacked_air_core_inductor_designer.py` | Stacked flat-strip air-core inductor, 6.78 MHz / 45 A. Fully self-contained — no local imports |
+| `genki_femm_simple.py` | Clean-room rewrite of the WPT loop+tank extraction: real `main()`, real functions, importable. Imports nothing local. The best structural template if you rewrite the core. |
 | `toroid_parameter_selector.py` | Pure analytics, no FEMM. Brute-forces core x ferrite x turns against a target inductance and prints what fits. A natural "core finder" GUI tab later. |
 
 ## Running these
 
 `planar_inductor.py` and `planar_air_core_inductor_designer.py` import
-`noel_FEMM_functions` from `noelle/`. Each has a small `sys.path` bootstrap at
+`femm_model` from `noelle/`. Each has a small `sys.path` bootstrap at
 the top so they still run from in here:
 
 ```bash
