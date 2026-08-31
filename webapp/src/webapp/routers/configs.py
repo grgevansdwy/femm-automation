@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
@@ -66,12 +67,29 @@ def _validate_and_build(raw_values: dict, advanced_json: dict):
 
 def _form_context(**overrides) -> dict:
     context = {
+        "mode": "new",
+        "action_url": "/configs/new",
         "field_groups": FIELD_GROUPS,
-        "values": {},
+        "coilset": {},
         "advanced_json": dict.fromkeys(ADVANCED_FIELDS, None),
         "error": None,
         "config_id": None,
+        "cloned_from": None,
         "name": "",
+    }
+    context.update(overrides)
+    return context
+
+
+def _configs_list_context(**overrides) -> dict:
+    saved_configs = [
+        {**cfg, "updated_at": datetime.fromisoformat(cfg["updated_at"])}
+        for cfg in config_store.list_configs()
+    ]
+    context = {
+        "templates": template_registry.list_templates(),
+        "saved_configs": saved_configs,
+        "error": None,
     }
     context.update(overrides)
     return context
@@ -79,14 +97,7 @@ def _form_context(**overrides) -> dict:
 
 @router.get("/configs")
 def list_configs(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "configs_list.html",
-        {
-            "templates": template_registry.list_templates(),
-            "configs": config_store.list_configs(),
-        },
-    )
+    return templates.TemplateResponse(request, "configs_list.html", _configs_list_context())
 
 
 @router.get("/templates/{name}")
@@ -96,9 +107,9 @@ def view_template(request: Request, name: str):
         request,
         "template_view.html",
         {
-            "name": name,
+            "template_name": name,
             "field_groups": FIELD_GROUPS,
-            "values": coilset_to_form_values(coilset),
+            "coilset": coilset_to_form_values(coilset),
         },
     )
 
@@ -133,7 +144,7 @@ async def create_config(request: Request):
         return templates.TemplateResponse(
             request,
             "config_form.html",
-            _form_context(values=raw_values, advanced_json=advanced_json, error=error, name=name),
+            _form_context(coilset=raw_values, advanced_json=advanced_json, error=error, name=name),
             status_code=422,
         )
     record = config_store.save_config(coilset, name=name or coilset.config_name.strip())
@@ -147,21 +158,20 @@ def edit_config_form(request: Request, config_id: str):
         return templates.TemplateResponse(
             request,
             "configs_list.html",
-            {
-                "templates": template_registry.list_templates(),
-                "configs": config_store.list_configs(),
-                "error": f"No such config: {config_id}",
-            },
+            _configs_list_context(error=f"No such config: {config_id}"),
             status_code=404,
         )
     return templates.TemplateResponse(
         request,
         "config_form.html",
         _form_context(
-            values=record["coilset"],
+            mode="edit",
+            action_url=f"/configs/{config_id}/edit",
+            coilset=record["coilset"],
             advanced_json={k: record["coilset"][k] for k in ADVANCED_FIELDS},
             config_id=config_id,
             name=record["name"],
+            cloned_from=record.get("cloned_from"),
         ),
     )
 
@@ -174,7 +184,15 @@ async def update_config(request: Request, config_id: str):
         return templates.TemplateResponse(
             request,
             "config_form.html",
-            _form_context(values=raw_values, advanced_json=advanced_json, error=error, config_id=config_id, name=name),
+            _form_context(
+                mode="edit",
+                action_url=f"/configs/{config_id}/edit",
+                coilset=raw_values,
+                advanced_json=advanced_json,
+                error=error,
+                config_id=config_id,
+                name=name,
+            ),
             status_code=422,
         )
     config_store.save_config(coilset, name=name or coilset.config_name.strip(), config_id=config_id)

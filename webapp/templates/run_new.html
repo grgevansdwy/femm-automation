@@ -30,10 +30,10 @@
   <div class="card">
     <h2>Templates</h2>
     <div class="checkbox-list">
-      {% for tpl in templates %}
+      {% for name in templates %}
       <label class="checkbox-row">
-        <input type="checkbox" name="coilsets" value="template:{{ tpl.name }}">
-        {{ tpl.name }}
+        <input type="checkbox" name="coilsets" value="template:{{ name }}">
+        {{ name }}
         <span class="tag">template</span>
       </label>
       {% else %}

@@ -25,12 +25,12 @@
       </tr>
     </thead>
     <tbody>
-      {% for tpl in templates %}
+      {% for name in templates %}
       <tr>
-        <td><a href="/templates/{{ tpl.name }}">{{ tpl.name }}</a></td>
+        <td><a href="/templates/{{ name }}">{{ name }}</a></td>
         <td class="btn-row">
-          <a class="btn btn-secondary btn-sm" href="/templates/{{ tpl.name }}">View</a>
-          <form method="post" action="/configs/clone/{{ tpl.name }}">
+          <a class="btn btn-secondary btn-sm" href="/templates/{{ name }}">View</a>
+          <form method="post" action="/configs/clone/{{ name }}">
             <button class="btn btn-accent btn-sm" type="submit">Clone to edit</button>
           </form>
         </td>

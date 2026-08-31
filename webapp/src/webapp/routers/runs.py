@@ -16,20 +16,6 @@ except ImportError:
     DEFAULT_RC_TEST_DISTANCES = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 75, 100]
 
 
-def _selectable_items() -> list[dict]:
-    """Templates + saved configs for the /runs/new picker, tagged with a
-    'template:<name>' / 'config:<id>' key that _resolve_selection() reverses."""
-    items = []
-    try:
-        for name, coilset in template_registry.list_templates().items():
-            items.append({"key": f"template:{name}", "label": coilset.config_name.strip()})
-    except ModuleNotFoundError:
-        pass
-    for record in config_store.list_configs():
-        items.append({"key": f"config:{record['id']}", "label": record["name"]})
-    return items
-
-
 def _resolve_selection(key: str):
     """key is 'template:<name>' or 'config:<id>'. Returns (CoilSet, display_label)."""
     kind, _, ident = key.partition(":")
@@ -46,19 +32,26 @@ def _resolve_selection(key: str):
     raise ValueError(f"Malformed selection key: {key!r}")
 
 
+def _run_new_context(**overrides) -> dict:
+    context = {
+        "templates": template_registry.list_templates(),
+        "saved_configs": config_store.list_configs(),
+        "distances": DEFAULT_RC_TEST_DISTANCES,
+        "error": None,
+    }
+    context.update(overrides)
+    return context
+
+
 @router.get("/runs/new")
 def new_run_form(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "run_new.html",
-        {"items": _selectable_items(), "default_distances": DEFAULT_RC_TEST_DISTANCES},
-    )
+    return templates.TemplateResponse(request, "run_new.html", _run_new_context())
 
 
 @router.post("/runs/new")
 async def create_run(request: Request):
     form = await request.form()
-    selected_keys = form.getlist("selection")
+    selected_keys = form.getlist("coilsets")
     distances_raw = form.get("distances", "")
     distances = [float(d.strip()) for d in distances_raw.split(",") if d.strip()] or list(DEFAULT_RC_TEST_DISTANCES)
 
@@ -66,11 +59,7 @@ async def create_run(request: Request):
         return templates.TemplateResponse(
             request,
             "run_new.html",
-            {
-                "items": _selectable_items(),
-                "default_distances": DEFAULT_RC_TEST_DISTANCES,
-                "error": "Select at least one config to run.",
-            },
+            _run_new_context(distances=distances, error="Select at least one config to run."),
             status_code=422,
         )
 
