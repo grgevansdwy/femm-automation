@@ -1,0 +1,8 @@
+{#
+  Response body of GET /runs/{job_id}/log-tail, swapped into run_detail.html's
+  <pre id="log-tail" hx-swap="innerHTML"> wrapper. Expects `log_text`: str, the
+  current tail of log_<job_id>.txt (job_runner writes it incrementally during a run).
+  Only the wrapper's own hx-trigger controls polling cadence, since an innerHTML
+  swap never touches it — status-fragment is what actually stops the polling loop
+  once the wrapper is re-rendered as part of a full page load after done/failed.
+#}{{ log_text or 'Waiting for output…' }}

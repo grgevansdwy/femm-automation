@@ -1,0 +1,161 @@
+{#
+  GET/POST /configs/new and GET/POST /configs/{id}/edit share this template.
+  Expected context:
+    mode          "new" | "edit"
+    config_id     saved config id (edit only)
+    action_url    form action, e.g. "/configs/new" or "/configs/{id}/edit"
+    name          display name shown in the config library list
+    cloned_from   optional source label ("template:<name>" or a config id), shown as a note
+    coilset       dict of the 54 CoilSet fields below, current values (defaults for "new")
+    advanced_json prefilled JSON text for the 2 unlabeled fields (rc_loss_angle, tc_loss_angle)
+    error         optional validation-failure reason string (rendered as a banner, 422 on POST)
+
+  Field grouping mirrors the constructor calls in noelle/coil_configs.py:
+  Loop / Tank / RC geometry, Ferrite, Shield & Backplane, Tuning — 54 fields + config_name.
+#}
+{% extends "base.html" %}
+{% block title %}{{ 'Edit Config' if mode == 'edit' else 'New Config' }} — Coil Sim{% endblock %}
+
+{% macro field(key, label, kind='number', step='any') %}
+<div class="field">
+  <label for="f-{{ key }}">{{ label }}</label>
+  {% if kind == 'presence' %}
+  <select id="f-{{ key }}" name="{{ key }}">
+    <option value="0" {{ 'selected' if coilset.get(key, 0) in (0, '0', None) }}>No</option>
+    <option value="1" {{ 'selected' if coilset.get(key, 0) in (1, '1') }}>Yes</option>
+  </select>
+  {% else %}
+  <input type="number" step="{{ step }}" id="f-{{ key }}" name="{{ key }}"
+         value="{{ coilset.get(key, '') }}">
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit Config' if mode == 'edit' else 'New Config' }}</h1>
+    {% if cloned_from %}
+    <p class="subtitle">Cloned from {{ cloned_from }}</p>
+    {% endif %}
+  </div>
+  <a class="btn btn-secondary" href="/configs">Back to library</a>
+</div>
+
+{% if error %}
+<div class="banner banner-error">
+  <strong>Could not save this config</strong>
+  {{ error }}
+</div>
+{% endif %}
+
+<form method="post" action="{{ action_url }}">
+  <div class="field name-field">
+    <label for="f-config_name">Config name</label>
+    <input type="text" id="f-config_name" name="config_name" required
+           value="{{ name or coilset.get('config_name', '') }}">
+  </div>
+
+  <fieldset>
+    <legend>Loop geometry</legend>
+    <div class="field-grid">
+      {{ field('loop_offset', 'Loop offset (mm)') }}
+      {{ field('loop_r', 'Loop radius (mm)') }}
+      {{ field('num_loop_turns', 'Turns', step='1') }}
+      {{ field('num_parallel_loop_traces', 'Parallel traces', step='1') }}
+      {{ field('num_loop_layers', 'Layers', step='1') }}
+      {{ field('loop_trace_spacing', 'Trace spacing (mm)') }}
+      {{ field('loop_turn_spacing', 'Turn spacing (mm)') }}
+      {{ field('loop_trace_width', 'Trace width (mm)') }}
+      {{ field('loop_trace_thickness', 'Trace thickness (mm)') }}
+      {{ field('loop_PCB_thickness', 'PCB thickness (mm)') }}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tank geometry</legend>
+    <div class="field-grid">
+      {{ field('tank_center_r', 'Center radius (mm)') }}
+      {{ field('num_tank_turns', 'Turns', step='1') }}
+      {{ field('num_parallel_tank_traces', 'Parallel traces', step='1') }}
+      {{ field('num_tank_layers', 'Layers', step='1') }}
+      {{ field('tank_trace_spacing', 'Trace spacing (mm)') }}
+      {{ field('tank_turn_spacing', 'Turn spacing (mm)') }}
+      {{ field('tank_trace_width', 'Trace width (mm)') }}
+      {{ field('tank_trace_thickness', 'Trace thickness (mm)') }}
+      {{ field('tank_PCB_thickness', 'PCB thickness (mm)') }}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>RC geometry</legend>
+    <div class="field-grid">
+      {{ field('rc_radius', 'Radius (mm)') }}
+      {{ field('num_rc_turns', 'Turns', step='1') }}
+      {{ field('num_parallel_rc_traces', 'Parallel traces', step='1') }}
+      {{ field('num_rc_layers', 'Layers', step='1') }}
+      {{ field('rc_trace_spacing', 'Trace spacing (mm)') }}
+      {{ field('rc_turn_spacing', 'Turn spacing (mm)') }}
+      {{ field('rc_trace_width', 'Trace width (mm)') }}
+      {{ field('rc_trace_thickness', 'Trace thickness (mm)') }}
+      {{ field('rc_PCB_thickness', 'PCB thickness (mm)') }}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Ferrite</legend>
+    <div class="field-grid">
+      {{ field('tank_ferrite_present', 'Tank ferrite present', kind='presence') }}
+      {{ field('tank_ferrite_y_offset', 'Tank ferrite Y offset (mm)') }}
+      {{ field('tank_ferrite_thickness', 'Tank ferrite thickness (mm)') }}
+      {{ field('tank_mu', 'Tank ferrite mu') }}
+      {{ field('tank_ferrite_outer_r', 'Tank ferrite outer radius (mm)') }}
+      {{ field('rc_ferrite_present', 'RC ferrite present', kind='presence') }}
+      {{ field('rc_ferrite_y_offset', 'RC ferrite Y offset (mm)') }}
+      {{ field('rc_ferrite_thickness', 'RC ferrite thickness (mm)') }}
+      {{ field('rc_mu', 'RC ferrite mu') }}
+      {{ field('rc_ferrite_outer_r', 'RC ferrite outer radius (mm)') }}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Shield &amp; backplane</legend>
+    <div class="field-grid">
+      {{ field('backplane', 'Backplane present', kind='presence') }}
+      {{ field('backplane_y_distance', 'Backplane Y distance (mm)') }}
+      {{ field('rc_backplane', 'RC backplane present', kind='presence') }}
+      {{ field('rc_backplane_y_distance', 'RC backplane Y distance (mm)') }}
+      {{ field('tc_shield', 'Tank/coil shield present', kind='presence') }}
+      {{ field('tc_shield_y_distance', 'TC shield Y distance (mm)') }}
+      {{ field('tc_shield_radius', 'TC shield radius (mm)') }}
+      {{ field('tc_shield_thickness', 'TC shield thickness (mm)') }}
+      {{ field('rc_shield', 'RC shield present', kind='presence') }}
+      {{ field('rc_shield_y_distance', 'RC shield Y distance (mm)') }}
+      {{ field('rc_shield_radius', 'RC shield radius (mm)') }}
+      {{ field('rc_shield_thickness', 'RC shield thickness (mm)') }}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tuning</legend>
+    <div class="field-grid">
+      {{ field('coax_cable', 'Coax cable (Ω)') }}
+      {{ field('loop_tune_f', 'Loop tune frequency (MHz)') }}
+      {{ field('tank_tune_f', 'Tank tune frequency (MHz)') }}
+      {{ field('rc_tune_f', 'RC tune frequency (MHz)') }}
+    </div>
+  </fieldset>
+
+  <details class="advanced">
+    <summary>Advanced (JSON)</summary>
+    <p class="text-muted">Loss-angle fields with no dedicated input. Must be a JSON object with
+      keys <code>rc_loss_angle</code> and <code>tc_loss_angle</code>.</p>
+    <textarea name="advanced_json">{{ advanced_json }}</textarea>
+  </details>
+
+  <div class="btn-row">
+    <button type="submit" class="btn btn-primary">Save config</button>
+    <a class="btn btn-secondary" href="/configs">Cancel</a>
+  </div>
+</form>
+{% endblock %}
