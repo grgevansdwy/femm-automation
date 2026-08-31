@@ -1,0 +1,78 @@
+{#
+  GET /configs — expects:
+    `templates`: list of {name} from template_registry.list_templates() (read-only,
+                 no id — the CoilSet's own module-level attribute name is the key).
+    `saved_configs`: list of {id, name, updated_at} from config_store.list_configs().
+#}
+{% extends "base.html" %}
+{% block title %}Config Library — Coil Sim{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Config Library</h1>
+    <p class="subtitle">Read-only templates to clone from, and your saved, editable configs.</p>
+  </div>
+  <a class="btn btn-primary" href="/configs/new">+ New Config</a>
+</div>
+
+<div class="card">
+  <h2>Templates</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tpl in templates %}
+      <tr>
+        <td><a href="/templates/{{ tpl.name }}">{{ tpl.name }}</a></td>
+        <td class="btn-row">
+          <a class="btn btn-secondary btn-sm" href="/templates/{{ tpl.name }}">View</a>
+          <form method="post" action="/configs/clone/{{ tpl.name }}">
+            <button class="btn btn-accent btn-sm" type="submit">Clone to edit</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr class="empty-row">
+        <td colspan="2">No templates found in coilset_repository.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>My Configs</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Updated</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for cfg in saved_configs %}
+      <tr>
+        <td><a href="/configs/{{ cfg.id }}/edit">{{ cfg.name }}</a></td>
+        <td>{{ cfg.updated_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td class="btn-row">
+          <a class="btn btn-secondary btn-sm" href="/configs/{{ cfg.id }}/edit">Edit</a>
+          <form method="post" action="/configs/{{ cfg.id }}/delete"
+                onsubmit="return confirm('Delete this config?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr class="empty-row">
+        <td colspan="3">No saved configs yet — clone a template to get started.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

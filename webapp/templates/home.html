@@ -1,0 +1,47 @@
+{#
+  GET /  — expects `jobs`: list of Job (see job_runner.Job), newest first.
+  Each job has: id, coilset_labels (list[str]), status (queued|running|done|failed),
+  created_at (datetime).
+#}
+{% extends "base.html" %}
+{% block title %}Home — Coil Sim{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Runs</h1>
+    <p class="subtitle">All comparison runs known to this server process.</p>
+  </div>
+  <a class="btn btn-primary" href="/runs/new">+ New Run</a>
+</div>
+
+<div class="card">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Run</th>
+        <th>Coilsets</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td><code>{{ job.id }}</code></td>
+        <td>{{ job.coilset_labels | join(', ') }}</td>
+        <td>
+          <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+        </td>
+        <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td><a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr class="empty-row">
+        <td colspan="5">No runs yet — start one from <a href="/runs/new">New Run</a>.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

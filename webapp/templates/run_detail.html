@@ -1,0 +1,50 @@
+{#
+  GET /runs/{job_id} — expects `job`: a Job (job_runner.Job) with id, status,
+  coilset_labels, distances, created_at, started_at, finished_at, error, result_dir.
+  Also renders the initial log tail via `log_text` (same value the log-tail
+  endpoint itself would return), so the page shows real content before HTMX's
+  first poll fires.
+#}
+{% extends "base.html" %}
+{% block title %}Run {{ job.id }} — Coil Sim{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Run {{ job.id }}</h1>
+    <p class="subtitle">{{ job.coilset_labels | join(' vs. ') }}</p>
+  </div>
+  <a class="btn btn-secondary" href="/">Back to runs</a>
+</div>
+
+<div class="card">
+  <dl class="meta-list">
+    <dt>Coilsets</dt>
+    <dd>{{ job.coilset_labels | join(', ') }}</dd>
+    <dt>RC test distances</dt>
+    <dd>{{ job.distances | join(', ') }} mm</dd>
+    <dt>Created</dt>
+    <dd>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+    {% if job.started_at %}
+    <dt>Started</dt>
+    <dd>{{ job.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+    {% endif %}
+    {% if job.finished_at %}
+    <dt>Finished</dt>
+    <dd>{{ job.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+    {% endif %}
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  {% include "partials/status_fragment.html" %}
+</div>
+
+<div class="card">
+  <h2>Log</h2>
+  <pre id="log-tail" class="log-tail"
+       hx-get="/runs/{{ job.id }}/log-tail"
+       hx-trigger="load, every 2s"
+       hx-swap="innerHTML">{% include "partials/log_tail.html" %}</pre>
+</div>
+{% endblock %}

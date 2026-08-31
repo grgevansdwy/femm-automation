@@ -1,0 +1,41 @@
+{#
+  Rendered both inline (run_detail.html's first paint) and as the response body of
+  GET /runs/{job_id}/status-fragment (hx-swap="outerHTML"). Expects `job`: a Job
+  (job_runner.Job) with id, status, coilset_labels, distances, created_at, started_at,
+  finished_at, error, result_dir. The root element re-declares its own polling
+  attributes so a poll can drop them once status is done/failed and stop itself.
+#}
+<div id="status-fragment"
+     {% if job.status in ('queued', 'running') %}
+     hx-get="/runs/{{ job.id }}/status-fragment"
+     hx-trigger="load, every 2s"
+     hx-swap="outerHTML"
+     {% endif %}>
+
+  <div class="status-panel">
+    <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+    {% if job.status == 'running' and job.started_at %}
+    <span class="text-muted">running since {{ job.started_at.strftime('%H:%M:%S') }}</span>
+    {% elif job.status == 'queued' %}
+    <span class="text-muted">waiting for the FEMM worker to free up</span>
+    {% endif %}
+  </div>
+
+  {% if job.status == 'done' %}
+  <div class="result-figure">
+    <img src="/runs/{{ job.id }}/figure.svg" alt="Dashboard for run {{ job.id }}">
+  </div>
+  <div class="btn-row mt-16">
+    <a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}/log">Download log</a>
+    <a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}/summary.json">Download summary JSON</a>
+  </div>
+  {% elif job.status == 'failed' %}
+  <div class="banner banner-error mt-16">
+    <strong>Run failed</strong>
+    {{ job.error }}
+  </div>
+  <div class="btn-row">
+    <a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}/log">Download log</a>
+  </div>
+  {% endif %}
+</div>

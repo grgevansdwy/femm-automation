@@ -1,0 +1,31 @@
+{#
+  Base layout. Expected context on every page: `active_nav` (one of
+  "home" | "configs" | "runs", optional) to highlight the matching nav link.
+  Child templates override the `title` and `content` blocks.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}FEMM WPT Coil Simulation Tool{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+  <header class="navbar">
+    <a class="brand" href="/"><span class="brand-mark"></span>Coil Sim</a>
+    <div class="nav-links">
+      <a href="/" class="{{ 'active' if active_nav == 'home' }}">Home</a>
+      <a href="/configs" class="{{ 'active' if active_nav == 'configs' }}">Config Library</a>
+      <a class="nav-cta" href="/runs/new">+ New Run</a>
+    </div>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
