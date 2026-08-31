@@ -1,10 +1,8 @@
-import femm_model as nff
+from models.coilset import CoilSet
 
-#Special Configs
-###############################
-#5-turn V1 HP tank, George Coil (3-turn RC 100mm), 130mm Loop 
+# ================= BASELINE =======================
 
-Gen3 = nff.CoilSet(config_name='RevA1 with Ferrite \n',
+Gen3 = CoilSet(config_name='RevA1 with Ferrite \n',
     tank_ferrite_present=1,
     tank_ferrite_y_offset=3.24,
     tank_ferrite_thickness=2,
@@ -54,7 +52,7 @@ Gen3 = nff.CoilSet(config_name='RevA1 with Ferrite \n',
     rc_PCB_thickness=1.8,
     rc_backplane=0,
     rc_backplane_y_distance=6,
-    
+
     tc_shield=1,
     tc_shield_y_distance=2,
     tc_shield_radius=105,
@@ -69,8 +67,7 @@ Gen3 = nff.CoilSet(config_name='RevA1 with Ferrite \n',
     tank_trace_thickness=.07,
     rc_trace_thickness=.07)
 
-
-base_coil = nff.CoilSet(config_name='base_iterative_coil \n',
+base_coil = CoilSet(config_name='base_iterative_coil \n',
     tank_ferrite_present=1,
     tank_ferrite_y_offset=0,
     tank_ferrite_thickness=1,
@@ -120,7 +117,7 @@ base_coil = nff.CoilSet(config_name='base_iterative_coil \n',
     rc_PCB_thickness=1.8,
     rc_backplane=0,
     rc_backplane_y_distance=100,
-    
+
     tc_shield=1,
     tc_shield_y_distance=3,
     tc_shield_radius=105,
@@ -129,13 +126,13 @@ base_coil = nff.CoilSet(config_name='base_iterative_coil \n',
     rc_shield=1,
     rc_shield_y_distance=0,
     rc_shield_radius=60,
-    rc_shield_thickness=1, 
+    rc_shield_thickness=1,
 
     loop_trace_thickness=.07,
     tank_trace_thickness=.07,
     rc_trace_thickness=.07)
 
-plated_slot_coil = nff.CoilSet(config_name='plated slots \n',
+plated_slot_coil = CoilSet(config_name='plated slots \n',
     tank_ferrite_present=1,
     tank_ferrite_y_offset=0,
     tank_ferrite_thickness=1,
@@ -185,7 +182,7 @@ plated_slot_coil = nff.CoilSet(config_name='plated slots \n',
     rc_PCB_thickness=1.6,
     rc_backplane=0,
     rc_backplane_y_distance=100,
-    
+
     tc_shield=1,
     tc_shield_y_distance=3,
     tc_shield_radius=105,
@@ -194,14 +191,13 @@ plated_slot_coil = nff.CoilSet(config_name='plated slots \n',
     rc_shield=1,
     rc_shield_y_distance=0,
     rc_shield_radius=60,
-    rc_shield_thickness=1, 
+    rc_shield_thickness=1,
 
     loop_trace_thickness=1.6,
     tank_trace_thickness=1.6,
     rc_trace_thickness=1.6)
 
-#
-Gen2_coil = nff.CoilSet(config_name='Gen2 \n',
+Gen2_coil = CoilSet(config_name='Gen2 \n',
     tank_ferrite_present=0,
     tank_ferrite_y_offset=0,
     tank_ferrite_thickness=0,
@@ -251,7 +247,7 @@ Gen2_coil = nff.CoilSet(config_name='Gen2 \n',
     rc_PCB_thickness=1.6,
     rc_backplane=0,
     rc_backplane_y_distance=100,
-    
+
     tc_shield=0,
     tc_shield_y_distance=0,
     tc_shield_radius=0,
@@ -260,14 +256,14 @@ Gen2_coil = nff.CoilSet(config_name='Gen2 \n',
     rc_shield=0,
     rc_shield_y_distance=0,
     rc_shield_radius=0,
-    rc_shield_thickness=0, 
+    rc_shield_thickness=0,
 
     loop_trace_thickness=.07,
     tank_trace_thickness=.07,
     rc_trace_thickness=.07)
 
 #225-10 + 225-11
-TR302_and_OC150 = nff.CoilSet(config_name='300W_OG \n',
+TR302_and_OC150 = CoilSet(config_name='300W_OG \n',
     tank_ferrite_present=0,
     tank_ferrite_y_offset=0,
     tank_ferrite_thickness=0,
@@ -317,7 +313,7 @@ TR302_and_OC150 = nff.CoilSet(config_name='300W_OG \n',
     rc_PCB_thickness=1.6,
     rc_backplane=0,
     rc_backplane_y_distance=100,
-    
+
     tc_shield=0,
     tc_shield_y_distance=0,
     tc_shield_radius=0,
@@ -326,14 +322,14 @@ TR302_and_OC150 = nff.CoilSet(config_name='300W_OG \n',
     rc_shield=0,
     rc_shield_y_distance=0,
     rc_shield_radius=0,
-    rc_shield_thickness=0, 
+    rc_shield_thickness=0,
 
     loop_trace_thickness=.07,
     tank_trace_thickness=.07,
     rc_trace_thickness=.07)
 
 #225-10 + 225-11
-TR302_and_mithril = nff.CoilSet(config_name='50W_mitril \n',
+TR302_and_mithril = CoilSet(config_name='50W_mitril \n',
     tank_ferrite_present=0,
     tank_ferrite_y_offset=0,
     tank_ferrite_thickness=0,
@@ -385,7 +381,7 @@ TR302_and_mithril = nff.CoilSet(config_name='50W_mitril \n',
     rc_PCB_thickness=1.6,
     rc_backplane=0,
     rc_backplane_y_distance=100,
-    
+
     tc_shield=0,
     tc_shield_y_distance=0,
     tc_shield_radius=0,
@@ -394,14 +390,14 @@ TR302_and_mithril = nff.CoilSet(config_name='50W_mitril \n',
     rc_shield=0,
     rc_shield_y_distance=0,
     rc_shield_radius=0,
-    rc_shield_thickness=0, 
+    rc_shield_thickness=0,
 
     loop_trace_thickness=.07,
     tank_trace_thickness=.07,
     rc_trace_thickness=.07)
 
 #Reily's YOLO coil
-TR302_and_225_000056 = nff.CoilSet(config_name='reilys \n',
+TR302_and_225_000056 = CoilSet(config_name='reilys \n',
     tank_ferrite_present=0,
     tank_ferrite_y_offset=0,
     tank_ferrite_thickness=0,
@@ -447,13 +443,13 @@ TR302_and_225_000056 = nff.CoilSet(config_name='reilys \n',
     tank_trace_width=3.175,
     loop_trace_width=2.54,
     rc_trace_width=1,
-    
+
     tank_PCB_thickness=1.6,
     loop_PCB_thickness=1.6,
     rc_PCB_thickness=1.6,
     rc_backplane=0,
     rc_backplane_y_distance=100,
-    
+
     tc_shield=0,
     tc_shield_y_distance=0,
     tc_shield_radius=0,
@@ -462,14 +458,13 @@ TR302_and_225_000056 = nff.CoilSet(config_name='reilys \n',
     rc_shield=0,
     rc_shield_y_distance=0,
     rc_shield_radius=0,
-    rc_shield_thickness=0, 
+    rc_shield_thickness=0,
 
     loop_trace_thickness=.07,
     tank_trace_thickness=.07,
     rc_trace_thickness=.07)
 
-
-seedcoil = nff.CoilSet(config_name='base_iterative_coil \n', tank_ferrite_present=0, tank_ferrite_y_offset=0, tank_ferrite_thickness=0, tank_mu=1, tank_ferrite_outer_r=100, rc_ferrite_present=0, rc_ferrite_y_offset=0, rc_ferrite_thickness=0, rc_mu=1, rc_ferrite_outer_r=1, backplane=0, backplane_y_distance=100, loop_offset=10, loop_r=31.45410922828834, num_loop_turns=2, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=3.25, loop_turn_spacing=11.321676596879232, tank_center_r=96.47322052521042, num_tank_turns=9, num_parallel_tank_traces=1, num_tank_layers=1, tank_trace_spacing=3.25, tank_turn_spacing=12.153244983164921, rc_radius=41.365786468616264, num_rc_turns=5, num_parallel_rc_traces=1, num_rc_layers=1, rc_trace_spacing=3.25, rc_turn_spacing=6.03634182473567, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=3, loop_trace_width=3, rc_trace_width=3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.8, rc_backplane=0, rc_backplane_y_distance=100, tc_shield=0, tc_shield_y_distance=0, tc_shield_radius=0, tc_shield_thickness=0, rc_shield=0, rc_shield_y_distance=0, rc_shield_radius=0, rc_shield_thickness=0, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
+seedcoil = CoilSet(config_name='base_iterative_coil \n', tank_ferrite_present=0, tank_ferrite_y_offset=0, tank_ferrite_thickness=0, tank_mu=1, tank_ferrite_outer_r=100, rc_ferrite_present=0, rc_ferrite_y_offset=0, rc_ferrite_thickness=0, rc_mu=1, rc_ferrite_outer_r=1, backplane=0, backplane_y_distance=100, loop_offset=10, loop_r=31.45410922828834, num_loop_turns=2, num_parallel_loop_traces=1, num_loop_layers=1, loop_trace_spacing=3.25, loop_turn_spacing=11.321676596879232, tank_center_r=96.47322052521042, num_tank_turns=9, num_parallel_tank_traces=1, num_tank_layers=1, tank_trace_spacing=3.25, tank_turn_spacing=12.153244983164921, rc_radius=41.365786468616264, num_rc_turns=5, num_parallel_rc_traces=1, num_rc_layers=1, rc_trace_spacing=3.25, rc_turn_spacing=6.03634182473567, coax_cable=213, loop_tune_f=6.85, tank_tune_f=6.75, rc_tune_f=6.84, tank_trace_width=3, loop_trace_width=3, rc_trace_width=3, tank_PCB_thickness=1.6, loop_PCB_thickness=1.6, rc_PCB_thickness=1.8, rc_backplane=0, rc_backplane_y_distance=100, tc_shield=0, tc_shield_y_distance=0, tc_shield_radius=0, tc_shield_thickness=0, rc_shield=0, rc_shield_y_distance=0, rc_shield_radius=0, rc_shield_thickness=0, loop_trace_thickness=0.07, tank_trace_thickness=0.07, rc_trace_thickness=0.07)
 
 def create_iter_base_coil(variables):
     #variables = [loop_turns, tank_turns, rc_turns, loop_r, tank_r, rc_r, loop_turn_spacing, tank_turn_spacing, rc_turn_spacing, loop_trace_width, tank_trace_width, rc_trace_width]
@@ -497,7 +492,7 @@ def create_iter_base_coil(variables):
     return new_coil
 
 def copy_coilset(coilset_to_copy):
-    new_coil = nff.CoilSet(config_name=coilset_to_copy.config_name,
+    new_coil = CoilSet(config_name=coilset_to_copy.config_name,
     tank_ferrite_present= coilset_to_copy.tank_ferrite_present,
     tank_ferrite_y_offset=coilset_to_copy.tank_ferrite_y_offset,
     tank_ferrite_thickness=coilset_to_copy.tank_ferrite_thickness,
@@ -549,7 +544,7 @@ def copy_coilset(coilset_to_copy):
     rc_PCB_thickness=coilset_to_copy.rc_PCB_thickness,
     rc_backplane=coilset_to_copy.rc_backplane,
     rc_backplane_y_distance=coilset_to_copy.rc_backplane_y_distance,
-    
+
     tc_shield=coilset_to_copy.tc_shield,
     tc_shield_y_distance=coilset_to_copy.tc_shield_y_distance,
     tc_shield_radius=coilset_to_copy.tc_shield_radius,
@@ -558,10 +553,57 @@ def copy_coilset(coilset_to_copy):
     rc_shield=coilset_to_copy.rc_shield,
     rc_shield_y_distance=coilset_to_copy.rc_shield_y_distance,
     rc_shield_radius=coilset_to_copy.rc_shield_radius,
-    rc_shield_thickness=coilset_to_copy.rc_shield_thickness, 
+    rc_shield_thickness=coilset_to_copy.rc_shield_thickness,
 
     loop_trace_thickness=coilset_to_copy.loop_trace_thickness,
     tank_trace_thickness=coilset_to_copy.tank_trace_thickness,
     rc_trace_thickness=coilset_to_copy.rc_trace_thickness)
 
     return new_coil
+
+
+# ================= VARIANTS =======================
+Gen2_4Layer = copy_coilset(Gen2_coil)
+Gen2_4Layer.num_tank_layers = 4
+
+# RevA1_no_tank.num_tank_turns = 0
+Gen3_backplane = copy_coilset(Gen3)
+Gen3_backplane.rc_backplane = 1
+
+Gen3_4mm_RC_ferrite = copy_coilset(Gen3)
+Gen3_4mm_RC_ferrite.config_name = "4mm RC ferrite, FJ7"
+Gen3_4mm_RC_ferrite.rc_ferrite_thickness = 4
+Gen3_4mm_RC_ferrite.rc_ferrite_y_offset = 1
+Gen3_4mm_RC_ferrite.rc_backplane = 1
+
+Gen3_2mm_RC_ferrite = copy_coilset(Gen3)
+Gen3_2mm_RC_ferrite.config_name = "2mm RC ferrite, FJ7"
+Gen3_2mm_RC_ferrite.rc_ferrite_thickness = 2
+Gen3_2mm_RC_ferrite.rc_ferrite_y_offset = 1
+Gen3_2mm_RC_ferrite.rc_backplane = 1
+
+Gen3_2mm_61_RC_ferrite = copy_coilset(Gen3)
+Gen3_2mm_61_RC_ferrite.config_name = "2mm RC ferrite, 61"
+Gen3_2mm_61_RC_ferrite.rc_ferrite_thickness = 2
+Gen3_2mm_61_RC_ferrite.rc_ferrite_y_offset = 1
+Gen3_2mm_61_RC_ferrite.rc_backplane = 1
+Gen3_2mm_61_RC_ferrite.tank_mu = 125
+Gen3_2mm_61_RC_ferrite.rc_mu = 125
+Gen3_2mm_61_RC_ferrite.rc_loss_angle = 0.0073
+Gen3_2mm_61_RC_ferrite.tc_loss_angle = 0.0073
+
+new_coil_6_turn = copy_coilset(TR302_and_225_000056)
+new_coil_6_turn.rc_radius = 21.875
+new_coil_6_turn.rc_trace_spacing = 1.8
+new_coil_6_turn.rc_turn_spacing = 1.8
+new_coil_6_turn.rc_trace_width = 1.2
+
+new_coil_7_turn = copy_coilset(new_coil_6_turn)
+new_coil_7_turn.num_rc_turns = 7
+
+new_coil_8_turn = copy_coilset(TR302_and_225_000056)
+new_coil_8_turn.num_rc_turns = 8
+new_coil_8_turn.rc_radius = 21.775
+new_coil_8_turn.rc_turn_spacing = 1.6
+new_coil_8_turn.rc_trace_width = 1
+new_coil_8_turn.num_rc_layers = 4
