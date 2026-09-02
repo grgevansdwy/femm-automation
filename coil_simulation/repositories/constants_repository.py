@@ -1,5 +1,5 @@
 # =============================================================================
-# constants_repository.py
+# constants_repository.py --> repo for data/constants.json
 #
 # Reads the raw physics inputs for a run: frequency, target currents, coil
 # resistances, matching-network values, the RG8x cable model, the PA's output

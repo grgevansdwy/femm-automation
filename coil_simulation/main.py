@@ -15,7 +15,7 @@ if __name__ == '__main__':
     coilset = cc.get_coilset('TR302_and_225_000056')
     result = simulate(coilset, DEFAULT_RC_TEST_DISTANCE)
 
-    repo = RunResultRepository(root=Path('./results'))
+    repo = RunResultRepository(root=Path('./data/results'))
     repo.save_result_json({
         "run_id": repo.run_id,
         "config_id": "TR302_and_225_000056",

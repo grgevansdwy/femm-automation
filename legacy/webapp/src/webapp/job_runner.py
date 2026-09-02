@@ -1,10 +1,13 @@
-"""Serializes FEMM/Wine solve jobs onto a single worker.
+"""Runs FEMM solve jobs on a pool of workers pulling from a shared queue.
 
-FEMM-via-Wine is one external process talking over a file-based IPC protocol
-(ifile.txt/ofile.txt) - not safe for concurrent access. An asyncio.Queue feeds
-a single-worker ThreadPoolExecutor (belt-and-braces: the queue already
-serializes submissions, the pool's max_workers=1 makes it structurally
-impossible to run two solves at once even if that changes).
+Each solve is now an independent `femmcli` subprocess in its own temp
+directory (coil_simulation/services/xfemm_backend.py) rather than a shared
+Wine/FEMM session, so concurrent solves are safe - unlike the old
+single-worker setup this replaces. `WORKER_COUNT` copies of `worker_loop()`
+each pull a job id off the shared `QUEUE` and run it on `EXECUTOR`
+(sized to match, so WORKER_COUNT jobs can genuinely be solving at once);
+bumping `EXECUTOR`'s max_workers alone wouldn't have been enough, since a
+single `worker_loop()` awaits each job before pulling the next.
 
 Completed/failed jobs are persisted to RESULTS_ROOT as a flat JSON file (see
 _persist_job) - JOBS only needs to hold a job while it's queued/running;
@@ -14,6 +17,7 @@ routers/runs.py), not by JOBS surviving.
 
 import asyncio
 import dataclasses
+import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -23,7 +27,7 @@ from typing import Any
 
 from ._sim_path import SIM_DIR
 
-RESULTS_ROOT = SIM_DIR / "results"
+RESULTS_ROOT = SIM_DIR / "data" / "results"
 
 
 def now() -> datetime:
@@ -54,7 +58,8 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 QUEUE: "asyncio.Queue[str]" = asyncio.Queue()
-EXECUTOR = ThreadPoolExecutor(max_workers=1)
+WORKER_COUNT = os.cpu_count() or 4
+EXECUTOR = ThreadPoolExecutor(max_workers=WORKER_COUNT)
 
 
 def new_job_id() -> str:
@@ -87,7 +92,8 @@ def _persist_job(job: Job) -> None:
 
 
 async def worker_loop() -> None:
-    """Runs for the lifetime of the app; started from main.py's lifespan handler."""
+    """Runs for the lifetime of the app; main.py's lifespan handler starts
+    WORKER_COUNT copies of this as separate tasks sharing QUEUE/EXECUTOR."""
     loop = asyncio.get_running_loop()
     while True:
         job_id = await QUEUE.get()

@@ -2,8 +2,8 @@
 # run_result_repository.py
 #
 # Owns everything a run writes to disk: one flat JSON file per run under
-# ./results/. Generic - callers (main.py, webapp's job_runner.py) build their
-# own payload dict; this repository doesn't know or care what's inside it.
+# ./data/results/. Generic - callers (main.py, webapp's job_runner.py) build
+# their own payload dict; this repository doesn't know or care what's inside it.
 # =============================================================================
 import datetime
 import json
@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 class RunResultRepository:
-    def __init__(self, run_id=None, root=Path('./results')):
+    def __init__(self, run_id=None, root=Path('./data/results')):
         self.run_id = run_id or '{:%Y%m%dT%H%M%S}'.format(datetime.datetime.now())
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -24,14 +24,14 @@ class RunResultRepository:
         self.result_path.write_text(json.dumps(payload, indent=2, default=str))
 
     @staticmethod
-    def load_result(run_id, root=Path('./results')):
+    def load_result(run_id, root=Path('./data/results')):
         path = Path(root) / f'{run_id}.json'
         if not path.exists():
             return None
         return json.loads(path.read_text())
 
     @staticmethod
-    def list_results(root=Path('./results')):
+    def list_results(root=Path('./data/results')):
         root = Path(root)
         if not root.is_dir():
             return []

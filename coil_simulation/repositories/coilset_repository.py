@@ -1,5 +1,5 @@
 # =============================================================================
-# coilset_repository.py
+# coilset_repository.py --> CRUD for data/configs/
 #
 # The unified config store: one JSON file per config under data/configs/,
 # covering both the built-in reference designs (builtin=True, e.g. Gen3,

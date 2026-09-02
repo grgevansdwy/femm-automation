@@ -4,7 +4,8 @@ coil_simulation's modules import each other as `from repositories import coilset
 `from models.coilset import CoilSet`, etc. - relative to coil_simulation/ being on
 sys.path[0], the same way `main.py` already relies on via its cwd
 when run as a script. Import this module before importing anything that
-transitively imports coil_simulation code (main.py does this first, before its routers).
+transitively imports coil_simulation code (main.py does this first, before
+anything else).
 """
 
 import os

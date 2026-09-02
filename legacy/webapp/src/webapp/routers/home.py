@@ -25,5 +25,10 @@ def index(request: Request):
         if job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
     ]
     disk = RunResultRepository.list_results(root=job_runner.RESULTS_ROOT)
+    # A run persisted with no created_at (e.g. an interrupted job) has None
+    # here - normalize to "" so it sorts as oldest and home.html's
+    # `row.created_at[:16]` doesn't crash, instead of failing the whole page.
+    for row in disk:
+        row["created_at"] = row.get("created_at") or ""
     rows = sorted(in_flight + disk, key=lambda r: r["created_at"], reverse=True)
     return templates.TemplateResponse(request, "home.html", {"rows": rows})

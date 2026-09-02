@@ -14,11 +14,15 @@ BASE_DIR = Path(__file__).resolve().parents[2]  # webapp/
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    worker_task = asyncio.create_task(job_runner.worker_loop())
+    worker_tasks = [
+        asyncio.create_task(job_runner.worker_loop())
+        for _ in range(job_runner.WORKER_COUNT)
+    ]
     try:
         yield
     finally:
-        worker_task.cancel()
+        for task in worker_tasks:
+            task.cancel()
 
 
 app = FastAPI(title="FEMM WPT Coil Simulation Tool", lifespan=lifespan)

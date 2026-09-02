@@ -1,0 +1,11 @@
+--- /dev/fd/63	2026-09-02 14:13:45.484409892 -0700
++++ cfemm/fpproc/fpproc.cpp	2026-09-02 14:11:35.900406820 -0700
+@@ -5208,7 +5208,7 @@
+         // voltage that we have must be solely due to flux linkage.
+         // To get the flux linkage, just divide the voltage by the frequency.
+         if (Frequency!=0)
+-            FluxLinkage=GetVoltageDrop(circnum)/(2.*PI*Frequency);
++            FluxLinkage=GetVoltageDrop(circnum)/(I*2.*PI*Frequency);
+ 
+         // The zero frequency case is the interesting one, because
+         // there are lots of annoying special cases.
