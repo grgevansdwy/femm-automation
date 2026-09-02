@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import _noelle_path  # noqa: F401 - must run before any noelle-dependent import below
+from . import _sim_path  # noqa: F401 - must run before any coil_simulation-dependent import below
 from . import job_runner
 from .routers import configs, home, runs
 

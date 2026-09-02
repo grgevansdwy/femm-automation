@@ -1,12 +1,8 @@
 {#
   GET/POST /runs/new — expects:
-    templates      list of {name} (see template_registry.list_templates())
-    saved_configs  list of {id, name} (see config_store.list_configs())
-    distances      list[float], prefilled from DEFAULT_RC_TEST_DISTANCES
-    error          optional validation-failure reason string
-
-  Checkbox values are namespaced "template:<name>" / "config:<id>" so the handler
-  can tell the two sources apart; field name "coilsets" collects all checked values.
+    configs           list of {id, name, builtin} (see coilset_repository.list_configs())
+    default_distance  float, prefilled distance (mm)
+    error             optional validation-failure reason string
 #}
 {% extends "base.html" %}
 {% block title %}New Run — Coil Sim{% endblock %}
@@ -14,7 +10,7 @@
 <div class="page-header">
   <div>
     <h1>New Run</h1>
-    <p class="subtitle">Pick two or more coilsets to compare and a set of RC test distances.</p>
+    <p class="subtitle">Pick a config and an RC separation distance.</p>
   </div>
   <a class="btn btn-secondary" href="/configs">Config library</a>
 </div>
@@ -28,39 +24,19 @@
 
 <form method="post" action="/runs/new">
   <div class="card">
-    <h2>Templates</h2>
-    <div class="checkbox-list">
-      {% for name in templates %}
-      <label class="checkbox-row">
-        <input type="checkbox" name="coilsets" value="template:{{ name }}">
-        {{ name }}
-        <span class="tag">template</span>
-      </label>
-      {% else %}
-      <p class="text-muted">No templates found.</p>
-      {% endfor %}
+    <div class="field">
+      <label for="f-config_id">Config</label>
+      <select id="f-config_id" name="config_id" required>
+        <option value="">Select a config…</option>
+        {% for cfg in configs %}
+        <option value="{{ cfg.id }}">{{ cfg.name }}{{ ' (built-in)' if cfg.builtin else '' }}</option>
+        {% endfor %}
+      </select>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>My Configs</h2>
-    <div class="checkbox-list">
-      {% for cfg in saved_configs %}
-      <label class="checkbox-row">
-        <input type="checkbox" name="coilsets" value="config:{{ cfg.id }}">
-        {{ cfg.name }}
-        <span class="tag">saved</span>
-      </label>
-      {% else %}
-      <p class="text-muted">No saved configs yet — clone a template first.</p>
-      {% endfor %}
+    <div class="field">
+      <label for="f-distance">RC separation distance (mm)</label>
+      <input type="number" step="any" id="f-distance" name="distance" value="{{ default_distance }}" required>
     </div>
-  </div>
-
-  <div class="card distance-list">
-    <h2>RC test distances (mm)</h2>
-    <textarea name="distances" rows="2">{{ distances | join(', ') }}</textarea>
-    <p class="text-muted mt-16">Comma-separated list of distances, in millimeters.</p>
   </div>
 
   <div class="btn-row">

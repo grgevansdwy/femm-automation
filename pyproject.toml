@@ -8,4 +8,4 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["noelle", "webapp"]
+members = ["noelle", "webapp", "coil_simulation"]

@@ -9,5 +9,5 @@ from repositories import coilset_repository as cc
 from run_comparison import run_comparison, DEFAULT_RC_TEST_DISTANCES
 
 if __name__ == '__main__':
-    run, results = run_comparison([cc.TR302_and_225_000056], DEFAULT_RC_TEST_DISTANCES)
+    run, results = run_comparison([cc.get_template('TR302_and_225_000056')], DEFAULT_RC_TEST_DISTANCES)
     print(f"Results written to {results.dir}")

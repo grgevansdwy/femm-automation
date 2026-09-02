@@ -1,8 +1,7 @@
 {#
   GET /configs — expects:
-    `templates`: list of {name} from template_registry.list_templates() (read-only,
-                 no id — the CoilSet's own module-level attribute name is the key).
-    `saved_configs`: list of {id, name, updated_at} from config_store.list_configs().
+    `configs`: list of {id, name, builtin, updated_at} from coilset_repository.list_configs().
+    `error`: optional error banner (e.g. "cannot delete a built-in config").
 #}
 {% extends "base.html" %}
 {% block title %}Config Library — Coil Sim{% endblock %}
@@ -10,66 +9,47 @@
 <div class="page-header">
   <div>
     <h1>Config Library</h1>
-    <p class="subtitle">Read-only templates to clone from, and your saved, editable configs.</p>
+    <p class="subtitle">Built-in reference designs and your own configs — all editable, clonable, and runnable.</p>
   </div>
   <a class="btn btn-primary" href="/configs/new">+ New Config</a>
 </div>
 
-<div class="card">
-  <h2>Templates</h2>
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for name in templates %}
-      <tr>
-        <td><a href="/templates/{{ name }}">{{ name }}</a></td>
-        <td class="btn-row">
-          <a class="btn btn-secondary btn-sm" href="/templates/{{ name }}">View</a>
-          <form method="post" action="/configs/clone/{{ name }}">
-            <button class="btn btn-accent btn-sm" type="submit">Clone to edit</button>
-          </form>
-        </td>
-      </tr>
-      {% else %}
-      <tr class="empty-row">
-        <td colspan="2">No templates found in coilset_repository.</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+{% if error %}
+<div class="banner banner-error">{{ error }}</div>
+{% endif %}
 
 <div class="card">
-  <h2>My Configs</h2>
   <table class="data-table">
     <thead>
       <tr>
         <th>Name</th>
+        <th>Source</th>
         <th>Updated</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
-      {% for cfg in saved_configs %}
+      {% for cfg in configs %}
       <tr>
         <td><a href="/configs/{{ cfg.id }}/edit">{{ cfg.name }}</a></td>
+        <td>{{ 'Built-in' if cfg.builtin else 'Saved' }}</td>
         <td>{{ cfg.updated_at.strftime('%Y-%m-%d %H:%M') }}</td>
         <td class="btn-row">
           <a class="btn btn-secondary btn-sm" href="/configs/{{ cfg.id }}/edit">Edit</a>
+          <form method="post" action="/configs/clone/{{ cfg.id }}">
+            <button class="btn btn-accent btn-sm" type="submit">Clone</button>
+          </form>
+          {% if not cfg.builtin %}
           <form method="post" action="/configs/{{ cfg.id }}/delete"
                 onsubmit="return confirm('Delete this config?');">
             <button class="btn btn-danger btn-sm" type="submit">Delete</button>
           </form>
+          {% endif %}
         </td>
       </tr>
       {% else %}
       <tr class="empty-row">
-        <td colspan="3">No saved configs yet — clone a template to get started.</td>
+        <td colspan="4">No configs found.</td>
       </tr>
       {% endfor %}
     </tbody>

@@ -32,7 +32,7 @@ from models.coilset import table_fields, table_labels
 # import ltspiceautomator.ltspice_automator as lta
 
 # ============================ CONSTANTS =============================
-from config import (
+from sim_constants import (
     omega,
     loop_group, tank_group, rc_group,
     tank_coil_current_target, R_tank,
@@ -136,6 +136,8 @@ def run_comparison(coilsets, rc_test_distances=None, run_id=None, root=Path('./r
             # draw_and_plot_coil_traces() draws into FEMM and sketches on dashboard.cross_section_pane,
             # returning per-trace radii and per-layer y. Last arg is the group tag.
             # Layout: RC face-down at the first distance, tank at y=0, loop below it.
+
+            #DRAWING RC
             rc_turn_radii, rc_trace_ys = nff.draw_and_plot_coil_traces(coilset.rc_radius, coilset.num_rc_turns, coilset.num_parallel_rc_traces, coilset.rc_trace_width, coilset.rc_trace_spacing, coilset.rc_turn_spacing, rc_test_distances[0], coilset.rc_trace_thickness, 'trace', 'rc', dashboard.cross_section_pane, plot_color, "-", coilset.num_rc_layers, -coilset.rc_PCB_thickness, rc_group)
 
             #DRAWING TANK
@@ -151,8 +153,8 @@ def run_comparison(coilsets, rc_test_distances=None, run_id=None, root=Path('./r
             rc_turn_current = nff.get_turn_current(rc_test_current_target, coilset.num_rc_layers, coilset.num_parallel_rc_traces, coilset.num_rc_turns)
 
 
-            #======================== SOLO INDUCTANCE ======================
-            # "Solo" inductance: drive one coil, park the other two 300 mm away. No
+            #======================== SELF INDUCTANCE ======================
+            # Selfinductance: drive one coil, park the other two 300 mm away. No
             # ferrite/shields yet, so these are the "just PCB" rows in the results table.
             loop_inductances = nff.get_inductances(loop_group, loop_turn_current, 0, 0, coilset.num_loop_turns, tank_group, 0, 0,300, coilset.num_tank_turns, rc_group, 0, 0, 300, coilset.num_rc_turns)
             L_loop_solo = loop_inductances.L11

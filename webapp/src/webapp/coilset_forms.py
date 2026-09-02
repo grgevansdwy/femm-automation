@@ -1,15 +1,12 @@
 """Field metadata and form<->CoilSet marshalling shared by the config routes.
 
 Field names/groups below are enumerated explicitly (not introspected from
-CoilSet) so the templates track (plan section 6, separate) has stable groups
-and labels to render. They are grounded in the CoilSet dataclass as it exists
-today at noelle/femm_model.py (55 required fields + 2 defaulted fields:
-rc_loss_angle, tc_loss_angle) - the same 57 fields the plan's future
-noelle/models/coilset.py is expected to carry over unchanged ("move code,
-remove none" per docs/REFACTOR_NOTES.md). `_field_types()` cross-checks this
-list against the real CoilSet the first time it's needed, so a mismatch (e.g.
-a field renamed during that refactor) fails loudly instead of silently
-producing a broken form.
+CoilSet) so the templates have stable groups and labels to render. They are
+grounded in coil_simulation/models/coilset.py's CoilSet dataclass (51
+required fields + 2 defaulted fields: rc_loss_angle, tc_loss_angle - 53
+total). `_field_types()` cross-checks this list against the real CoilSet the
+first time it's needed, so a mismatch (e.g. a field renamed) fails loudly
+instead of silently producing a broken form.
 """
 
 from dataclasses import fields as dataclass_fields
@@ -34,7 +31,6 @@ FIELD_GROUPS: dict[str, list[str]] = {
         "loop_trace_width",
         "loop_trace_thickness",
         "loop_PCB_thickness",
-        "loop_tune_f",
     ],
     "Tank": [
         "tank_center_r",
@@ -46,7 +42,6 @@ FIELD_GROUPS: dict[str, list[str]] = {
         "tank_trace_width",
         "tank_trace_thickness",
         "tank_PCB_thickness",
-        "tank_tune_f",
     ],
     "RC": [
         "rc_radius",
@@ -58,8 +53,6 @@ FIELD_GROUPS: dict[str, list[str]] = {
         "rc_trace_width",
         "rc_trace_thickness",
         "rc_PCB_thickness",
-        "rc_tune_f",
-        "coax_cable",
     ],
     "Ferrite": [
         "tank_ferrite_present",

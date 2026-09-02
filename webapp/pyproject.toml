@@ -9,6 +9,9 @@ dependencies = [
     "python-multipart>=0.0.9",
 ]
 
+[dependency-groups]
+test = ["httpx2"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

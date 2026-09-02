@@ -15,3 +15,6 @@ tmp.ans
 *.net
 *.fft
 *.plt
+
+# xfemm research spike - throwaway binaries/artifacts, not project source.
+xfemm_spike/

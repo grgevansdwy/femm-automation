@@ -1,0 +1,14 @@
+{
+  "freq": 6.78e6,
+
+  "loop_group": 1,
+  "tank_group": 2,
+  "rc_group": 3,
+
+  "loop_current_target": 10,
+  "tank_coil_current_target": 10,
+  "rc_test_current_target": 12,
+
+  "backplane_length": 400,
+  "backplane_thickness": 5
+}

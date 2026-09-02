@@ -4,14 +4,14 @@
     mode          "new" | "edit"
     config_id     saved config id (edit only)
     action_url    form action, e.g. "/configs/new" or "/configs/{id}/edit"
-    name          display name shown in the config library list
-    cloned_from   optional source label ("template:<name>" or a config id), shown as a note
-    coilset       dict of the 54 CoilSet fields below, current values (defaults for "new")
-    advanced_json prefilled JSON text for the 2 unlabeled fields (rc_loss_angle, tc_loss_angle)
+    builtin       True if this is a built-in reference design (editable, not deletable)
+    cloned_from   optional source config id, shown as a note
+    coilset       dict of the 51 CoilSet fields below, current values (defaults for "new")
+    advanced_json prefilled dict for the 2 unlabeled fields (rc_loss_angle, tc_loss_angle)
     error         optional validation-failure reason string (rendered as a banner, 422 on POST)
 
-  Field grouping mirrors the constructor calls in noelle/coil_configs.py:
-  Loop / Tank / RC geometry, Ferrite, Shield & Backplane, Tuning — 54 fields + config_name.
+  Field grouping: Loop / Tank / RC geometry, Ferrite, Shield & Backplane —
+  51 fields + config_name. The config's display name is config_name itself.
 #}
 {% extends "base.html" %}
 {% block title %}{{ 'Edit Config' if mode == 'edit' else 'New Config' }} — Coil Sim{% endblock %}
@@ -38,6 +38,9 @@
     {% if cloned_from %}
     <p class="subtitle">Cloned from {{ cloned_from }}</p>
     {% endif %}
+    {% if builtin %}
+    <p class="subtitle">Built-in reference design — editable, but cannot be deleted</p>
+    {% endif %}
   </div>
   <a class="btn btn-secondary" href="/configs">Back to library</a>
 </div>
@@ -53,7 +56,7 @@
   <div class="field name-field">
     <label for="f-config_name">Config name</label>
     <input type="text" id="f-config_name" name="config_name" required
-           value="{{ name or coilset.get('config_name', '') }}">
+           value="{{ coilset.get('config_name', '') }}">
   </div>
 
   <fieldset>
@@ -136,21 +139,11 @@
     </div>
   </fieldset>
 
-  <fieldset>
-    <legend>Tuning</legend>
-    <div class="field-grid">
-      {{ field('coax_cable', 'Coax cable (Ω)') }}
-      {{ field('loop_tune_f', 'Loop tune frequency (MHz)') }}
-      {{ field('tank_tune_f', 'Tank tune frequency (MHz)') }}
-      {{ field('rc_tune_f', 'RC tune frequency (MHz)') }}
-    </div>
-  </fieldset>
-
   <details class="advanced">
     <summary>Advanced (JSON)</summary>
     <p class="text-muted">Loss-angle fields with no dedicated input. Must be a JSON object with
       keys <code>rc_loss_angle</code> and <code>tc_loss_angle</code>.</p>
-    <textarea name="advanced_json">{{ advanced_json }}</textarea>
+    <textarea name="advanced_json">{{ advanced_json | tojson }}</textarea>
   </details>
 
   <div class="btn-row">

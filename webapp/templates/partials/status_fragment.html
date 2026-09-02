@@ -1,41 +1,47 @@
 {#
   Rendered both inline (run_detail.html's first paint) and as the response body of
-  GET /runs/{job_id}/status-fragment (hx-swap="outerHTML"). Expects `job`: a Job
-  (job_runner.Job) with id, status, coilset_labels, distances, created_at, started_at,
-  finished_at, error, result_dir. The root element re-declares its own polling
+  GET /runs/{job_id}/status-fragment (hx-swap="outerHTML"). Expects `row`: a dict
+  with run_id, config_name, distance, status, error, result, polling (see
+  routers/runs.py's _run_row). The root element re-declares its own polling
   attributes so a poll can drop them once status is done/failed and stop itself.
 #}
 <div id="status-fragment"
-     {% if job.status in ('queued', 'running') %}
-     hx-get="/runs/{{ job.id }}/status-fragment"
+     {% if row.polling %}
+     hx-get="/runs/{{ row.run_id }}/status-fragment"
      hx-trigger="load, every 2s"
      hx-swap="outerHTML"
      {% endif %}>
 
   <div class="status-panel">
-    <span class="badge badge-{{ job.status.value }}">{{ job.status.value }}</span>
-    {% if job.status == 'running' and job.started_at %}
-    <span class="text-muted">running since {{ job.started_at.strftime('%H:%M:%S') }}</span>
-    {% elif job.status == 'queued' %}
+    <span class="badge badge-{{ row.status }}">{{ row.status }}</span>
+    {% if row.status == 'running' %}
+    <span class="text-muted">running</span>
+    {% elif row.status == 'queued' %}
     <span class="text-muted">waiting for the FEMM worker to free up</span>
     {% endif %}
   </div>
 
-  {% if job.status == 'done' %}
-  <div class="result-figure">
-    <img src="/runs/{{ job.id }}/figure.svg" alt="Dashboard for run {{ job.id }}">
-  </div>
-  <div class="btn-row mt-16">
-    <a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}/log">Download log</a>
-    <a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}/summary.json">Download summary JSON</a>
-  </div>
-  {% elif job.status == 'failed' %}
+  {% if row.status == 'done' %}
+  <table class="data-table result-table">
+    <tbody>
+      <tr><th>L_loop (L11)</th><td>{{ row.result.L_loop }} H</td></tr>
+      <tr><th>L_tank (L22)</th><td>{{ row.result.L_tank }} H</td></tr>
+      <tr><th>L_rc (L33)</th><td>{{ row.result.L_rc }} H</td></tr>
+      <tr><th>M12</th><td>{{ row.result.M12 }} H</td></tr>
+      <tr><th>M13</th><td>{{ row.result.M13 }} H</td></tr>
+      <tr><th>M23</th><td>{{ row.result.M23 }} H</td></tr>
+      <tr><th>Loop ESR</th><td>{{ row.result.loop_esr }} Ω</td></tr>
+      <tr><th>Tank ESR</th><td>{{ row.result.tank_esr }} Ω</td></tr>
+      <tr><th>RC ESR</th><td>{{ row.result.rc_esr }} Ω</td></tr>
+      <tr><th>k12</th><td>{{ row.result.k12 }}</td></tr>
+      <tr><th>k13</th><td>{{ row.result.k13 }}</td></tr>
+      <tr><th>k23</th><td>{{ row.result.k23 }}</td></tr>
+    </tbody>
+  </table>
+  {% elif row.status == 'failed' %}
   <div class="banner banner-error mt-16">
     <strong>Run failed</strong>
-    {{ job.error }}
-  </div>
-  <div class="btn-row">
-    <a class="btn btn-secondary btn-sm" href="/runs/{{ job.id }}/log">Download log</a>
+    {{ row.error }}
   </div>
   {% endif %}
 </div>
