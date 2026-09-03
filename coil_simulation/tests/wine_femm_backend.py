@@ -5,8 +5,9 @@
 # through real FEMM.exe under Wine, headlessly - the same "-lua-script=" CLI
 # mode documented in docs/FEMM_ON_LINUX.md, and the same mechanism used to
 # find and fix the mutual-inductance bug (docs/xfemm.md). This is NOT a
-# production backend - it exists only so tests/compare_wine_vs_xfemm.py can
-# run the exact same script through both engines and diff the results.
+# production backend - it lives in tests/, not services/, because it exists
+# only so compare_wine_vs_xfemm.py can run the exact same script through both
+# engines and diff the results.
 #
 # Real FEMM's Lua interpreter understands the same mi_*/mo_* functions and
 # openfile/write/closefile calls xfemm's does (xfemm is a port of FEMM's

@@ -64,10 +64,11 @@ def test_clone_edit_save_delete_round_trip():
     assert state.error == ""
     cloned_id = state.selected_id
     assert cloned_id != "base_coil"
-    # Clone renames the config *record*, not the CoilSet.config_name field
-    # inside it - matches webapp's routers/configs.py::clone_config.
+    # Clone renames both the config record *and* the CoilSet.config_name
+    # field inside it, so the list and the form agree.
     cloned_record = next(c for c in state.configs if c["id"] == cloned_id)
     assert cloned_record["name"].endswith("(copy)")
+    assert state.buffer["config_name"] == cloned_record["name"]
 
     state.buffer["loop_r"] = 70.0
     state.save()
@@ -120,25 +121,80 @@ def test_save_allows_keeping_the_same_name_when_editing():
     state.delete()
 
 
-def test_clone_rejects_a_duplicate_copy_name():
+def test_cloning_the_same_config_twice_stacks_another_copy_suffix():
+    """Cloning never errors on a name collision - it appends another
+    " (copy)" until the name is free, so the same config can be cloned
+    repeatedly."""
     state = ConfigsPanelState()
     state.load("base_coil")
+
     state.clone()
     assert state.error == ""
-    first_clone_id = state.selected_id
-    first_clone_name = next(c for c in state.configs if c["id"] == first_clone_id)["name"]
+    first_id = state.selected_id
+    first_name = next(c for c in state.configs if c["id"] == first_id)["name"]
+    assert first_name.endswith("(copy)")
 
     state.load("base_coil")
-    state.clone()  # same source -> same auto "<name> (copy)" -> conflict
+    state.clone()  # same source, same would-be name -> stacks another suffix
+
+    assert state.error == ""
+    second_id = state.selected_id
+    assert second_id != first_id
+    second_name = next(c for c in state.configs if c["id"] == second_id)["name"]
+    assert second_name == f"{first_name} (copy)"
+    assert state.buffer["config_name"] == second_name
+
+    state.load(second_id)
+    state.delete()
+    state.load(first_id)
+    state.delete()
+
+
+def test_export_then_import_round_trips_via_tmp_path(tmp_path):
+    from repositories.coilset_repository import list_configs
+
+    state = ConfigsPanelState()
+    state.load("base_coil")
+    original_name = state.buffer["config_name"]
+    export_path = tmp_path / "base_coil_export.json"
+
+    state.export(export_path)
+    assert state.error == ""
+
+    state.import_from(export_path)
+
+    assert state.error == ""
+    # base_coil's record name is already taken, so dedupe_name must have
+    # kicked in - the imported CoilSet content is still identical though.
+    assert state.status.startswith("Imported")
+    assert state.buffer["config_name"] == original_name
+    imported_id = state.selected_id
+    assert imported_id != "base_coil"
+    assert any(c["id"] == imported_id for c in list_configs())
+
+    state.delete()
+    assert all(c["id"] != imported_id for c in list_configs())
+
+
+def test_import_rejects_invalid_geometry_and_writes_nothing(tmp_path):
+    import json
+
+    from repositories.coilset_repository import get_config, list_configs
+
+    record = get_config("base_coil")
+    record["coilset"]["loop_trace_width"] = 1000.0  # same invalid geometry as the Save test above
+    bad_path = tmp_path / "bad_config.json"
+    bad_path.write_text(json.dumps(record))
+
+    before = {c["id"] for c in list_configs()}
+    state = ConfigsPanelState()
+
+    state.import_from(bad_path)
 
     assert state.error != ""
-    assert state.selected_id == "base_coil"  # clone() returned early, selection untouched
-
-    from repositories.coilset_repository import list_configs
-    assert sum(1 for c in list_configs() if c["name"] == first_clone_name) == 1  # only the first clone exists
-
-    state.load(first_clone_id)
-    state.delete()
+    assert "too large" in state.error
+    after = {c["id"] for c in list_configs()}
+    assert after == before  # nothing written
 
 
 def test_save_rejects_invalid_geometry():

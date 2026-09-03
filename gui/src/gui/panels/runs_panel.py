@@ -1,7 +1,8 @@
-"""New Run + Run History tabs: submit a simulation, watch it solve, browse past results.
+"""Run controls + run history - the dashboard's right column, stacked below
+the coil diagram (draw_controls()/draw_history(), drawn by main.py, not tabs).
 
-Shares one RunsPanelState (and its JobRunner) across both tabs, since a run
-submitted from "New Run" is exactly what shows up in "Run History".
+Shares one RunsPanelState (and its JobRunner) between both, since a run
+submitted from the controls block is exactly what shows up in history.
 """
 
 from datetime import datetime
@@ -24,6 +25,15 @@ _STATUS_COLORS = {
     JobStatus.FAILED.value: imgui.ImVec4(0.9, 0.35, 0.35, 1.0),
 }
 _ERROR_COLOR = imgui.ImVec4(0.9, 0.35, 0.35, 1.0)
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    """Character-count truncation, not pixel-measured - simple and good
+    enough for the narrow run-history list column (only ~200px wide now
+    that it shares the dashboard's right column instead of a whole tab)."""
+    # Plain ASCII dots, not a Unicode ellipsis - the default ImGui font atlas
+    # typically only covers Basic Latin, so "…" risks a missing-glyph box.
+    return text if len(text) <= max_chars else text[: max_chars - 3] + "..."
 
 
 def _format_distance(distance) -> str:
@@ -112,29 +122,37 @@ class RunsPanelState:
         return ordered
 
 
-def draw_new_run(state: RunsPanelState) -> None:
+def draw_controls(state: RunsPanelState, size: imgui.ImVec2 = imgui.ImVec2(0, 130)) -> None:
     # refresh_configs() used to run only once, at RunsPanelState.__init__ -
     # so this dropdown never noticed a config created/renamed/deleted on the
-    # Config Library tab for the rest of the session. Re-reading it here
-    # every frame the tab is open keeps it in sync, the same way
-    # draw_run_history() already re-reads history_rows() every frame.
+    # Config Library panel for the rest of the session. Re-reading it here
+    # every frame this panel draws keeps it in sync, the same way
+    # draw_history() already re-reads history_rows() every frame.
     state.refresh_configs()
 
+    imgui.begin_child("run_controls_pane", size, imgui.ChildFlags_.borders.value)
+    imgui.text("Run")
+    imgui.separator()
+
     if not state.configs:
-        imgui.text_wrapped("No configs yet - create one on the Config Library tab first.")
+        imgui.text_wrapped("No configs yet - create one on the left first.")
+        imgui.end_child()
         return
 
     names = [c["name"] for c in state.configs]
     ids = [c["id"] for c in state.configs]
     current_index = ids.index(state.selected_config_id) if state.selected_config_id in ids else 0
 
-    imgui.set_next_item_width(320)
+    # -70 leaves room for the combo's own trailing "Config" label - sizing
+    # this to the full available width clips that label at the panel edge.
+    combo_width = (size.x - 86.0) if size.x > 0 else 190.0
+    imgui.set_next_item_width(max(combo_width, 100.0))
     changed, new_index = imgui.combo("Config", current_index, names)
     if changed:
         state.selected_config_id = ids[new_index]
 
     imgui.set_next_item_width(160)
-    changed, new_distance = imgui.input_float("RC separation distance (mm)", state.distance, format="%.3f")
+    changed, new_distance = imgui.input_float("Distance (mm)", state.distance, format="%.3f")
     if changed:
         state.distance = new_distance
 
@@ -146,18 +164,21 @@ def draw_new_run(state: RunsPanelState) -> None:
     elif state.new_run_status:
         imgui.text_colored(_STATUS_COLORS[JobStatus.DONE.value], state.new_run_status)
 
-    if state.selected_run_id:
-        row = next((r for r in state.history_rows() if r["run_id"] == state.selected_run_id), None)
-        if row is not None:
-            imgui.separator()
-            imgui.text("Last submitted run:")
-            _draw_run_detail(row)
+    imgui.end_child()
+    # Run History is always visible right below this panel now (no more
+    # tabs to switch to), so there's no need for a separate "last submitted
+    # run" preview here the way the old New Run tab had one.
 
 
-def draw_run_history(state: RunsPanelState) -> None:
+def draw_history(state: RunsPanelState, size: imgui.ImVec2 = imgui.ImVec2(0, 0)) -> None:
     rows = state.history_rows()
 
-    imgui.begin_child("run_history_list", imgui.ImVec2(420, 0), imgui.ChildFlags_.borders.value)
+    # Narrower than the old standalone Run History tab's 420px: this now
+    # shares the dashboard's right column instead of a whole tab's width.
+    list_width = min(240.0, size.x * 0.45) if size.x > 0 else 240.0
+    detail_width = max(size.x - list_width, 0.0) if size.x > 0 else 0.0
+
+    imgui.begin_child("run_history_list", imgui.ImVec2(list_width, size.y), imgui.ChildFlags_.borders.value)
     row_height = imgui.get_text_line_height_with_spacing() * 2 + 10
     row_width = imgui.get_content_region_avail().x
     for row in rows:
@@ -175,8 +196,11 @@ def draw_run_history(state: RunsPanelState) -> None:
         # single-line selectable label can't do that.
         imgui.set_cursor_screen_pos(imgui.ImVec2(row_top.x + 8, row_top.y + 5))
         imgui.begin_group()
-        imgui.text_colored(color, f"{row['config_name']}  @ {_format_distance(row['distance'])}  [{status}]")
-        imgui.text_disabled(_format_run_time(row))
+        # The status word lives on the dimmed second line rather than
+        # line 1: line 1 is already colored by status, and squeezing
+        # "[done]" onto it clipped the config name at this column width.
+        imgui.text_colored(color, f"{_truncate(row['config_name'], 18)}  @ {_format_distance(row['distance'])}")
+        imgui.text_disabled(f"{status} - {_format_run_time(row)}")
         imgui.end_group()
 
         # A real item (not just a bare cursor move) is required here so the
@@ -189,7 +213,7 @@ def draw_run_history(state: RunsPanelState) -> None:
 
     imgui.same_line()
 
-    imgui.begin_child("run_history_detail", imgui.ImVec2(0, 0), imgui.ChildFlags_.borders.value)
+    imgui.begin_child("run_history_detail", imgui.ImVec2(detail_width, size.y), imgui.ChildFlags_.borders.value)
     selected_row = next((r for r in rows if r["run_id"] == state.selected_run_id), None)
     if selected_row is None:
         imgui.text_wrapped("Select a run on the left to see its result.")

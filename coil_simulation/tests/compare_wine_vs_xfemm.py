@@ -28,8 +28,8 @@ from pathlib import Path
 from engine import build_script, extract_result, DEFAULT_RC_TEST_DISTANCE
 from repositories import coilset_repository as cc
 from services import femm_service as nff
-from services import wine_femm_backend
 from services import xfemm_backend
+from tests import wine_femm_backend
 
 TOLERANCE_PCT = 1.0
 REPORT_PATH = Path(__file__).resolve().parents[2] / 'docs' / 'wine_vs_xfemm_validation.md'

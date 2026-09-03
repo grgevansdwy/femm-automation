@@ -17,146 +17,173 @@ specifically so a UI could sit on top of it without owning any business
 logic - so this migration only replaces the view layer. Nothing in
 `coil_simulation/` was touched.
 
-Explicit build order (per instruction): wire the new app to the real engine
-and prove it works *before* touching `webapp/` at all, and never delete
-`webapp/` - relocate it once the new app is proven.
+The first version of `gui/` shipped as a 3-tab layout (Config Library / New
+Run / Run History) mirroring the old webapp's nav. A second pass replaced
+that with **one fixed dashboard, no tabs**, added a **live coil-geometry
+diagram**, and added **config export/import** - the tabs felt sparse and
+required switching back and forth just to see a run's result next to the
+config that produced it.
 
 ## What was built
 
-`gui/` - one Python process, one window, a 3-tab layout mirroring
-the webapp's 3 nav sections:
+One window, one fixed 3-column layout (not docking - a deliberately simpler,
+non-rearrangeable arrangement):
 
-- **Config Library** - a config list on the left (no built-in/saved
-  distinction shown - flat list, no tags); a form on the right, built
-  entirely from `CoilSet`'s own field metadata (no hand-typed field list).
-  Save / Clone / Delete, using the same `check_valid_coilset` validation the
-  webapp uses - but **every config is deletable, including built-ins**, by
-  explicit request. `coilset_repository.delete_config()` (which the webapp
-  uses and which refuses built-ins) is deliberately *not* called here;
-  delete goes straight to the file. No confirmation dialog either - see
-  Concerns.
-- **New Run** - pick a config + RC separation distance, submit. If an
-  identical (coilset, distance) pair was already solved, the existing result
-  is reused instead of re-running femmcli - see `coilset_signature()` in
-  `job_runner.py`. Runs solve on a background thread pool so the UI never
-  freezes.
-- **Run History** - every past run (read from
-  `coil_simulation/data/results/`) merged live with anything still solving,
-  selectable to see its 12 result values or its error.
+- **Left column** - the config list, plus **+ New** and **Import** buttons.
+  No built-in/saved distinction shown (flat list, no tags).
+- **Center column** - the selected config's edit form, built entirely from
+  `CoilSet`'s own field metadata (no hand-typed field list): Save / Clone /
+  Export / Delete, `config_name` always visible, then the field groups as
+  expanded-by-default sections. Name collisions are handled differently per
+  action, on purpose: **Save** rejects a colliding name with an error (you
+  typed it, so you pick another); **Clone** never fails - it stacks another
+  " (copy)" until free (`X (copy)`, `X (copy) (copy)`, ...) and renames the
+  `CoilSet`'s own `config_name` to match, so the list and the form agree;
+  **Import** auto-suffixes `(imported)`/`(imported 2)`.
+- **Right column**, stacked top to bottom:
+  - **Coil Geometry** - a live schematic redrawn every frame straight from
+    the form's current values: concentric rings for loop/tank/rc sized
+    proportionally to their actual radius, a translucent disc for ferrite
+    and a stroked ring for shield when their presence flag is on, a
+    legend, and a compact "quick facts" line. v1 scope is a proportional
+    schematic, not literal turn-by-turn winding paths - see Concerns.
+  - **Run** - config dropdown, distance field, Run button. If an identical
+    (coilset, distance) pair was already solved, the existing result is
+    reused instead of re-running femmcli (`coilset_signature()`/
+    `find_cached()` in `job_runner.py`); reusing a cached result also bumps
+    its `last_used_at` (via `JobRunner.touch()`) so it rises back to the top
+    of Run History, without pretending it was re-solved.
+  - **Run History** - every past run merged live with anything still
+    solving, sorted by `last_used_at`, selectable to see its 12 result
+    values or its error.
+
+Every config is deletable, including built-ins, by explicit request -
+`coilset_repository.delete_config()`'s built-in guard is deliberately
+bypassed. **Delete now requires confirmation**: a popup ("Delete '<name>'?
+This can't be undone.") stands between the Delete button and the actual
+file removal - see Concerns for why this was added.
 
 ### Files
 
 | File | What it does |
 |---|---|
-| `pyproject.toml` | Just `imgui-bundle` + `numpy` (the one third-party import the live xfemm solve path actually needs - checked directly, not assumed) |
-| `src/gui/_sim_path.py` | Copy of `webapp`'s trick: puts `coil_simulation/` on `sys.path` so its bare `from repositories import ...` imports resolve |
-| `src/gui/field_layout.py` | `FIELD_GROUPS` (6 sections, presentation-only) + `field_types()`/`field_labels()` read straight from `CoilSet`'s `dataclasses.field(metadata={'label': ...})` - a drift-guard raises loudly if `CoilSet` ever gains/loses/renames a field without this file being updated |
-| `src/gui/job_runner.py` | `Job`/`JobStatus` + a `ThreadPoolExecutor(max_workers=os.cpu_count())` - **not** single-worker; matches the concurrency model `webapp/src/webapp/job_runner.py` was upgraded to once xfemm made concurrent solves safe. No asyncio - the GUI's per-frame loop just checks each job's status directly. Also owns `coilset_signature()`/`find_cached()` - the result-reuse cache, keyed on a sha256 of the exact coilset + distance |
-| `src/gui/panels/configs_panel.py` | Config Library tab: list + grouped-form + Save/Clone/Delete, calling `coilset_repository`/`femm_service` directly. `delete()` bypasses `delete_config()`'s built-in guard on purpose (see above) |
-| `src/gui/panels/runs_panel.py` | New Run + Run History tabs, sharing one `JobRunner`; `submit_run()` checks the cache before submitting a job |
-| `src/gui/main.py` | Entry point - `immapp.run()` with a 3-tab `imgui.begin_tab_bar` |
-| `tests/*.py` | 16 tests, all against real configs/real `engine.simulate()` calls, not mocks |
+| `pyproject.toml` | `imgui-bundle` + `numpy` (the one third-party import the live xfemm solve path needs) |
+| `src/gui/_sim_path.py` | Puts `coil_simulation/` on `sys.path` so its bare `from repositories import ...` imports resolve |
+| `src/gui/field_layout.py` | `FIELD_GROUPS` (6 sections, presentation-only) + `field_types()`/`field_labels()` read from `CoilSet`'s own field metadata - a drift-guard raises loudly if `CoilSet` ever gains/loses/renames a field without this file being updated |
+| `src/gui/job_runner.py` | `Job`/`JobStatus` + a `ThreadPoolExecutor(max_workers=os.cpu_count())`. Owns `coilset_signature()`/`find_cached()` (the result-reuse cache) and `touch()` (bumps `last_used_at` on a cache hit, updating the in-memory `Job` too if still resident - otherwise the next merge in `history_rows()` clobbers the fresh disk write with the stale in-memory copy) |
+| `src/gui/config_io.py` | Export/import: pure logic, no `imgui` import. `name_conflict()`/`dedupe_name()` (shared by Save/Clone/Import), `export_record()`, `parse_import()` (only accepts the exact round-trip shape `export_record()` writes, not a bare coilset dict - rejects anything else with a specific reason) |
+| `src/gui/panels/coil_diagram.py` | `compute_layout()` (pure scaling/geometry, unit-tested) + `draw()` (the `ImDrawList` rendering) |
+| `src/gui/panels/configs_panel.py` | `draw_list()`/`draw_form()` - the left/center columns. Save/Clone/Export/Import/Delete, the delete-confirmation popup, and the two `portable_file_dialogs` handles (export/import) polled once per frame |
+| `src/gui/panels/runs_panel.py` | `draw_controls()`/`draw_history()` - the right column's run block and history list |
+| `src/gui/main.py` | Entry point - computes the 3 column widths from the available content region each frame, no tab bar |
+| `tests/*.py` | 38 tests, all against real configs/real `engine.simulate()` calls, not mocks |
 
 ### Verification actually performed
 
-- `engine.simulate()` called directly through `gui`'s own import
-  path *before any GUI code existed* - returned a real `SimResult` in
-  ~4.4s.
-- 16 pytest tests, all exercising real code paths (real `CoilSet`s, a real
-  `femmcli` solve, real file writes) rather than mocks: field-metadata
-  drift guard, config load/save/clone/delete/validation-rejection, job
-  submission → completion → persistence, two concurrent runs, cache-hit
-  reuse.
-- The app was actually launched (twice - once cold, once pre-loaded with a
-  config selected) and screenshotted: confirmed the window, all 3 tabs, the
-  16 real configs, and the full 7-section form (6 field groups + Advanced)
-  all render.
-- After moving `webapp/` → `legacy/webapp/`, its `_sim_path.py` needed a
-  path-depth fix (`parents[3]` → `parents[4]`, since it's now nested one
-  level deeper) - caught by actually booting it from the new location and
-  hitting `/configs`, not by inspection.
-- The original delete-crash (below) was reproduced live by monkeypatching
-  `imgui.button` to force a real click from inside a real render call, on a
-  disposable cloned config, then confirmed fixed the same way.
+- `engine.simulate()` called directly through `gui`'s own import path before
+  any GUI code existed - returned a real `SimResult`.
+- 38 pytest tests, all exercising real code paths (real `CoilSet`s, a real
+  `femmcli` solve where relevant, real file writes) rather than mocks:
+  field-metadata drift guard, config load/save/clone/delete/import/export/
+  validation-rejection, name-conflict rejection, job submission →
+  completion → persistence, cache-hit reuse and `last_used_at` bumping, the
+  diagram's scaling math against real and synthetic buffers.
+- `gui/tests/conftest.py`'s `isolate_results_dir` fixture keeps every test
+  out of the real `coil_simulation/data/results/` - a test used to write
+  real "failed" entries into the real Run History before this existed.
+  There's no equivalent isolation for `coil_simulation/data/configs/`;
+  config-touching tests clean up what they create instead.
+- The dashboard, the diagram (against several sample buffers), the
+  export/import file-dialog wiring, and the delete-confirmation popup were
+  each verified live - the dialog and popup flows by monkeypatching
+  `imgui.button` to force real clicks through the actual render call chain
+  (calling the real underlying button first and only overriding its
+  returned bool, so ImGui's own per-frame bookkeeping stays correct - the
+  first version of that trick skipped the real call and corrupted internal
+  state instead), not just by reading the code.
+- This live verification found two real bugs before they shipped:
+  `history_rows()` was clobbering a freshly-`touch()`-ed cache hit's
+  `last_used_at` with the stale in-memory `Job`'s copy on the very next
+  frame (fixed by having `touch()` update the in-memory `Job` too), and
+  `imgui.begin_popup_modal()` returns a `(bool, Optional[bool])` tuple, not
+  a plain bool - `if imgui.begin_popup_modal(...):` is Python-truthy on any
+  non-empty tuple regardless of the real value, so the delete-confirmation
+  popup's `end_popup()` was firing every frame even when never opened. Both
+  are exactly the kind of thing that reading the code alone doesn't catch.
 
 ## Concerns
 
 Roughly in order of how much they'd bite:
 
-- **Delete is permanent, unrestricted, and has no confirmation - this
-  already caused a real near-loss.** By explicit request, every config is
-  deletable (including built-ins), straight to the file, no "are you sure?"
-  There was also a real crash here (fixed, see below): clicking Delete while
-  that config's form was on screen threw a `KeyError` mid-render, because
-  the render code kept going past the button handler and tried to draw
-  fields from a buffer `delete()` had just emptied. **While verifying the
-  fix, a throwaway test script accidentally deleted the real `Gen3` built-in
-  config** (not a webapp/CLI bug - a mistake in my own verification script,
-  which called `delete()` on a real config while probing the crash). It was
-  recovered from `git show 324d70a:coil_simulation/data/configs/Gen3.json`
-  only because that config happened to be unchanged since that commit -
-  **a config created or edited only in this app, then deleted, is gone with
-  no recovery path.** Worth a confirmation popup
-  (`imgui.open_popup`/`begin_popup_modal`) if accidental deletion is a real
-  concern day to day.
-- **No automated test ever clicked a real button.** The 13 tests call
-  `ConfigsPanelState`/`RunsPanelState` methods directly (`state.save()`,
-  `state.submit_run()`, ...) - the same methods the GUI's `if
-  imgui.button(...):` blocks call, but the click→handler wiring itself was
-  only checked by reading the code and by screenshots of static frames, not
-  by an automated click. There's no `xdotool` (or equivalent) in this
-  environment to drive the native window, so a typo in a button's `if`
-  block wouldn't be caught by anything automated right now.
-- **`coil_simulation` is being actively edited outside this session, right
-  now, uncommitted.** This is the biggest real risk: the xfemm/femmcli
-  backend migration (`docs/xfemm.md`) is not committed, and more changes
-  landed on disk *during this session* between planning and building. If
-  `engine.simulate()`'s or `check_valid_coilset()`'s signature changes
-  again, or `CoilSet` gains a field, `gui` breaks - loudly for a
-  `CoilSet` field change (the drift-guard test), but as a plain
-  `TypeError` for anything else. Nothing here is pinned to a commit.
+- **Screenshots on this machine capture the whole shared desktop, not just
+  the app window.** `gnome-screenshot -w` grabs whichever window currently
+  has *focus*, not necessarily a just-launched background process's window
+  - twice during this round of work it instead captured the user's own
+  browser (once showing an open email/Slack-adjacent session, once showing
+  their Claude.ai account and chat history). Neither `xdotool` nor `wmctrl`
+  is installed, so there's no reliable way to target a specific window by
+  title first. Both screenshots were deleted immediately without acting on
+  their content. **Anyone continuing GUI verification in this environment
+  should prefer the monkeypatched-real-click-plus-printed-output technique
+  above over screenshots**, or at minimum confirm window focus first.
+- **Delete confirmation was added** (a `begin_popup_modal` between the
+  Delete button and the actual file removal) after two real accidental
+  deletions happened in earlier sessions: a built-in `Gen3` config (during
+  this project's own crash-fix verification) and later the real `base_coil`
+  config (during ordinary use), the latter only recoverable to a stale
+  pre-rename git checkpoint - some edits since that commit were lost for
+  good. The popup only prevents *future* accidents; it doesn't undo those.
+- **The coil diagram is a proportional schematic, not a literal render.**
+  Rings are sized by each coil's actual radius; turn count, trace width,
+  layer stacking, and winding path are not represented. `backplane`/
+  `rc_backplane` (which carry a Z-offset but no radius) show as text
+  indicators, not rings. A reasonable v2 if more visual fidelity is wanted.
+- **Import only accepts the exact shape `export_record()` writes**
+  (round-trip only) - a hand-built or bare 56-field coilset dict is
+  rejected with a specific reason, not silently guessed at. Every failure
+  mode was probed directly (non-JSON, valid-JSON-but-not-a-config,
+  missing/extra fields, wrong-typed values, impossible geometry, blank
+  name): each reports a specific message and writes nothing. The
+  wrong-typed-value case was a real crash before that probe - `CoilSet` is
+  a plain dataclass and happily accepts `"loop_r": "sixty-five"`, which
+  then raised a raw `TypeError` from inside `check_valid_coilset()` and
+  would have taken the window down; `parse_import()` now type-checks values
+  against `field_layout.field_types()`, not just field names.
+- **`coil_simulation` is being actively edited outside this session,
+  uncommitted, by other concurrent sessions in this same repo.** This
+  remains the biggest structural risk: if `engine.simulate()`'s or
+  `check_valid_coilset()`'s signature changes, or `CoilSet` gains a field,
+  `gui` breaks - loudly for a `CoilSet` field change (the drift-guard
+  test), but as a plain `TypeError` for anything else. Nothing here is
+  pinned to a commit.
 - **The xfemm mutual-inductance fix lives only in the locally-patched
   vendored `femmcli` binary**, not upstream (`docs/xfemm.md`'s own
-  concerns section already flags this). Not something `gui`
-  introduced, but it inherits the exposure: if `coil_simulation/vendor/` is
+  concerns section already flags this). If `coil_simulation/vendor/` is
   ever re-vendored from a fresh xfemm release without reapplying
   `xfemm_flux_linkage_fix.patch`, `M12/M13/M23/k12/k13/k23` go silently
-  wrong again, in both UIs.
-- **A brand-new config starts as all-zeros, not empty.** The web form
-  starts with genuinely empty inputs and fails with "missing required
-  field: X" if you submit incomplete; ImGui numeric widgets can't represent
-  "empty", so `New` fills every field with `0`/`0.0`, which passes
-  construction but reliably fails `check_valid_coilset` with a geometry
-  message instead. Functionally equivalent (you can't save garbage either
-  way) but the error text you'll see differs from the webapp's.
-- **The result cache only recognizes runs solved since this feature
-  landed.** `coilset_hash` is written into new result files going forward;
-  the dozens of pre-existing result files in `coil_simulation/data/results/`
-  don't have it, so re-running a config that was already solved once before
-  today won't hit the cache the first time - it will after that, once its
-  hash is on disk. Also: the cache key is the coilset's *content*, not its
-  config id/name, so renaming a config (editing `config_name` and saving)
-  changes the hash and is treated as a new geometry even though nothing
-  physical changed.
-- **Thread-safety of `Job` status is informal, not proven.** The worker
-  thread mutates `Job.status`/`.result`; the render thread reads them every
-  frame with no lock. This works today because of the GIL and because
-  nothing does cross-thread read-modify-write, but it hasn't been
-  stress-tested under, say, rapid-fire submission of many runs at once.
-- **Linux-only as shipped.** `coil_simulation/vendor/xfemm-4.0-linux64/femmcli`
-  is a Linux ELF binary - `gui` (like `webapp`) only actually solves
-  on Linux; elsewhere every run will fail cleanly rather than crash, but
-  won't produce results.
-- **No packaging.** Runs via `uv run` from this exact repo checkout only -
-  no installer, no frozen executable. Wasn't asked for; flagging so it's a
-  deliberate choice, not an oversight.
-- **The Stitch mockup requested during planning never actually finished
-  generating** (polled it ~8 times over several minutes; it never returned
-  a screen). The Config Library layout you're using was validated by
-  running the real app and looking at it, not by that mockup - the Stitch
-  project (`3814206053826164709`) may have finished asynchronously since;
-  worth checking directly if you want it, but nothing here depended on it
-  landing.
-- **Result files accumulate with no pruning**, same as the webapp always
-  did - `gui` just makes it faster to generate them (no page
-  navigation between runs).
+  wrong again.
+- **A brand-new config starts as all-zeros, not empty**, same as before -
+  ImGui numeric widgets can't represent "empty", so `New` reliably fails
+  `check_valid_coilset` with a geometry message instead of a "missing
+  field" one. Functionally equivalent, different error text than the webapp.
+- **The result cache only recognizes runs solved since that feature
+  landed** - pre-existing result files lack `coilset_hash` and won't be
+  recognized as cache hits the first time they'd otherwise match. The
+  cache key is the coilset's *content*, not its config id/name, so
+  renaming a config is treated as a new geometry.
+- **Thread-safety of `Job` status is informal, not proven** - the worker
+  thread mutates `Job.status`/`.result`/`.last_used_at`; the render thread
+  reads them every frame with no lock. Works today via the GIL and the
+  absence of cross-thread read-modify-write, not stress-tested under
+  rapid-fire concurrent submissions.
+- **Linux-only as shipped** - `femmcli` is a Linux ELF binary; elsewhere
+  every run fails cleanly rather than crashing, but produces no results.
+- **No packaging** - runs via `uv run` from this exact repo checkout only.
+  Wasn't asked for; a deliberate choice, not an oversight.
+- **The Stitch mockup this time actually completed** (project
+  `3814206053826164709`, ~6 polls at 60s intervals) - two reference screens
+  (a coil-diagram schematic and the full dashboard) were generated, viewed,
+  and used to inform the ring styling, the run-history status-color choice,
+  and the panel arrangement. The prior attempt from the original migration
+  never finished; this one did.
+- **Result files accumulate with no pruning**, unchanged from before.

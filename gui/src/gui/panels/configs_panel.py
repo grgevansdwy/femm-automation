@@ -1,4 +1,6 @@
-"""Config Library tab: list + create/edit/clone/delete CoilSet configs.
+"""Config list + create/edit/clone/delete CoilSet form - the dashboard's
+left and center columns (draw_list()/draw_form(), drawn side by side by
+main.py, not tabs).
 
 Mirrors webapp/src/webapp/routers/configs.py's behavior (same repository
 calls, same check_valid_coilset validation, "New" starts blank like the
@@ -8,13 +10,15 @@ including built-ins (see ConfigsPanelState.delete).
 """
 
 import dataclasses
+from pathlib import Path
 
-from imgui_bundle import imgui
+from imgui_bundle import imgui, portable_file_dialogs as pfd
 
-from .. import field_layout
+from .. import config_io, field_layout
 
 _ERROR_COLOR = imgui.ImVec4(0.9, 0.35, 0.35, 1.0)
 _STATUS_COLOR = imgui.ImVec4(0.35, 0.8, 0.45, 1.0)
+_DELETE_POPUP_ID = "confirm_delete_config"
 
 
 class ConfigsPanelState:
@@ -24,6 +28,8 @@ class ConfigsPanelState:
         self.buffer: dict = {}
         self.error: str = ""
         self.status: str = ""
+        self._export_dialog = None  # a pfd.save_file() handle while one is open, else None
+        self._import_dialog = None  # a pfd.open_file() handle while one is open, else None
         self.refresh()
 
     def refresh(self) -> None:
@@ -70,17 +76,6 @@ class ConfigsPanelState:
         )
         return None if is_valid else reason
 
-    @staticmethod
-    def _name_conflict(name: str, exclude_id: str | None = None) -> bool:
-        """True if some other config already has this name (case-insensitive,
-        matching how list_configs() sorts) - re-checks against disk, not the
-        possibly-stale self.configs, since coil_simulation/data/configs/ can
-        be edited by other sessions too."""
-        from repositories.coilset_repository import list_configs
-
-        target = name.strip().lower()
-        return any(c["name"].strip().lower() == target and c["id"] != exclude_id for c in list_configs())
-
     def save(self) -> None:
         from repositories.coilset_repository import save_config
 
@@ -90,7 +85,7 @@ class ConfigsPanelState:
             self.error = str(exc)
             return
         name = coilset.config_name.strip()
-        if self._name_conflict(name, exclude_id=self.selected_id):
+        if config_io.name_conflict(name, exclude_id=self.selected_id):
             self.error = f"A config named {name!r} already exists - choose a different name."
             return
         error = self._validate(coilset)
@@ -98,10 +93,10 @@ class ConfigsPanelState:
             self.error = error
             return
         record = save_config(coilset, name=name, config_id=self.selected_id)
-        self.error = ""
-        self.status = f"Saved {record['name']!r}"
         self.refresh()
-        self.load(record["id"])
+        self.load(record["id"])  # load() resets error/status - set them after, not before
+        self.status = f"Saved {record['name']!r}"
+        self.error = ""
 
     def clone(self) -> None:
         if not self.selected_id:
@@ -109,15 +104,56 @@ class ConfigsPanelState:
         from repositories.coilset_repository import get_coilset, save_config
 
         coilset = get_coilset(self.selected_id)
+        # Cloning never fails on a name collision - it just stacks another
+        # " (copy)" until the name is free ("X (copy)", "X (copy) (copy)",
+        # ...), so cloning the same config repeatedly always works.
         name = f"{coilset.config_name.strip()} (copy)"
-        if self._name_conflict(name):
-            self.error = f"A config named {name!r} already exists - rename or delete it before cloning again."
-            self.status = ""
-            return
+        while config_io.name_conflict(name):
+            name = f"{name} (copy)"
+        # The CoilSet's own config_name is renamed too, not just the record's
+        # name - otherwise the list says "X (copy)" while the form field
+        # below it still says "X", which reads like a bug.
+        coilset.config_name = name
         record = save_config(coilset, name=name, cloned_from=self.selected_id)
         self.refresh()
         self.load(record["id"])
         self.status = f"Cloned to {record['name']!r}"
+        self.error = ""
+
+    def export(self, path) -> None:
+        if not self.selected_id:
+            self.error = "Select a config to export first."
+            return
+        from repositories.coilset_repository import get_config
+
+        Path(path).write_text(config_io.export_record(get_config(self.selected_id)))
+        self.status = f"Exported to {path}"
+        self.error = ""
+
+    def import_from(self, path) -> None:
+        from repositories.coilset_repository import save_config
+
+        try:
+            text = Path(path).read_text()
+        except OSError as exc:
+            self.error, self.status = f"Couldn't read {path}: {exc}", ""
+            return
+        try:
+            coilset, name = config_io.parse_import(text)
+        except ValueError as exc:
+            self.error, self.status = str(exc), ""
+            return
+        # Imports run through the same geometry validation Save does - no
+        # special-cased leniency for imported data.
+        error = self._validate(coilset)
+        if error:
+            self.error, self.status = f"Imported config failed validation: {error}", ""
+            return
+        deduped = config_io.dedupe_name(name)
+        record = save_config(coilset, name=deduped, config_id=None)  # always a fresh id, never overwrites
+        self.refresh()
+        self.load(record["id"])  # load() resets error/status - set them after, not before
+        self.status = f"Imported {record['name']!r}" + (f" (renamed from {name!r})" if deduped != name else "")
         self.error = ""
 
     def delete(self) -> None:
@@ -158,6 +194,47 @@ def _draw_field(state: ConfigsPanelState, name: str, label: str, field_type: typ
             state.buffer[name] = value
 
 
+def _draw_delete_confirmation(state: ConfigsPanelState) -> None:
+    """Delete used to fire immediately with no confirmation - by explicit
+    request every config (including built-ins) is deletable, but that
+    combination already caused two real accidental deletions this session
+    (Gen3, base_coil). This popup is the fix: Delete now only opens it."""
+    # begin_popup_modal() returns a (bool, Optional[bool]) tuple, not a plain
+    # bool - a non-empty tuple is always Python-truthy, so `if
+    # imgui.begin_popup_modal(...):` alone would run end_popup() every
+    # frame regardless of whether the popup is actually open. Unpack it.
+    is_open, _ = imgui.begin_popup_modal(_DELETE_POPUP_ID, flags=imgui.WindowFlags_.always_auto_resize.value)
+    if is_open:
+        record = next((c for c in state.configs if c["id"] == state.selected_id), None)
+        display_name = record["name"] if record else state.buffer.get("config_name", state.selected_id)
+        imgui.text(f"Delete {display_name!r}?")
+        imgui.text_disabled("This can't be undone.")
+        imgui.separator()
+        if imgui.button("Cancel"):
+            imgui.close_current_popup()
+        imgui.same_line()
+        imgui.push_style_color(imgui.Col_.button.value, _ERROR_COLOR)
+        if imgui.button("Delete permanently"):
+            state.delete()
+            imgui.close_current_popup()
+        imgui.pop_style_color()
+        imgui.end_popup()
+
+
+def _poll_export_import_dialogs(state: ConfigsPanelState) -> None:
+    if state._export_dialog is not None and state._export_dialog.ready():
+        result = state._export_dialog.result()  # save_file() -> a single path string, "" if cancelled
+        if result:
+            state.export(result)
+        state._export_dialog = None
+
+    if state._import_dialog is not None and state._import_dialog.ready():
+        results = state._import_dialog.result()  # open_file() -> a list of paths, [] if cancelled
+        if results:
+            state.import_from(results[0])
+        state._import_dialog = None
+
+
 def _draw_form(state: ConfigsPanelState) -> None:
     labels = field_layout.field_labels()
     types = field_layout.field_types()
@@ -173,9 +250,17 @@ def _draw_form(state: ConfigsPanelState) -> None:
     imgui.same_line()
 
     imgui.begin_disabled(state.selected_id is None)
-    if imgui.button("Delete"):
-        state.delete()
+    if imgui.button("Export"):
+        default_name = str(state.buffer.get("config_name") or "config").strip() + ".json"
+        state._export_dialog = pfd.save_file("Export config", default_path=default_name, filters=["JSON files", "*.json"])
     imgui.end_disabled()
+    imgui.same_line()
+
+    imgui.begin_disabled(state.selected_id is None)
+    if imgui.button("Delete"):
+        imgui.open_popup(_DELETE_POPUP_ID)
+    imgui.end_disabled()
+    _draw_delete_confirmation(state)
 
     if state.error:
         imgui.text_colored(_ERROR_COLOR, state.error)
@@ -190,20 +275,44 @@ def _draw_form(state: ConfigsPanelState) -> None:
 
     imgui.separator()
 
+    # config_name is pulled out of FIELD_GROUPS["General"] for display
+    # (it stays in FIELD_GROUPS itself so field_layout's drift-guard still
+    # accounts for it) - it's the one field worth always having visible,
+    # not tucked inside a collapsed section.
+    _draw_field(state, "config_name", labels.get("config_name", "config_name"), types["config_name"])
+
+    # Sections start expanded - collapsed-by-default meant every config you
+    # opened showed nothing but a stack of headers.
+    open_by_default = imgui.TreeNodeFlags_.default_open.value
     for group_name, field_names in field_layout.FIELD_GROUPS.items():
-        if imgui.collapsing_header(f"{group_name}##group_{group_name}"):
+        if group_name == "General":
+            continue
+        if imgui.collapsing_header(f"{group_name}##group_{group_name}", flags=open_by_default):
             for name in field_names:
                 _draw_field(state, name, labels.get(name, name), types[name])
 
-    if imgui.collapsing_header("Advanced##group_advanced"):
+    if imgui.collapsing_header("Advanced##group_advanced", flags=open_by_default):
         for name in field_layout.ADVANCED_FIELDS:
             _draw_field(state, name, labels.get(name, name), types[name])
 
 
-def draw(state: ConfigsPanelState) -> None:
-    imgui.begin_child("configs_list_pane", imgui.ImVec2(260, 0), imgui.ChildFlags_.borders.value)
-    if imgui.button("+ New", imgui.ImVec2(-1, 0)):
+def draw_list(state: ConfigsPanelState, size: imgui.ImVec2 = imgui.ImVec2(260, 0)) -> None:
+    # Polled here unconditionally (not from _draw_form) since Import must
+    # work with nothing selected - _draw_form's own early-return on an
+    # empty buffer would otherwise sometimes skip polling its result away.
+    _poll_export_import_dialogs(state)
+
+    imgui.begin_child("configs_list_pane", size, imgui.ChildFlags_.borders.value)
+    # Measured from the real content region *inside* the child (i.e. after
+    # its own padding) and the real item spacing - deriving this from the
+    # outer size.x instead clipped the second button off the panel edge.
+    avail_w = imgui.get_content_region_avail().x
+    button_width = (avail_w - imgui.get_style().item_spacing.x) / 2.0
+    if imgui.button("+ New", imgui.ImVec2(button_width, 0)):
         state.new()
+    imgui.same_line()
+    if imgui.button("Import", imgui.ImVec2(button_width, 0)):
+        state._import_dialog = pfd.open_file("Import config", filters=["JSON files", "*.json"])
     imgui.separator()
     for cfg in state.configs:
         label = f"{cfg['name']}##{cfg['id']}"
@@ -213,9 +322,9 @@ def draw(state: ConfigsPanelState) -> None:
             state.load(cfg["id"])
     imgui.end_child()
 
-    imgui.same_line()
 
-    imgui.begin_child("configs_form_pane", imgui.ImVec2(0, 0), imgui.ChildFlags_.borders.value)
+def draw_form(state: ConfigsPanelState, size: imgui.ImVec2 = imgui.ImVec2(0, 0)) -> None:
+    imgui.begin_child("configs_form_pane", size, imgui.ChildFlags_.borders.value)
     if state.selected_id is None and not state.buffer:
         imgui.text_wrapped("Select a config on the left, or click + New to create one.")
     else:

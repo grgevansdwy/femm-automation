@@ -29,27 +29,42 @@ uv sync
 uv run --package gui python gui/src/gui/main.py
 ```
 
-A window titled "FEMM Coil Automation" opens with 3 tabs:
+A window titled "FEMM Coil Automation" opens as one fixed dashboard - no
+tabs, everything visible at once:
 
-- **Config Library** - select a config on the left to edit it (53 fields
-  grouped into collapsible sections), or **+ New** to start blank. Save
-  validates geometry the same way the webapp did. **Delete removes any
-  config, including built-ins, permanently and with no confirmation
-  prompt** - there's no undo and no recycle bin, so double-check the
-  selection before clicking it (see `docs/gui.md`'s Concerns for why this is
-  called out this prominently).
-- **New Run** - pick a config and an RC separation distance (mm), then
-  **Run**. If that exact geometry + distance was already solved before, the
-  existing result is shown instantly instead of re-running femmcli. Solves
-  happen on a background thread pool (`os.cpu_count()` workers) so the
-  window stays responsive; you can submit more than one run before the
+- **Left: config list** - **+ New** to start blank, **Import** to load a
+  config from a `.json` file (see Export below), or select one to edit it.
+- **Center: the selected config's form** - 53 fields grouped into
+  collapsible sections. **Save** validates geometry the same way the webapp
+  did, and rejects a name that collides with another config. **Clone**
+  duplicates it as `"<name> (copy)"`. **Export** writes the selected
+  config to a `.json` file you pick (native save dialog) - the easiest way
+  to hand a config to someone else; they use **Import** on their end to
+  load it (a name collision auto-suffixes as `"<name> (imported)"`, never
+  silently overwriting). **Delete removes any config, including
+  built-ins, permanently** - a confirmation popup stands between the button
+  and the actual deletion, but there's still no undo once confirmed (see
+  `docs/gui.md`'s Concerns for the two real accidental deletions that led
+  to that popup existing).
+- **Right, top: Coil Geometry** - a live schematic of the selected config's
+  loop/tank/RC coils (and ferrite/shield/backplane when present), redrawn
+  every frame as you edit the form - proportional rings, not a literal
+  turn-by-turn render (see `docs/gui.md` for the v1 scope).
+- **Right, middle: Run** - pick a config and an RC separation distance
+  (mm), then **Run**. If that exact geometry + distance was already solved
+  before, the existing result is shown instantly instead of re-running
+  femmcli, and that result's entry rises back to the top of Run History.
+  Solves happen on a background thread pool (`os.cpu_count()` workers) so
+  the window stays responsive; you can submit more than one run before the
   first finishes.
-- **Run History** - every past run plus anything still solving, newest
-  first. Select one to see its result (`L_loop/L_tank/L_rc`, `M12/M13/M23`,
-  3 ESRs, `k12/k13/k23`) or its error.
+- **Right, bottom: Run History** - every past run plus anything still
+  solving, most-recently-used first. Select one to see its result
+  (`L_loop/L_tank/L_rc`, `M12/M13/M23`, 3 ESRs, `k12/k13/k23`) or its error.
 
-Configs are written to `coil_simulation/data/configs/*.json`. Run output
-lands as `coil_simulation/data/results/<run_id>.json` - the same schema
+Configs are written to `coil_simulation/data/configs/*.json`; an exported
+`.json` file is that same record shape, so any `.json` this app exported is
+also what it expects back on Import. Run output lands as
+`coil_simulation/data/results/<run_id>.json` - the same schema
 `legacy/webapp` and `coil_simulation/main.py` write, so results are shared
 across all three.
 
@@ -65,6 +80,8 @@ across all three.
 uv run --package gui --group test pytest gui/tests/
 ```
 
-All 16 tests run against real `CoilSet`s and real `engine.simulate()`
-calls (no mocks) - expect this to take ~20s and to write a handful of real
-result files into `coil_simulation/data/results/`.
+All 38 tests run against real `CoilSet`s and real `engine.simulate()`
+calls (no mocks) - expect this to take ~30-40s. Test runs are isolated from
+the real `coil_simulation/data/results/` (see `tests/conftest.py`), but not
+from `coil_simulation/data/configs/` - config-touching tests clean up
+whatever they create instead.
