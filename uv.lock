@@ -5,8 +5,8 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "coil-simulation",
-    "desktop-app",
     "femm-automation-workspace",
+    "gui",
     "noelle",
     "webapp",
 ]
@@ -31,14 +31,15 @@ wheels = [
 
 [[package]]
 name = "anyio"
-version = "4.14.2"
+version = "4.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f", size = 260176, upload-time = "2026-07-12T20:29:07.082Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/9a/c15a60547004a3f3cea20296c934f827ddd7bdba225a2e7e9fcb5ec48c80/anyio-4.15.0.tar.gz", hash = "sha256:b5c620ed540725e2579c31b17bb995b3bf02c9281c9cace04c7d186380bab85e", size = 276504, upload-time = "2026-09-02T21:46:36.957Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl", hash = "sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494", size = 125813, upload-time = "2026-07-12T20:29:05.763Z" },
+    { url = "https://files.pythonhosted.org/packages/21/a6/2b21ce5ebe4d8938a247c9b0dbb7271566ae559b01795c83ea4bb2660ed7/anyio-4.15.0-py3-none-any.whl", hash = "sha256:7ecd9937369ffce8bba0b5ccb9b3a9507b101b0ed50256aecfbab27e6c2acb99", size = 131908, upload-time = "2026-09-02T21:46:35.485Z" },
 ]
 
 [[package]]
@@ -143,29 +144,6 @@ wheels = [
 ]
 
 [[package]]
-name = "desktop-app"
-version = "0.0.1"
-source = { editable = "desktop_app" }
-dependencies = [
-    { name = "imgui-bundle" },
-    { name = "numpy" },
-]
-
-[package.dev-dependencies]
-test = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "imgui-bundle", specifier = ">=1.6" },
-    { name = "numpy", specifier = ">=2.5.2" },
-]
-
-[package.metadata.requires-dev]
-test = [{ name = "pytest" }]
-
-[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -234,6 +212,29 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/8d/8bdff3ea656592197c8ef5062774221885468ffa01d8b0dc782dae23a83a/fonttools-4.64.0-cp315-cp315t-win_amd64.whl", hash = "sha256:89356c0793b474af7e49ec90d39fb2363e2341516a90460e38231df5ebe8acd5", size = 2512422, upload-time = "2026-08-31T15:44:29.478Z" },
     { url = "https://files.pythonhosted.org/packages/82/f8/7188153c4b265c899cd035de6a062677d51f67118a4ba640902bd9683e90/fonttools-4.64.0-py3-none-any.whl", hash = "sha256:4a05783ff54ce4c7a28f18e5772efdf63c219374bd9ffc55452182e1cef8be60", size = 1195327, upload-time = "2026-08-31T15:44:31.741Z" },
 ]
+
+[[package]]
+name = "gui"
+version = "0.0.1"
+source = { editable = "gui" }
+dependencies = [
+    { name = "imgui-bundle" },
+    { name = "numpy" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "imgui-bundle", specifier = ">=1.6" },
+    { name = "numpy", specifier = ">=2.5.2" },
+]
+
+[package.metadata.requires-dev]
+test = [{ name = "pytest" }]
 
 [[package]]
 name = "h11"
@@ -558,7 +559,7 @@ wheels = [
 [[package]]
 name = "noelle"
 version = "0.1.0"
-source = { virtual = "noelle" }
+source = { virtual = "legacy/noelle" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },

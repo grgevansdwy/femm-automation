@@ -28,23 +28,13 @@ from constants import (
 DEFAULT_RC_TEST_DISTANCE = 5.0  # mm
 
 
-def simulate(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
-    """Draws `coilset` in FEMM at RC separation `distance` (mm) - ferrite,
-    shields and backplane all present, RC drawn directly at that distance -
-    and returns a SimResult. Solves via a generated Lua script run through
-    xfemm's femmcli in its own temp directory (services/xfemm_backend.py) -
-    safe to call concurrently, unlike the previous single-Wine-process backend.
+def build_script(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
+    """Builds the full Lua script (geometry, materials, circuits, all 3
+    driven-coil solves) for `coilset` at RC separation `distance` (mm), as a
+    xfemm_backend.LuaScript - split out of simulate() so a test harness can
+    run the exact same script through a different backend (e.g. real FEMM
+    under Wine) for validation. Does not run anything by itself.
     """
-    failure_reason, coilset_valid = nff.check_valid_coilset(
-        coilset.loop_r, coilset.num_loop_turns, coilset.num_parallel_loop_traces,
-        coilset.loop_trace_spacing, coilset.loop_turn_spacing, coilset.loop_trace_width,
-        coilset.tank_center_r, coilset.num_tank_turns, coilset.num_parallel_tank_traces,
-        coilset.tank_trace_spacing, coilset.tank_turn_spacing, coilset.tank_trace_width,
-        coilset.rc_radius, coilset.num_rc_turns, coilset.num_parallel_rc_traces,
-        coilset.rc_trace_spacing, coilset.rc_turn_spacing, coilset.rc_trace_width)
-    if not coilset_valid:
-        raise Exception(f"{failure_reason}")
-
     # ========================== Build the model ===============================
     # No live FEMM/Wine session: `script` accumulates one Lua program, run once
     # via femmcli at the very end (see services/xfemm_backend.py for why - it
@@ -156,8 +146,15 @@ def simulate(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
     script.set_circuit_currents(0, coilset.num_loop_turns, 0, coilset.num_tank_turns, rc_turn_current, coilset.num_rc_turns)
     script.solve_and_extract(0, coilset.num_loop_turns, 0, coilset.num_tank_turns, rc_turn_current, coilset.num_rc_turns)
 
-    results = xfemm_backend.run_femmcli(script.render())
+    return script
 
+
+def extract_result(results, coilset, distance=DEFAULT_RC_TEST_DISTANCE):
+    """Turns a raw {key: complex/float} dict (as returned by
+    xfemm_backend.run_femmcli() or wine_femm_backend.run_wine_femm() - both
+    parse the same result.txt format written by build_script()'s rendered
+    script) into a SimResult.
+    """
     def real(key):
         return results.get(key, 0.0).real
 
@@ -180,3 +177,25 @@ def simulate(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
         loop_esr=loop_esr, tank_esr=tank_esr, rc_esr=rc_esr,
         k12=k12, k13=k13, k23=k23,
     )
+
+
+def simulate(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
+    """Draws `coilset` in FEMM at RC separation `distance` (mm) - ferrite,
+    shields and backplane all present, RC drawn directly at that distance -
+    and returns a SimResult. Solves via a generated Lua script run through
+    xfemm's femmcli in its own temp directory (services/xfemm_backend.py) -
+    safe to call concurrently, unlike the previous single-Wine-process backend.
+    """
+    failure_reason, coilset_valid = nff.check_valid_coilset(
+        coilset.loop_r, coilset.num_loop_turns, coilset.num_parallel_loop_traces,
+        coilset.loop_trace_spacing, coilset.loop_turn_spacing, coilset.loop_trace_width,
+        coilset.tank_center_r, coilset.num_tank_turns, coilset.num_parallel_tank_traces,
+        coilset.tank_trace_spacing, coilset.tank_turn_spacing, coilset.tank_trace_width,
+        coilset.rc_radius, coilset.num_rc_turns, coilset.num_parallel_rc_traces,
+        coilset.rc_trace_spacing, coilset.rc_turn_spacing, coilset.rc_trace_width)
+    if not coilset_valid:
+        raise Exception(f"{failure_reason}")
+
+    script = build_script(coilset, distance)
+    results = xfemm_backend.run_femmcli(script.render())
+    return extract_result(results, coilset, distance)

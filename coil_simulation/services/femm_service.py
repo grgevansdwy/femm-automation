@@ -12,7 +12,7 @@
 # this way - femmcli only runs a whole script start-to-finish, so there's no
 # live value to read mid-script. Those are gone from here; the Lua-side
 # equivalent is services/xfemm_backend.py, and the original Python/COM
-# versions are preserved unchanged in legacy_wine_backend/femm_service.py.
+# versions are preserved unchanged in legacy/wine_backend/femm_service.py.
 
 
 # Returns the radial center of one winding in an evenly spaced set centered on a given mean radius.

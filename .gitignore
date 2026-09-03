@@ -10,6 +10,12 @@ venv/
 tmp.fem
 tmp.ans
 
+# HelloImGui window-layout state written by desktop_app on launch.
+FEMM_Coil_Automation.ini
+
+# Generated run output - one flat JSON file per run, regenerable, not source.
+coil_simulation/data/results/*.json
+
 # LTspice byproducts
 *.raw
 *.net

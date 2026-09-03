@@ -3,7 +3,7 @@
 #
 # NOT CURRENTLY WIRED INTO engine.py, but the bug that blocked it is FIXED.
 # engine.py and services/femm_service.py were reverted back to the Wine/pyfemm
-# implementation (see legacy_wine_backend/) after mutual-inductance terms
+# implementation (see legacy/wine_backend/) after mutual-inductance terms
 # (M12/M13/M23, so k12/k13/k23) came out wrong on a production multi-coil
 # config - mo_getcircuitproperties()'s flux linkage was rotated by an exact
 # 90 degrees under femmcli relative to real FEMM under Wine.
@@ -37,7 +37,7 @@
 #
 # See xfemm_spike/NOTES.md for the accuracy/performance validation this is
 # built on (single-coil cases only - that's where this bug wasn't visible),
-# and coil_simulation/legacy_wine_backend/ for the restored implementation.
+# and legacy/wine_backend/ for the restored implementation.
 # =============================================================================
 import os
 import re
@@ -208,10 +208,13 @@ class LuaScript:
         return "\n".join(lines) + "\n"
 
 
-def _parse_femm_number(text):
-    """Parses femmcli's stringified numbers, e.g. '6.98e-08-I*6.09e-08' or a
-    plain real '1.0' with no imaginary part (matches the format observed from
-    both femmcli and real FEMM in xfemm_spike/NOTES.md)."""
+def parse_femm_number(text):
+    """Parses FEMM/femmcli's stringified numbers, e.g. '6.98e-08-I*6.09e-08'
+    or a plain real '1.0' with no imaginary part (matches the format observed
+    from both femmcli and real FEMM in xfemm_spike/NOTES.md). Shared with
+    services/wine_femm_backend.py, which parses the identical result.txt
+    format written by the same generated Lua script running through real
+    FEMM under Wine instead of femmcli."""
     text = text.strip()
     if "I*" not in text:
         return float(text)
@@ -249,5 +252,5 @@ def run_femmcli(script_text):
                 if "=" not in line:
                     continue
                 key, _, value = line.strip().partition("=")
-                results[key] = _parse_femm_number(value)
+                results[key] = parse_femm_number(value)
         return results

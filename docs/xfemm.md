@@ -52,7 +52,7 @@ Full writeup: `xfemm_spike/NOTES.md`.
   Wine/COM session). Also contains `run_femmcli()` (subprocess wrapper, one
   temp directory per call so concurrent solves never collide) and a parser
   for femmcli's stringified complex numbers.
-- **`coil_simulation/legacy_wine_backend/`** - unmodified copies of the
+- **`legacy/wine_backend/`** - unmodified copies of the
   original `engine.py`/`femm_service.py`, kept as a rollback path (see
   "Rolling back" below).
 
@@ -143,12 +143,12 @@ results and no cross-talk between the concurrent temp directories.
 
 ## Rolling back
 
-`coil_simulation/legacy_wine_backend/` still holds the original, unmodified
+`legacy/wine_backend/` still holds the original, unmodified
 `engine.py`/`femm_service.py`. Restoring the Wine backend is a two-line `cp`:
 
 ```
-cp coil_simulation/legacy_wine_backend/engine.py coil_simulation/engine.py
-cp coil_simulation/legacy_wine_backend/femm_service.py coil_simulation/services/femm_service.py
+cp legacy/wine_backend/engine.py coil_simulation/engine.py
+cp legacy/wine_backend/femm_service.py coil_simulation/services/femm_service.py
 ```
 
 (`job_runner.py`'s worker-pool change is backend-agnostic and doesn't need

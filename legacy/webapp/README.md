@@ -16,7 +16,7 @@ This package is a member of the repo's uv workspace (see the root
 `pyproject.toml`), alongside `coil_simulation`, so dependencies are resolved together
 and share one `uv.lock`. Run all commands from the repo root.
 
-**Superseded by `desktop_app/`** (a native Dear ImGui app on the same
+**Superseded by `gui/`** (a native Dear ImGui app on the same
 `coil_simulation` engine) — kept here for reference/rollback, not the
 primary UI going forward.
 
