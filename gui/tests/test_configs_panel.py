@@ -31,28 +31,27 @@ def test_new_starts_blank():
 
 
 def test_builtin_configs_can_be_deleted():
-    """Unlike coilset_repository.delete_config() (which refuses built-ins,
-    right for the webapp's shared reference-design library), this app lets
-    the user delete anything - including a built-in - per their own request.
-    Deletes a cloned+flagged-builtin copy, never a real reference design."""
-    import json
-
-    from repositories.coilset_repository import CONFIGS_DIR
+    """Unlike coilset_repository.delete_config()'s default (which refuses
+    built-ins, right for the webapp's shared reference-design library),
+    this app lets the user delete anything - including a built-in - per
+    their own request. Deletes a cloned+flagged-builtin copy, never a real
+    reference design."""
+    from repositories.coilset_repository import get_config, restore_config
 
     state = ConfigsPanelState()
     state.load("base_coil")
     state.clone()
     cloned_id = state.selected_id
-    path = CONFIGS_DIR / f"{cloned_id}.json"
-    record = json.loads(path.read_text())
+
+    record = get_config(cloned_id)
     record["builtin"] = True
-    path.write_text(json.dumps(record, indent=2))
+    restore_config(record)
     state.refresh()
 
     state.delete()
 
     assert state.error == ""
-    assert not path.exists()
+    assert get_config(cloned_id) is None
     assert all(c["id"] != cloned_id for c in state.configs)
 
 
@@ -165,15 +164,51 @@ def test_export_then_import_round_trips_via_tmp_path(tmp_path):
 
     assert state.error == ""
     # base_coil's record name is already taken, so dedupe_name must have
-    # kicked in - the imported CoilSet content is still identical though.
+    # kicked in - the imported CoilSet content is still identical otherwise.
     assert state.status.startswith("Imported")
-    assert state.buffer["config_name"] == original_name
+    # config_name must follow the *deduped* name, matching the left list -
+    # not the original pre-dedupe name baked into the imported file, which
+    # would leave the list and the form disagreeing (a real reported bug).
     imported_id = state.selected_id
+    imported_record = next(c for c in state.configs if c["id"] == imported_id)
+    assert imported_record["name"] != original_name  # dedupe actually kicked in
+    assert state.buffer["config_name"] == imported_record["name"]
     assert imported_id != "base_coil"
     assert any(c["id"] == imported_id for c in list_configs())
 
     state.delete()
     assert all(c["id"] != imported_id for c in list_configs())
+
+
+def test_import_forces_config_name_to_match_the_deduped_list_name(tmp_path):
+    """A real reported bug: an imported file whose 'coilset.config_name'
+    already differs from its top-level 'name' (e.g. because it was itself
+    produced by a version of this same bug, or just hand-edited) used to
+    carry that stale config_name straight through - the left list would show
+    the deduped name while the form's config_name field showed something
+    else entirely."""
+    import json
+
+    from repositories.coilset_repository import list_configs
+
+    state = ConfigsPanelState()
+    state.load("base_coil")
+    export_path = tmp_path / "mismatched_export.json"
+    state.export(export_path)
+
+    record = json.loads(export_path.read_text())
+    record["coilset"]["config_name"] = "this does not match the record name"
+    export_path.write_text(json.dumps(record))
+
+    state.import_from(export_path)
+
+    assert state.error == ""
+    imported_id = state.selected_id
+    imported_record = next(c for c in list_configs() if c["id"] == imported_id)
+    assert state.buffer["config_name"] == imported_record["name"]
+    assert state.buffer["config_name"] != "this does not match the record name"
+
+    state.delete()
 
 
 def test_import_rejects_invalid_geometry_and_writes_nothing(tmp_path):

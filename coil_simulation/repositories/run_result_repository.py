@@ -1,45 +1,86 @@
 # =============================================================================
 # run_result_repository.py
 #
-# Owns everything a run writes to disk: one flat JSON file per run under
-# ./data/results/. Generic - callers (main.py, webapp's job_runner.py) build
-# their own payload dict; this repository doesn't know or care what's inside it.
+# Owns everything a run writes to the `runs` table (repositories/db.py).
+# Generic - callers (main.py, gui/src/gui/job_runner.py, webapp's
+# job_runner.py) build their own payload dict; this repository doesn't know
+# or care what's inside the "result" section, only the columns it promotes
+# for querying/sorting.
+#
+# root= is kept for backward compatibility with every existing call site
+# (gui/src/gui/job_runner.py, gui/src/gui/panels/runs_panel.py, webapp's
+# job_runner.py/routers) - it now names the *directory* that holds
+# femm_automation.db rather than a directory of loose JSON files. In
+# production that directory is coil_simulation/data/ (the same directory
+# repositories/db.py's DB_PATH lives in, deliberately - configs and runs
+# have to be in the same file for runs.config_id to be a real foreign key),
+# so root=RESULTS_ROOT still resolves to the one shared database. When root
+# isn't given at all, this falls back to db.DB_PATH directly.
 # =============================================================================
 import datetime
 import json
 from pathlib import Path
 
+from repositories import db
+
+_ROW_COLUMNS = (
+    'run_id', 'config_id', 'config_name', 'distance', 'status',
+    'created_at', 'started_at', 'finished_at', 'last_used_at', 'error',
+)
+
+
+def _row_to_record(row) -> dict:
+    record = {col: row[col] for col in _ROW_COLUMNS}
+    record['result'] = json.loads(row['result_json']) if row['result_json'] is not None else None
+    record['coilset_hash'] = row['coilset_hash']
+    return record
+
+
+def _db_path_for(root) -> Path | None:
+    return (Path(root) / 'femm_automation.db') if root is not None else None
+
 
 class RunResultRepository:
-    def __init__(self, run_id=None, root=Path('./data/results')):
+    def __init__(self, run_id=None, root=None):
         self.run_id = run_id or '{:%Y%m%dT%H%M%S}'.format(datetime.datetime.now())
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    @property
-    def result_path(self):
-        return self.root / f'{self.run_id}.json'
+        self._db_path = _db_path_for(root)
 
     def save_result_json(self, payload):
-        self.result_path.write_text(json.dumps(payload, indent=2, default=str))
+        """Upserts by run_id - matches the old write-the-file-again
+        overwrite behavior used by both JobRunner._run()'s final persist and
+        touch()'s re-persist."""
+        params = {col: payload.get(col) for col in _ROW_COLUMNS}
+        params['run_id'] = payload.get('run_id', self.run_id)
+        params['result_json'] = json.dumps(payload.get('result'), default=str) if payload.get('result') is not None else None
+        params['coilset_hash'] = payload.get('coilset_hash')
+
+        with db.connection(self._db_path) as conn:
+            conn.execute(
+                """INSERT INTO runs
+                   (run_id, config_id, config_name, distance, status, created_at,
+                    started_at, finished_at, last_used_at, error, result_json, coilset_hash)
+                   VALUES (:run_id, :config_id, :config_name, :distance, :status, :created_at,
+                           :started_at, :finished_at, :last_used_at, :error, :result_json, :coilset_hash)
+                   ON CONFLICT(run_id) DO UPDATE SET
+                       config_id=excluded.config_id, config_name=excluded.config_name,
+                       distance=excluded.distance, status=excluded.status, created_at=excluded.created_at,
+                       started_at=excluded.started_at, finished_at=excluded.finished_at,
+                       last_used_at=excluded.last_used_at, error=excluded.error,
+                       result_json=excluded.result_json, coilset_hash=excluded.coilset_hash""",
+                params,
+            )
+            conn.commit()
 
     @staticmethod
-    def load_result(run_id, root=Path('./data/results')):
-        path = Path(root) / f'{run_id}.json'
-        if not path.exists():
-            return None
-        return json.loads(path.read_text())
+    def load_result(run_id, root=None):
+        with db.connection(_db_path_for(root)) as conn:
+            row = conn.execute('SELECT * FROM runs WHERE run_id = ?', (run_id,)).fetchone()
+        return _row_to_record(row) if row else None
 
     @staticmethod
-    def list_results(root=Path('./data/results')):
-        root = Path(root)
-        if not root.is_dir():
-            return []
-        results = []
-        for path in root.glob('*.json'):
-            try:
-                results.append(json.loads(path.read_text()))
-            except (json.JSONDecodeError, OSError):
-                continue
-        results.sort(key=lambda r: r.get('finished_at') or r.get('created_at') or '', reverse=True)
-        return results
+    def list_results(root=None):
+        with db.connection(_db_path_for(root)) as conn:
+            rows = conn.execute(
+                'SELECT * FROM runs ORDER BY COALESCE(finished_at, created_at) DESC'
+            ).fetchall()
+        return [_row_to_record(r) for r in rows]

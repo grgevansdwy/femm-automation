@@ -13,8 +13,13 @@ tmp.ans
 # HelloImGui window-layout state written by desktop_app on launch.
 FEMM_Coil_Automation.ini
 
-# Generated run output - one flat JSON file per run, regenerable, not source.
-coil_simulation/data/results/*.json
+# SQLite config/result store - all configs and runs, generated locally, not
+# checked in (binary, not diff-friendly). Nothing seeds it: a fresh checkout
+# starts empty; Backup All / Restore All (gui/src/gui/backup_io.py) is how
+# data moves between machines.
+coil_simulation/data/femm_automation.db
+coil_simulation/data/femm_automation.db-wal
+coil_simulation/data/femm_automation.db-shm
 
 # LTspice byproducts
 *.raw
@@ -24,3 +29,9 @@ coil_simulation/data/results/*.json
 
 # xfemm research spike - throwaway binaries/artifacts, not project source.
 xfemm_spike/
+
+# .fem/.lua models written by the "Open in FEMM" button
+# (coil_simulation/services/femm_launcher.py) - regenerated from the config
+# on every click, and a solve done by hand in FEMM drops a multi-MB .ans
+# next to them.
+coil_simulation/data/femm_models/

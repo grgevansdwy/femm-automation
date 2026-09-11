@@ -6,9 +6,12 @@
 # user config succeeds. Needs no FEMM:
 #     python3 -m tests.test_coilset_repository  (run from coil_simulation/)
 #
-# Runs against the REAL data/configs/ directory (read-only checks) plus one
-# create/delete round trip on a throwaway config, cleaned up afterward -
-# never touches or removes a builtin.
+# Under pytest, tests/conftest.py's autouse isolate_db fixture points this
+# at a fresh, isolated database seeded with one real "base_coil" config, so
+# nothing here touches your real data. Run directly via `python3 -m
+# tests.test_coilset_repository` instead (no pytest, no conftest fixture)
+# and it runs against the real database - never touches or removes a
+# builtin, and cleans up the one throwaway config it creates.
 # =============================================================================
 import dataclasses
 
@@ -17,14 +20,21 @@ from repositories import coilset_repository as cc
 
 
 def test_every_builtin_constructs_a_coilset():
-    """Catches a migrated JSON file with a stray removed field immediately."""
+    """Catches a migrated JSON file with a stray removed field immediately.
+
+    Only checks builtin=true records: the store also holds real user
+    configs (created through the GUI, or migrated in from pre-existing
+    data/configs/*.json that weren't actually builtins), so "every record in
+    the store is builtin" isn't a valid assertion - only "every builtin
+    record still constructs cleanly" is.
+    """
     configs = cc.list_configs()
-    assert len(configs) >= 1, "no configs found"
-    assert all(c['builtin'] for c in configs), "expected every seed config to be builtin"
-    for record in configs:
+    builtins = [c for c in configs if c['builtin']]
+    assert len(builtins) >= 1, "no builtin configs found"
+    for record in builtins:
         coilset = CoilSet(**record['coilset'])
         assert coilset.config_name
-    print(f"  ok  all {len(configs)} builtin configs construct a CoilSet cleanly")
+    print(f"  ok  all {len(builtins)} builtin configs construct a CoilSet cleanly")
 
 
 def test_get_coilset_missing_raises_key_error():

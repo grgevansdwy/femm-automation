@@ -8,9 +8,11 @@ Wine/FEMM backend required.
 
 No asyncio here: unlike the webapp, there's no event loop - the GUI's own
 per-frame loop calls poll() to sync each job's status from its Future.
-Completed/failed jobs are persisted to RESULTS_ROOT as a flat JSON file, the
-same schema webapp/src/webapp/job_runner.py writes, via the same
-RunResultRepository - so results stay readable by/comparable with the webapp.
+Completed/failed jobs are persisted under RESULTS_ROOT (coil_simulation's
+data/ directory - see RunResultRepository's root= for why it's the whole
+data/ dir and not a results/ subdirectory) via the same RunResultRepository,
+the same schema webapp/src/webapp/job_runner.py writes - so results stay
+readable by/comparable with the webapp.
 
 Every persisted result also carries a `coilset_hash` (see
 coilset_signature() below): a hash of the exact geometry + distance that was
@@ -39,7 +41,7 @@ from typing import Any
 
 from ._sim_path import SIM_DIR
 
-RESULTS_ROOT = SIM_DIR / "data" / "results"
+RESULTS_ROOT = SIM_DIR / "data"
 
 
 def coilset_signature(coilset: Any, distance: float) -> str:

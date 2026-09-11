@@ -150,6 +150,12 @@ class ConfigsPanelState:
             self.error, self.status = f"Imported config failed validation: {error}", ""
             return
         deduped = config_io.dedupe_name(name)
+        # The CoilSet's own config_name field is renamed to match too, not
+        # just the record's name - same reasoning as clone() below: otherwise
+        # the list/left panel says "X (imported)" while the form's
+        # config_name field still shows whatever name was baked into the
+        # imported file, which reads like a bug (and did - see docs/gui.md).
+        coilset.config_name = deduped
         record = save_config(coilset, name=deduped, config_id=None)  # always a fresh id, never overwrites
         self.refresh()
         self.load(record["id"])  # load() resets error/status - set them after, not before
@@ -158,15 +164,16 @@ class ConfigsPanelState:
 
     def delete(self) -> None:
         """Deletes any config, including built-ins - unlike
-        coilset_repository.delete_config(), which refuses built-ins. That
-        guard is right for the webapp's shared reference-design library;
-        this app's user wants every config, template or not, deletable, so
-        this removes the file directly instead of going through the guard."""
+        coilset_repository.delete_config()'s default, which refuses
+        built-ins. That guard is right for the webapp's shared
+        reference-design library; this app's user wants every config,
+        template or not, deletable, so this passes force=True instead of
+        going through the guard."""
         if not self.selected_id:
             return
-        from repositories.coilset_repository import CONFIGS_DIR
+        from repositories.coilset_repository import delete_config
 
-        (CONFIGS_DIR / f"{self.selected_id}.json").unlink(missing_ok=True)
+        delete_config(self.selected_id, force=True)
         self.refresh()
         self.selected_id = None
         self.buffer = {}

@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import gui._sim_path  # noqa: F401 - adds coil_simulation to sys.path
 
-from gui.panels.coil_diagram import compute_layout
+from gui.panels.coil_diagram import compute_axial_layout, compute_layout
 from gui.panels.configs_panel import ConfigsPanelState
 
 
@@ -79,10 +79,87 @@ def test_a_real_loaded_config_fits_within_the_canvas():
         assert 0 <= el["radius_px"] <= max_radius_px
 
 
-def test_backplane_fields_are_reported_separately_not_as_rings():
-    on = _blank_buffer_with(backplane=1, rc_backplane=1)
-    off = _blank_buffer_with(backplane=0, rc_backplane=0)
+def _elements_by_kind(elements):
+    by_kind = {}
+    for el in elements:
+        by_kind.setdefault(el["kind"], []).append(el)
+    return by_kind
 
-    assert compute_layout(on, 400.0, 400.0)["backplanes"] == ["Backplane", "RC Backplane"]
-    assert compute_layout(off, 400.0, 400.0)["backplanes"] == []
-    assert all(el["kind"] not in ("backplane", "rc_backplane") for el in compute_layout(on, 400.0, 400.0)["elements"])
+
+def test_loop_sits_below_tank_which_sits_below_rc_when_distance_is_positive():
+    """The core physical fact the axial view exists to make visible: these
+    three coils are NOT concentric - Loop is below Tank (the TC side), and
+    RC is a separate receiver `distance` mm above them, facing down."""
+    buffer = _blank_buffer_with(loop_r=10.0, tank_center_r=10.0, rc_radius=10.0,
+                                 loop_offset=10.0, tank_PCB_thickness=1.6)
+
+    layout = compute_axial_layout(buffer, distance=25.0, canvas_w=400.0, canvas_h=400.0)
+    by_kind = _elements_by_kind(layout["elements"])
+
+    loop_y = by_kind["loop"][0]["top_mm"]
+    tank_y = by_kind["tank"][0]["top_mm"]
+    rc_y = by_kind["rc"][0]["top_mm"]
+    assert loop_y < tank_y < rc_y
+
+
+def test_rc_sits_exactly_at_the_run_distance():
+    buffer = _blank_buffer_with(loop_r=10.0, tank_center_r=10.0, rc_radius=10.0)
+
+    for distance in (5.0, 50.0):
+        layout = compute_axial_layout(buffer, distance=distance, canvas_w=400.0, canvas_h=400.0)
+        rc_el = _elements_by_kind(layout["elements"])["rc"][0]
+        assert rc_el["top_mm"] == distance
+
+
+def test_axial_ferrite_shield_backplane_excluded_when_their_flag_is_off():
+    buffer = _blank_buffer_with(
+        loop_r=10.0, tank_center_r=10.0, rc_radius=10.0,
+        tank_ferrite_present=0, rc_ferrite_present=0,
+        tc_shield=0, rc_shield=0, backplane=0, rc_backplane=0,
+    )
+
+    layout = compute_axial_layout(buffer, distance=5.0, canvas_w=400.0, canvas_h=400.0)
+
+    kinds = {el["kind"] for el in layout["elements"]}
+    assert kinds == {"loop", "tank", "rc"}
+
+
+def test_axial_ferrite_shield_backplane_included_and_ordered_when_on():
+    """Bottom-to-top physical order on the TC side: backplane (furthest out)
+    -> shield -> ferrite (closest to the coils) -> Loop -> Tank - mirroring
+    engine.py's own processing order."""
+    buffer = _blank_buffer_with(
+        loop_r=10.0, tank_center_r=10.0, rc_radius=10.0,
+        tank_ferrite_present=1, tank_ferrite_outer_r=80.0, tank_ferrite_thickness=2.0, tank_ferrite_y_offset=1.0,
+        tc_shield=1, tc_shield_radius=90.0, tc_shield_thickness=1.0, tc_shield_y_distance=2.0,
+        backplane=1, backplane_y_distance=100.0,
+    )
+
+    layout = compute_axial_layout(buffer, distance=5.0, canvas_w=400.0, canvas_h=400.0)
+    by_kind = _elements_by_kind(layout["elements"])
+
+    assert set(by_kind) == {"loop", "tank", "rc", "tank_ferrite", "tc_shield", "backplane"}
+    backplane_y = by_kind["backplane"][0]["top_mm"]
+    shield_y = by_kind["tc_shield"][0]["top_mm"]
+    ferrite_y = by_kind["tank_ferrite"][0]["top_mm"]
+    loop_y = by_kind["loop"][0]["top_mm"]
+    assert backplane_y < shield_y < ferrite_y < loop_y
+
+
+def test_axial_layout_of_a_blank_buffer_does_not_raise():
+    buffer = _blank_buffer_with()  # ConfigsPanelState.new() -> all radii/offsets 0
+
+    layout = compute_axial_layout(buffer, distance=0.0, canvas_w=400.0, canvas_h=400.0)
+
+    assert layout["scale"] > 0
+
+
+def test_a_real_loaded_config_stays_within_the_axial_canvas_bounds():
+    state = ConfigsPanelState()
+    state.load("base_coil")
+
+    for distance in (5.0, 50.0):
+        layout = compute_axial_layout(state.buffer, distance=distance, canvas_w=400.0, canvas_h=400.0, margin=20.0)
+        for el in layout["elements"]:
+            assert 0 <= el["x_half_width_px"] <= 200.0
+            assert 20.0 - 1e-6 <= el["y_top_px"] <= el["y_bottom_px"] <= 400.0 - 20.0 + 1e-6

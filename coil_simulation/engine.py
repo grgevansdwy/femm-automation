@@ -28,18 +28,39 @@ from constants import (
 DEFAULT_RC_TEST_DISTANCE = 5.0  # mm
 
 
-def build_script(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
-    """Builds the full Lua script (geometry, materials, circuits, all 3
-    driven-coil solves) for `coilset` at RC separation `distance` (mm), as a
-    xfemm_backend.LuaScript - split out of simulate() so a test harness can
-    run the exact same script through a different backend (e.g. real FEMM
-    under Wine) for validation. Does not run anything by itself.
+def turn_currents(coilset):
+    """(loop, tank, rc) per-turn drive currents for `coilset`: each coil's
+    target divided across its parallel traces and layers, so ampere-turns
+    match a real coil wound from these traces. Pure function of the coilset -
+    pulled out of build_script() so build_geometry() can stay geometry-only
+    and callers that only draw the model (services/femm_launcher.py) don't
+    have to know how a drive current is derived."""
+    return (
+        nff.get_turn_current(loop_current_target, coilset.num_loop_layers, coilset.num_parallel_loop_traces, coilset.num_loop_turns),
+        nff.get_turn_current(tank_coil_current_target, coilset.num_tank_layers, coilset.num_parallel_tank_traces, coilset.num_tank_turns),
+        nff.get_turn_current(rc_test_current_target, coilset.num_rc_layers, coilset.num_parallel_rc_traces, coilset.num_rc_turns),
+    )
+
+
+def build_geometry(coilset, distance=DEFAULT_RC_TEST_DISTANCE, script=None):
+    """Builds the model itself - problem definition, materials, circuits, the
+    three coils' traces, and the ferrite/shield/backplane stack-up - for
+    `coilset` at RC separation `distance` (mm), and stops there: no currents
+    set, nothing analyzed. Returns the script it built into (a fresh
+    xfemm_backend.LuaScript unless one is passed in).
+
+    Split out of build_script() so "draw this coilset" has exactly one
+    implementation: build_script() appends the solves to it for a real
+    simulation, and services/femm_launcher.py appends a save + zoom instead to
+    open the identical model in the FEMM GUI. A separate drawing routine for
+    the GUI button would be free to drift from what actually gets solved -
+    this cannot.
     """
     # ========================== Build the model ===============================
     # No live FEMM/Wine session: `script` accumulates one Lua program, run once
     # via femmcli at the very end (see services/xfemm_backend.py for why - it
     # only runs whole scripts, not live call/response).
-    script = xfemm_backend.LuaScript()
+    script = xfemm_backend.LuaScript() if script is None else script
     nff.init_femm(script)
 
     # ================== FEMM CIRCUIT SETUP =====================
@@ -80,12 +101,6 @@ def build_script(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
 
     # DRAWING LOOP
     nff.draw_coil_traces(script, coilset.loop_r, coilset.num_loop_turns, coilset.num_parallel_loop_traces, coilset.loop_trace_width, coilset.loop_trace_spacing, coilset.loop_turn_spacing, -coilset.tank_PCB_thickness-coilset.loop_offset, coilset.loop_trace_thickness, 'trace', 'loop', coilset.num_loop_layers, coilset.loop_PCB_thickness, loop_group)
-
-    # Per-turn drive current: target divided across parallel traces and layers,
-    # so ampere-turns match a real coil wound from these traces.
-    loop_turn_current = nff.get_turn_current(loop_current_target, coilset.num_loop_layers, coilset.num_parallel_loop_traces, coilset.num_loop_turns)
-    tank_turn_current = nff.get_turn_current(tank_coil_current_target, coilset.num_tank_layers, coilset.num_parallel_tank_traces, coilset.num_tank_turns)
-    rc_turn_current = nff.get_turn_current(rc_test_current_target, coilset.num_rc_layers, coilset.num_parallel_rc_traces, coilset.num_rc_turns)
 
     # =============== FERRITE / SHIELD / BACKPLANE GEOMETRY ==================
     # Stack-up: tc_bottom_y walks DOWN from the loop PCB underside (PCB -> gap ->
@@ -128,6 +143,19 @@ def build_script(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
         rc_top_y += (coilset.rc_backplane_y_distance + backplane_thickness + 3)  # 3=enclosure thickness
         nff.draw_rectangular_material_no_plot(script, 'Copper', backplane_thickness, backplane_length/2, rc_top_y, rc_group)
         rc_top_y += backplane_thickness
+
+    return script
+
+
+def build_script(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
+    """The full Lua script for one simulation: build_geometry()'s model plus
+    all 3 driven-coil solves, as a xfemm_backend.LuaScript - split out of
+    simulate() so a test harness can run the exact same script through a
+    different backend (e.g. real FEMM under Wine) for validation. Does not run
+    anything by itself.
+    """
+    script = build_geometry(coilset, distance)
+    loop_turn_current, tank_turn_current, rc_turn_current = turn_currents(coilset)
 
     # ========================== SIMULATION =====================
     # Everything is already at its real position (RC drawn directly at

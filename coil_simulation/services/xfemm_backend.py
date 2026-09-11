@@ -128,6 +128,15 @@ class LuaScript:
     def mi_zoom(self, *a):
         pass  # viewport only, no solve effect, and no GUI exists to view it
 
+    def raw(self, line):
+        """Appends a literal line of Lua. The escape hatch for calls that
+        only mean something outside femmcli - services/femm_launcher.py's
+        mi_zoomnatural(), which needs the viewport mi_zoom() above is right to
+        drop. Not for geometry: anything the solver sees should go through a
+        named method, so femm_service.py's `femm_like` duck-typing keeps
+        working against the real `femm` module too."""
+        self.lines.append(line)
+
     def mi_makeABC(self, *a):
         raise NotImplementedError(
             "mi_makeABC is broken under femmcli (mesh-time 'invalid block type "
@@ -199,7 +208,15 @@ class LuaScript:
             sum_into('rc', 'rc', num_rc_turns, rc_current, True, True)
 
     def render(self):
+        """The accumulated Lua source, with the result-file epilogue appended
+        when there is anything to write. A script that never called
+        solve_and_extract() has no results and gets no epilogue - that's
+        services/femm_launcher.py's draw-only case, which is opened in the
+        FEMM GUI rather than parsed, so an empty result.txt would be a stray
+        file and nothing else."""
         lines = list(self.lines)
+        if not self._results:
+            return "\n".join(lines) + "\n"
         lines.append(f"local fh = openfile('{_RESULT_FILE}', 'w')")
         for key in self._results:
             lines.append(f"write(fh, '{key}=', {key}, '\\n')")

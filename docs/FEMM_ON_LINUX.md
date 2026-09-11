@@ -53,6 +53,16 @@ wine ~/.wine/drive_c/femm42/bin/femm.exe -lua-script='c:\path\to\script.lua'
 
 Note the path is in **Windows form** (`c:\...`), because FEMM is a Windows program.
 
+### Opening a design from the GUI
+
+The desktop app (`gui/`) has an **Open in FEMM** button next to every geometry
+it draws — a config, a past run, an AI search's baseline or proposed design. It
+does exactly what the command above does: generates a Lua script from
+`engine.build_geometry()` (the solver's own drawing code) and hands it to
+`femm.exe -lua-script=`, with no `quit()` at the end so the window stays open on
+the model. Scripts and `.fem` files land in
+`coil_simulation/data/femm_models/<design>/`. See `gui/README.md` for the rest.
+
 ---
 
 ## Good to know

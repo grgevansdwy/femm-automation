@@ -134,10 +134,17 @@ Roughly in order of how much they'd bite:
   pre-rename git checkpoint - some edits since that commit were lost for
   good. The popup only prevents *future* accidents; it doesn't undo those.
 - **The coil diagram is a proportional schematic, not a literal render.**
-  Rings are sized by each coil's actual radius; turn count, trace width,
-  layer stacking, and winding path are not represented. `backplane`/
-  `rc_backplane` (which carry a Z-offset but no radius) show as text
-  indicators, not rings. A reasonable v2 if more visual fidelity is wanted.
+  Two views share the panel: the original top-down rings (sized by each
+  coil's actual radius) and, added later, an axial cross-section - a direct
+  port of `coil_simulation/engine.py`'s real stacking math, showing Loop
+  below Tank on the transmit side and RC drawn `distance` mm above them,
+  facing down, with ferrite/shield/backplane stacked further outward on
+  each side. The cross-section was added specifically because the top-down
+  view alone reads as "all three coils on top of each other" - it collapses
+  the real axial arrangement onto one plane. Even with both views, turn
+  count, trace width, winding path, and the sub-mm per-PCB-layer offset
+  inside `draw_coil_traces()` are still not modeled - a reasonable v3 if
+  more fidelity is wanted (see the plan file's Deferred section).
 - **Import only accepts the exact shape `export_record()` writes**
   (round-trip only) - a hand-built or bare 56-field coilset dict is
   rejected with a specific reason, not silently guessed at. Every failure

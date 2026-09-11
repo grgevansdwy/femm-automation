@@ -1,45 +1,75 @@
 # =============================================================================
-# coilset_repository.py --> CRUD for data/configs/
+# coilset_repository.py --> CRUD for the `configs` table (repositories/db.py)
 #
-# The unified config store: one JSON file per config under data/configs/,
-# covering both the built-in reference designs (builtin=True, e.g. Gen3,
-# base_coil) and user-created/cloned configs (builtin=False). Built-in
-# configs can be edited in place but not deleted - save_config() preserves
-# an existing record's builtin flag, and delete_config() refuses to remove
-# one. This module is the one place that touches data/configs/.
+# The unified config store: one row per config, covering both the built-in
+# reference designs (builtin=True, e.g. Gen3, base_coil) and user-created/
+# cloned configs (builtin=False). Built-in configs can be edited in place but
+# not deleted without force=True - save_config() preserves an existing
+# record's builtin flag, and delete_config() refuses to remove one unless
+# forced. This module is the one place that touches the `configs` table.
+#
+# There's no seed/bootstrap data file anymore - a fresh database starts
+# completely empty. Backup All / Restore All (gui/src/gui/backup_io.py) is
+# how configs (and runs) move between machines or get restored after
+# testing something risky.
 # =============================================================================
 import dataclasses
 import json
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 from models.coilset import CoilSet
-
-CONFIGS_DIR = Path(__file__).resolve().parents[1] / 'data' / 'configs'
+from repositories import db
 
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _path(config_id):
-    return CONFIGS_DIR / f'{config_id}.json'
+def _row_to_record(row) -> dict:
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'builtin': bool(row['builtin']),
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+        'cloned_from': row['cloned_from'],
+        'coilset': json.loads(row['coilset_json']),
+    }
+
+
+def _upsert(conn, record) -> None:
+    conn.execute(
+        """INSERT INTO configs (id, name, builtin, created_at, updated_at, cloned_from, coilset_json)
+           VALUES (:id, :name, :builtin, :created_at, :updated_at, :cloned_from, :coilset_json)
+           ON CONFLICT(id) DO UPDATE SET
+               name=excluded.name, builtin=excluded.builtin, created_at=excluded.created_at,
+               updated_at=excluded.updated_at, cloned_from=excluded.cloned_from,
+               coilset_json=excluded.coilset_json""",
+        {
+            'id': record['id'],
+            'name': record['name'],
+            'builtin': int(record['builtin']),
+            'created_at': record['created_at'],
+            'updated_at': record['updated_at'],
+            'cloned_from': record.get('cloned_from'),
+            'coilset_json': json.dumps(record['coilset']),
+        },
+    )
+    conn.commit()
 
 
 def list_configs():
     """Every config record (builtin + user-created), sorted by name."""
-    if not CONFIGS_DIR.is_dir():
-        return []
-    records = [json.loads(p.read_text()) for p in CONFIGS_DIR.glob('*.json')]
-    return sorted(records, key=lambda r: r['name'].lower())
+    with db.connection() as conn:
+        rows = conn.execute('SELECT * FROM configs ORDER BY name COLLATE NOCASE').fetchall()
+    return [_row_to_record(r) for r in rows]
 
 
 def get_config(config_id):
-    path = _path(config_id)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text())
+    with db.connection() as conn:
+        row = conn.execute('SELECT * FROM configs WHERE id = ?', (config_id,)).fetchone()
+    return _row_to_record(row) if row else None
 
 
 def get_coilset(config_id):
@@ -56,7 +86,6 @@ def save_config(coilset, name, config_id=None, cloned_from=None):
     Overwriting an existing record preserves its builtin flag - this is the
     whole mechanism behind "built-ins are editable but not deletable".
     """
-    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
     existing = get_config(config_id) if config_id else None
     record = {
         'id': config_id or uuid.uuid4().hex[:12],
@@ -67,15 +96,33 @@ def save_config(coilset, name, config_id=None, cloned_from=None):
         'cloned_from': cloned_from if cloned_from is not None else (existing.get('cloned_from') if existing else None),
         'coilset': dataclasses.asdict(coilset),
     }
-    _path(record['id']).write_text(json.dumps(record, indent=2))
+    with db.connection() as conn:
+        _upsert(conn, record)
     return record
 
 
-def delete_config(config_id):
-    """Raises ValueError for a built-in config. No-op if it doesn't exist."""
+def restore_config(record):
+    """Upserts a config record exactly as given - id, timestamps and the
+    builtin flag are preserved verbatim, unlike save_config()'s edit
+    semantics (always a fresh updated_at, builtin re-derived from any
+    existing row). Used by bulk restore (gui/src/gui/backup_io.py), which
+    needs an exact reproduction of a previously-exported record. Returns
+    the record unchanged."""
+    with db.connection() as conn:
+        _upsert(conn, record)
+    return record
+
+
+def delete_config(config_id, force=False):
+    """Raises ValueError for a built-in config unless force=True. No-op if
+    it doesn't exist. force=True is what the GUI uses - it lets a user
+    delete any config, built-in or not (see
+    gui/src/gui/panels/configs_panel.py's ConfigsPanelState.delete())."""
     record = get_config(config_id)
     if record is None:
         return
-    if record.get('builtin'):
+    if record['builtin'] and not force:
         raise ValueError(f"Cannot delete built-in config: {config_id}")
-    _path(config_id).unlink()
+    with db.connection() as conn:
+        conn.execute('DELETE FROM configs WHERE id = ?', (config_id,))
+        conn.commit()

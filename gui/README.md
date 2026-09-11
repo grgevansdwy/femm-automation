@@ -46,10 +46,15 @@ tabs, everything visible at once:
   and the actual deletion, but there's still no undo once confirmed (see
   `docs/gui.md`'s Concerns for the two real accidental deletions that led
   to that popup existing).
-- **Right, top: Coil Geometry** - a live schematic of the selected config's
-  loop/tank/RC coils (and ferrite/shield/backplane when present), redrawn
-  every frame as you edit the form - proportional rings, not a literal
-  turn-by-turn render (see `docs/gui.md` for the v1 scope).
+- **Right, top: Coil Geometry** - two live views of the selected config,
+  redrawn every frame as you edit the form or change the Run distance: a
+  top-down view (loop/tank/RC sized by radius) on the left, and an axial
+  cross-section on the right showing how they're actually arranged in
+  space - Loop below Tank on the transmit side, RC drawn `distance` mm
+  above them facing down, with ferrite/shield/backplane stacked further out
+  on each side when present. Proportional, not a literal turn-by-turn
+  render (see `docs/gui.md` for the scope) - **Open in FEMM** on its title
+  row draws the real thing (see below).
 - **Right, middle: Run** - pick a config and an RC separation distance
   (mm), then **Run**. If that exact geometry + distance was already solved
   before, the existing result is shown instantly instead of re-running
@@ -59,14 +64,51 @@ tabs, everything visible at once:
   first finishes.
 - **Right, bottom: Run History** - every past run plus anything still
   solving, most-recently-used first. Select one to see its result
-  (`L_loop/L_tank/L_rc`, `M12/M13/M23`, 3 ESRs, `k12/k13/k23`) or its error.
+  (`L_loop/L_tank/L_rc`, `M12/M13/M23`, 3 ESRs, `k12/k13/k23`) or its error,
+  and **Open in FEMM** to see the geometry behind those numbers.
 
-Configs are written to `coil_simulation/data/configs/*.json`; an exported
-`.json` file is that same record shape, so any `.json` this app exported is
-also what it expects back on Import. Run output lands as
-`coil_simulation/data/results/<run_id>.json` - the same schema
-`legacy/webapp` and `coil_simulation/main.py` write, so results are shared
-across all three.
+Configs and runs are both stored in one SQLite database,
+`coil_simulation/data/femm_automation.db` (see
+`coil_simulation/repositories/db.py`) - not JSON files. Nothing seeds it:
+a fresh checkout starts with a completely empty database (no builtins, no
+history) - the database file itself isn't checked into git (it's binary,
+not diff-friendly), and there's no bootstrap/seed data file either.
+
+To get data onto a fresh checkout, or move it to another machine, use
+**Backup All / Restore All** in the top toolbar - it dumps or restores
+every config + every run as one portable `.json` file. Export/Import (the
+Config Library's buttons, and Run History's) work the same way for a single
+config or run at a time - a literal copy of that one database row as
+`.json`, read back in on Import.
+
+## Open in FEMM
+
+Every panel that draws a geometry has an **Open in FEMM** button next to it:
+the Coil Geometry panel, a selected run in Run History, the AI Agent's
+Baseline box, each candidate card in the search feed, and both the
+**Baseline** and **Proposed** halves of a finished search's summary (live
+and replayed from AI Run History alike). Clicking one opens real FEMM 4.2
+under Wine with that exact design drawn in it, loop circuit energised,
+meshed and solved by nobody - ready for you to mesh, solve, probe, or edit
+by hand.
+
+The model is not re-drawn for the occasion. `services/femm_launcher.py`
+calls `engine.build_geometry()` - the same function `engine.build_script()`
+calls before adding the three solves - so the model that opens is the model
+that produced the numbers beside the button, not a second drawing of it that
+could drift from it. All the button adds is the loop-driven currents (the
+solver's first of three solves), an `mi_saveas()`, and an
+`mi_zoomnatural()`.
+
+Requirements: Wine, and FEMM 4.2 installed under it - see
+`docs/FEMM_ON_LINUX.md`. Without either, the button says so instead of
+failing silently. `FEMM_EXE` overrides where `femm.exe` is looked for
+(default `~/.wine/drive_c/femm42/bin/femm.exe`).
+
+Each button writes its `.fem` and the Lua that drew it under
+`coil_simulation/data/femm_models/<design>/` (git-ignored), overwritten on
+every click of that same button. FEMM keeps running after the app is
+closed, and a solve done by hand in it drops a multi-MB `.ans` there too.
 
 ## Config
 
@@ -80,8 +122,9 @@ across all three.
 uv run --package gui --group test pytest gui/tests/
 ```
 
-All 38 tests run against real `CoilSet`s and real `engine.simulate()`
-calls (no mocks) - expect this to take ~30-40s. Test runs are isolated from
-the real `coil_simulation/data/results/` (see `tests/conftest.py`), but not
-from `coil_simulation/data/configs/` - config-touching tests clean up
-whatever they create instead.
+All 54 tests run against real `CoilSet`s and real `engine.simulate()`
+calls (no mocks) - expect this to take ~30-40s. Every test gets its own
+isolated, temporary, empty `femm_automation.db` (see `tests/conftest.py`),
+pre-loaded with one real `"base_coil"` config (inserted directly in Python,
+not read from a file) so tests that reference it by id and actually solve
+it still work - nothing here touches the real database.

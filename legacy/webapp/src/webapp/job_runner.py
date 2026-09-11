@@ -27,7 +27,7 @@ from typing import Any
 
 from ._sim_path import SIM_DIR
 
-RESULTS_ROOT = SIM_DIR / "data" / "results"
+RESULTS_ROOT = SIM_DIR / "data"
 
 
 def now() -> datetime:

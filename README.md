@@ -21,7 +21,9 @@ docker run -p 8000:8000 -v $(pwd)/coil_simulation/data:/app/coil_simulation/data
 
 Then open **http://localhost:8000/** — browse existing coil configs,
 start a new run, and see results. The volume mount keeps configs/results
-on your host so they survive `docker run` restarts.
+on your host so they survive `docker run` restarts — they live in
+`coil_simulation/data/femm_automation.db` (a SQLite database), which the
+mount already covers since it binds the whole `data/` directory.
 
 The same routes work from the command line too (no browser needed), e.g.:
 

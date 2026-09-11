@@ -15,7 +15,7 @@ if __name__ == '__main__':
     coilset = cc.get_coilset('TR302_and_225_000056')
     result = simulate(coilset, DEFAULT_RC_TEST_DISTANCE)
 
-    repo = RunResultRepository(root=Path('./data/results'))
+    repo = RunResultRepository(root=Path('./data'))
     repo.save_result_json({
         "run_id": repo.run_id,
         "config_id": "TR302_and_225_000056",
@@ -28,4 +28,4 @@ if __name__ == '__main__':
         "error": None,
         "result": dataclasses.asdict(result),
     })
-    print(f"Results written to {repo.result_path}")
+    print(f"Result for run {repo.run_id} written to ./data/femm_automation.db")
