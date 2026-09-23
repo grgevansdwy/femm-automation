@@ -3,55 +3,58 @@
 Automates FEMM (magnetics FEA) simulations of a 3-coil wireless power
 transfer (WPT) link — Loop, Tank, and Receive coils at 6.78 MHz — to get
 self/mutual inductance and ESR for a given coil design and separation
-distance. The solve backend is [xfemm](coil_simulation/vendor/README.md), a
-vendored open-source, Linux-native reimplementation of FEMM (no Wine, no
-Windows install needed).
+distance, and lets an AI agent search for better designs. The solve backend
+is [xfemm](backend/engine/vendor/README.md), a vendored open-source,
+Linux-native reimplementation of FEMM (no Wine, no Windows install needed).
 
-## Quick run (Docker)
+## Running it (Linux)
 
-The fastest way to get results without setting up Python/`uv` locally, and
-the only way that works if you're not on Linux (the solver binary is
-Linux-only, but Docker runs it in a Linux container regardless of your
-host OS):
-
-```bash
-docker build -t femm-coil-sim .
-docker run -p 8000:8000 -v $(pwd)/coil_simulation/data:/app/coil_simulation/data femm-coil-sim
-```
-
-Then open **http://localhost:8000/** — browse existing coil configs,
-start a new run, and see results. The volume mount keeps configs/results
-on your host so they survive `docker run` restarts — they live in
-`coil_simulation/data/femm_automation.db` (a SQLite database), which the
-mount already covers since it binds the whole `data/` directory.
-
-The same routes work from the command line too (no browser needed), e.g.:
-
-```bash
-curl -X POST http://localhost:8000/runs/new -d "config_id=TR302_and_225_000056" -d "distance=5.0"
-```
-
-## Running natively (Linux only)
-
-If you're on Linux and have [`uv`](https://docs.astral.sh/uv/) installed,
-you can skip Docker:
+The solver binary is Linux-only. With [`uv`](https://docs.astral.sh/uv/)
+installed:
 
 ```bash
 uv sync
-uv run --package webapp uvicorn webapp.main:app --app-dir legacy/webapp/src --host 127.0.0.1 --port 8000
+uv run --package frontend python frontend/src/frontend/main.py
 ```
 
-There's also a native desktop GUI (Dear ImGui, no browser) — see
-[`gui/README.md`](gui/README.md) — but it requires a real display, so it's
-Linux-desktop-only and not something Docker can help with.
+That opens the desktop app (Dear ImGui — it needs a real display, there is no
+headless mode). It has two modes: **Manual Runs** (edit a coil config, solve it
+at a distance) and **AI Agent** (describe an objective in chat, then watch the
+agent search). See [`frontend/README.md`](frontend/README.md).
+
+Configs and results are kept in one local SQLite database,
+`backend/data/femm_automation.db` (git-ignored — a fresh checkout starts
+empty; **Backup All / Restore All** in the app's toolbar moves data between
+machines).
+
+### The AI agent without the GUI
+
+```bash
+cd backend
+uv run python -m agent
+```
+
+A no-chat run against the defaults in `backend/agent/config.py`. It talks
+to an OpenAI-compatible LLM server (`LLM_API_BASE` / `AGENT_MODEL`, see that file).
+
+### Tests
+
+```bash
+uv run pytest backend frontend/tests
+```
+
+`backend/` (about 8 s) needs neither an LLM nor FEMM. `frontend/tests/` (about
+6–10 min) makes real FEMM solves and calls the real LLM server.
 
 ## Layout
 
-- `coil_simulation/` — the simulation engine (`engine.py`) and its xfemm
-  backend; the core that every UI below calls into.
-- `legacy/webapp/` — the FastAPI browser UI (used above for the quick run).
-- `gui/` — the native desktop UI; see its own README.
-- `legacy/` (`noelle/`, `genki/`, `wine_backend/`) — earlier iterations,
-  kept for reference/rollback, not the primary path.
-- `docs/` — deeper background (`FEMM_AND_WPT_101.md`, `FEMM_ON_LINUX.md`,
-  `xfemm.md`, `wine_vs_xfemm_validation.md`).
+- `backend/engine/` — the FEMM simulation engine (`core.py`), its xfemm
+  backend and the local database; the core that everything else calls into.
+- `backend/agent/` — the AI agent, built on the engine (never the other
+  way round): `input_chat/` turns a chat into a structured objective, `femm_agent/`
+  searches for designs that meet it.
+- `frontend/` — the native desktop UI; see its own README.
+- `docs/` — deeper background, one file per component: [`Engine.md`](docs/Engine.md)
+  (physics + the FEMM/xfemm backend), [`GUI.md`](docs/GUI.md) (the desktop app),
+  [`Agent.md`](docs/Agent.md) (the AI search agent). Start with
+  [`docs/README.md`](docs/README.md) if you're not sure which one you need.
