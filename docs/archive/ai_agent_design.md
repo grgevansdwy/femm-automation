@@ -42,14 +42,14 @@ That reframing is what drives most of the design below.
 
 The repo has two live packages plus one retired one:
 
-- **`coil_simulation/`** — the simulation engine (models/repositories/
+- **`backend/`** — the simulation engine (models/repositories/
   services layers). Entry point: `engine.simulate(coilset, distance) ->
   SimResult`, one coilset + one RC separation distance in, self/mutual
   inductance + ESR + coupling out. Backed by `femmcli`, a vendored native
   Linux xfemm binary.
-- **`gui/`** — the live desktop UI: a native Dear ImGui app (`imgui_bundle`
+- **`frontend/`** — the live desktop UI: a native Dear ImGui app (`imgui_bundle`
   / HelloImGui), one process, one window, one fixed 3-column dashboard
-  (config list / edit form / diagram+run+history). `gui/src/gui/
+  (config list / edit form / diagram+run+history). `frontend/src/frontend/
   job_runner.py` runs solves on a `ThreadPoolExecutor(max_workers=
   os.cpu_count())` — **solves already run in parallel** — and caches
   results by `(coilset, distance)` hash (`coilset_signature()`/
@@ -85,7 +85,7 @@ No optimizer, agent, or LLM-integration code exists anywhere yet.
 
 ## 4. Chosen architecture
 
-Two-stage, both stages living in a new `gui/src/gui/agent/` subpackage, UI
+Two-stage, both stages living in a new `frontend/src/frontend/agent/` subpackage, UI
 surfaced as a new panel in the existing dashboard.
 
 ```
@@ -94,7 +94,7 @@ surfaced as a new panel in the existing dashboard.
  └───────────────────────────┬─────────────────────────────────────┘
                               │ tool calls / responses
  ┌───────────────────────────▼─────────────────────────────────────┐
- │  gui/src/gui/agent/  (new subpackage)                             │
+ │  frontend/src/frontend/agent/  (new subpackage)                             │
  │                                                                     │
  │  1) interpreter.py — prompt → structured Spec (baseline, primary/  │
  │     secondary objectives w/ tolerances, hard constraints)          │
@@ -119,7 +119,7 @@ surfaced as a new panel in the existing dashboard.
      │ reuses                                        │ reuses
      ▼                                                ▼
  ┌─────────────────────────┐          ┌───────────────────────────────┐
- │ services/femm_service.py │          │ gui/src/gui/job_runner.py      │
+ │ services/femm_service.py │          │ frontend/src/frontend/services/job_runner.py      │
  │ check_valid_coilset()    │          │ JobRunner + ThreadPoolExecutor │
  │ (reused as-is)           │          │ + coilset_signature() cache    │
  └─────────────────────────┘          │ (reused as-is)                 │
@@ -177,7 +177,7 @@ found — the loop never runs open-ended.
 
 No new `CoilSet` fields are needed for George's example constraints:
 
-| Requirement | Field(s) in `coil_simulation/models/coilset.py` |
+| Requirement | Field(s) in `backend/models/coilset.py` |
 |---|---|
 | No ferrite | `tank_ferrite_present=0`, `rc_ferrite_present=0` |
 | No external metal/shield | `backplane=0`, `rc_backplane=0`, `tc_shield=0`, `rc_shield=0` |
@@ -185,7 +185,7 @@ No new `CoilSet` fields are needed for George's example constraints:
 | Trace thickness ∈ {1,2,4oz} | `loop_trace_thickness`/`tank_trace_thickness`/`rc_trace_thickness` (float, mm), restricted to a 3-value enum (1oz≈0.035mm, 2oz≈0.07mm — Gen2_coil.json's own value, 4oz≈0.14mm) |
 
 `Gen2_coil` already exists as a loadable built-in config
-(`coil_simulation/data/configs/Gen2_coil.json`), so "compared to Gen2_coil"
+(`backend/data/configs/Gen2_coil.json`), so "compared to Gen2_coil"
 resolves directly via `coilset_repository.get_coilset("Gen2_coil")`. The
 one real gap: **nothing in the repo today computes a candidate-vs-baseline
 relative comparison** — that's genuinely new, but small (a scoring
@@ -199,7 +199,120 @@ function, not new physics or new fields).
    into the config library via the existing `save_config()` (same path
    `configs_panel` already uses for Clone).
 
+### 4.5 The chat after Start Search (GUI)
+
+One conversation per task: **planning → searching → finished**.
+
+- **Searching:** the chat stays open. A status line pinned above the input
+  shows the round, whether the AI is proposing or FEMM is solving, and
+  elapsed time. Questions go to `agent/femm_agent/followup.py`, which rebuilds a
+  snapshot of the live run (plan, baseline numbers, every round, best so
+  far) on each turn. The baseline picker is locked; the run already holds
+  its own copy of the baseline, so editing configs elsewhere can't affect it.
+- **Finished:** same chat, same snapshot, for questions about the result.
+- **No changes after Start Search, enforced structurally:** follow-up turns
+  call the model with *no tools*, so it can't re-plan or propose a design.
+  The prompt tells it to point the user at Restart instead.
+- **Restart** (chat header) opens a fresh conversation on the same baseline:
+  - unfinished (planning or searching) - asks for confirmation, cancels the
+    search (`AgentRunner.cancel()`: stops at the next checkpoint, drops its
+    queued FEMM solves) and deletes the ai_run and its messages. Solves that
+    already finished stay in the run cache.
+  - finished - no confirmation; the run stays in History.
+  - A reply or LLM call still in flight is abandoned and writes nothing.
+- **Changing the baseline while planning** asks first ("this removes the
+  current chat") whenever there's something to lose - messages, or an unsent
+  draft. Confirming discards that conversation, like Restart; an empty chat
+  switches straight away.
+- There is deliberately no Stop button - a search either finishes or is
+  discarded with Restart.
+- Follow-up messages are stored as `phase='interview'` rows after the
+  planning messages, so History's Conversation section shows the whole chat.
+
 ---
+
+### 4.6 AI request limits, retries and the end-of-run report
+
+A search round once waited ~63 minutes on one AI request and then failed the
+whole search. Every AI request (planning chat, search rounds, follow-ups) now
+goes through `agent/llm_client.py` (repo root - shared by both packages) with:
+
+| Limit | Value | Setting |
+|---|---|---|
+| Wall-clock time per request (queue + reading the prompt + generating), enforced even when the server sends nothing | 600 s | `LLM_TIME_LIMIT_S` / env `AGENT_LLM_TIME_LIMIT_S` |
+| Reply length (thinking included) | 32,000 tokens | `LLM_MAX_TOKENS` / env `AGENT_LLM_MAX_TOKENS` |
+
+Requests are **streamed**. Closing a streaming request is the only way to
+make the llama.cpp server stop generating (verified: the slot frees within
+~3 s; a non-streaming request keeps generating after the client gives up).
+So a timed-out try, or Restart, no longer leaves work running on the server.
+
+**Retry policy (search only):**
+1. A round's AI request that fails is retried once, after a 5 s pause
+   (`ROUND_LLM_ATTEMPTS = 2`).
+2. If both tries fail, the whole search starts over **from zero memory**, once
+   (`SEARCH_ATTEMPTS = 2`). The model gets nothing from the first attempt, but
+   its rounds stay visible (labelled "restart 1") and saved, and the best
+   candidate is kept across both attempts. The restarted attempt gets a full
+   round budget.
+3. If a round fails both tries again, the search fails.
+
+Code bugs (anything that isn't an AI request failure) are not retried. The
+planning and follow-up chats are not retried either: they show the reason
+and the user can send again.
+
+**Why a request failed** (`LLMError.kind`):
+
+| Kind | Meaning |
+|---|---|
+| `no_response` | Time limit hit and the server sent no tokens (busy, or still reading the prompt) |
+| `too_slow` | Time limit hit while tokens were still arriving (slow server or long thinking) |
+| `length_limit` | Reply hit 32k tokens without finishing (runaway thinking) |
+| `unreachable` | Couldn't connect |
+| `http_error` | The server returned an error |
+| `bad_reply` | The stream or tool arguments couldn't be parsed |
+
+**End-of-run report** (`agent/femm_agent/outcome.py`): for every ending except a met goal,
+a plain-language report is shown in the chat, the Search Summary / Search
+Progress and History (stored in `ai_runs.error`), and given to the follow-up
+chat. It covers:
+- **failed**: the main cause, every failed AI try (attempt, round, try,
+  reason, time, tokens), and the causes' counts
+- **internal error**: a bug, not the server
+- **budget exhausted**: every round used
+- **stopped by the model**
+
+Each report ends with the closest candidate and which requirements it still
+missed.
+
+### 4.7 Actual package layout (`backend/agent/`)
+
+The architecture above is implemented as two subpackages plus shared root files
+(not the single flat `agent/` folder the diagram in §4 implies, and not the
+`frontend/src/frontend/agent/` location that section originally proposed - the real
+package lives in `backend/agent/`, importable standalone with no frontend/
+dependency, per §5.5):
+
+```
+backend/agent/
+    config.py, llm_client.py      - shared constants + the HTTP/streaming client
+    gui_bridge.py, runner.py      - the two GUI-facing async runners (interview+
+                                     follow-up turns; the optimize loop)
+    orchestrator.py, __main__.py  - the CLI entry point (`python -m agent`)
+
+    interview/    - prompt -> AgentSpec: interview.py (the conversation loop),
+                    spec.py (AgentSpec itself), objective.py (the Objective
+                    vocabulary), variables.py (VariableSpec/free fields)
+
+    femm_agent/   - AgentSpec -> FEMM search: optimize.py (the loop body),
+                    scorer.py, schema.py, prompts.py, state.py, outcome.py,
+                    followup.py
+```
+
+`interview/` and `femm_agent/` don't import each other's GUI or LLM-transport
+concerns - only the shared vocabulary (`interview/objective.py`,
+`interview/variables.py`) that both a finalized plan and a running search need
+to agree on.
 
 ## 5. Design decisions and trade-offs
 
@@ -259,7 +372,7 @@ internal shape doesn't change either way, only how it gets filled in.
 
 **Chosen: the LLM proposes a batch per turn**, all evaluated concurrently.
 
-This is a direct consequence of §2: `gui`'s `JobRunner` already parallelizes
+This is a direct consequence of §2: `frontend`'s `JobRunner` already parallelizes
 `femmcli` solves across CPU cores. A strictly serial "propose one → wait for
 the solve → propose the next" loop (which is what the *old* Wine-based
 backend would have forced, back when this design assumed `webapp`) would
@@ -294,18 +407,18 @@ into this later) are both easy to layer in without changing the Spec's
 shape, since `primary`/`secondary` objectives are already structured data,
 not baked-in logic.
 
-### 5.5 New subpackage inside `gui/`, vs. a separate uv workspace member
+### 5.5 New subpackage inside `frontend/`, vs. a separate uv workspace member
 
-**Chosen: `gui/src/gui/agent/`, not a new `optimizer/` workspace member.**
+**Chosen: `frontend/src/frontend/agent/`, not a new `optimizer/` workspace member.**
 Decided directly with George. Trade-off acknowledged: `docs/gui.md`
-explicitly called out `gui`'s dependency set (`imgui-bundle` + `numpy`) as
+explicitly called out `frontend`'s dependency set (`imgui-bundle` + `numpy`) as
 deliberately minimal; adding an Ollama HTTP client expands that. The
-alternative (a separate workspace member, importable by `gui` as a library)
-would preserve that minimalism and mirror how `coil_simulation` itself is
-kept separate from `gui` — but adds a second package boundary, its own
+alternative (a separate workspace member, importable by `frontend` as a library)
+would preserve that minimalism and mirror how `backend` itself is
+kept separate from `frontend` — but adds a second package boundary, its own
 `pyproject.toml`, and cross-package import wiring for a feature that only
-`gui` will ever call. Given the agent has no reason to run headlessly
-outside the desktop app (unlike, say, `coil_simulation`, which both `gui`
+`frontend` will ever call. Given the agent has no reason to run headlessly
+outside the desktop app (unlike, say, `backend`, which both `frontend`
 and future tooling need), the extra boundary wasn't judged worth it.
 
 ### 5.6 Ollama, vs. llama.cpp / vLLM
@@ -406,24 +519,24 @@ interpreter against Ollama with a few example prompts (including the Gen2
 one above) and manually inspect the produced Spec; (3) run a short real
 orchestrator session (small batch, few iterations) against `femmcli` and
 confirm both the ranked output and the Spec-confirmation UI in the actual
-`gui` app.
+`frontend` app.
 
 ## 9. Critical files
 
-- `gui/src/gui/main.py` — add the agent panel to the existing `AppState`/
+- `frontend/src/frontend/main.py` — add the agent panel to the existing `AppState`/
   `_gui()` loop.
-- `gui/src/gui/job_runner.py` — `JobRunner`, `ThreadPoolExecutor`,
+- `frontend/src/frontend/services/job_runner.py` — `JobRunner`, `ThreadPoolExecutor`,
   `coilset_signature()`/`find_cached()`, reused as-is by the orchestrator.
-- `gui/src/gui/panels/runs_panel.py` — existing pattern for a panel that
+- `frontend/src/frontend/screen_manual/runs_panel.py` — existing pattern for a panel that
   polls a `JobRunner` each frame; the agent panel follows the same shape.
-- `coil_simulation/services/femm_service.py` — `check_valid_coilset()`,
+- `backend/services/femm_service.py` — `check_valid_coilset()`,
   reused as-is.
-- `coil_simulation/repositories/coilset_repository.py` — `get_coilset()`
+- `backend/repositories/coilset_repository.py` — `get_coilset()`
   (baseline lookup), `save_config()` (promoting an accepted candidate).
-- `coil_simulation/models/coilset.py` — field reference for `schema.py`;
+- `backend/models/coilset.py` — field reference for `schema.py`;
   not modified.
-- `coil_simulation/engine.py` — `simulate(coilset, distance)`, the eval
+- `backend/engine.py` — `simulate(coilset, distance)`, the eval
   entry point.
-- `gui/pyproject.toml` — new Ollama HTTP client dependency (e.g. `httpx` or
-  the `ollama` python package), a deliberate expansion of `gui`'s currently
+- `frontend/pyproject.toml` — new Ollama HTTP client dependency (e.g. `httpx` or
+  the `ollama` python package), a deliberate expansion of `frontend`'s currently
   minimal dependency set (§5.5).

@@ -957,7 +957,7 @@ once, and both phases become straightforward.
    `import ltspiceautomator.ltspice_automator as lta`, but `ltspiceautomator/` is an empty,
    uninitialised private submodule. Either clone it, vendor it, or make the import lazy — the LTspice
    path is already commented out at the call site, so nothing needs it today.
-2. **Pin the dependencies.** `femm_coil_simulation/` has no manifest at all. Adopt the PEP 723
+2. **Pin the dependencies.** `femm_backend/` has no manifest at all. Adopt the PEP 723
    `# /// script` convention already used throughout `genki/`, or add a `pyproject.toml`.
 3. **Fix repo hygiene.** `.gitignore` doesn't cover `*.ans`, `*.fem`, `results/`, or `__pycache__/`,
    so ~33 MB of solver output sits in the tree. Delete the stray `tmp.ans`/`tmp.fem`. Fix the broken
@@ -1185,7 +1185,7 @@ toroidal scripts (two byte-identical), and **two** `planar_inductor.py`. Pick on
 concept *before* wrapping a UI around it, or you'll wrap the wrong one.
 
 The `genki/` implementations are structurally better (dataclasses, context managers, `argparse`,
-`main()`, PEP 723 deps). The `femm_coil_simulation/` implementation is more complete and more
+`main()`, PEP 723 deps). The `femm_backend/` implementation is more complete and more
 validated (it models ferrite, shields, three coils, losses, and the full circuit). **The likely right
 answer is: keep Noel's physics, adopt Genki's structure.**
 

@@ -1,23 +1,23 @@
 # Dear ImGui desktop app: what was built, and what's concerning
 
 **Status: working, verified against the real engine and real data — not yet
-battle-tested by real day-to-day use.** `gui/` is a native Python +
+battle-tested by real day-to-day use.** `frontend/` is a native Python +
 [imgui_bundle](https://github.com/pthom/imgui_bundle) replacement for
-`webapp/` (now at `legacy/webapp/`), built on top of `coil_simulation`
+`webapp/` (since removed from the tree - in git history at `legacy/webapp/`, commit `321b8d7`), built on top of `backend`
 without changing a line of it.
 
 ## Background
 
-The web app (FastAPI + Jinja2 + htmx, talking to `coil_simulation` over
+The web app (FastAPI + Jinja2 + htmx, talking to `backend` over
 HTTP) was harder to debug than it needed to be: two processes, a browser
 devtools/Python debugger split, HTTP round trips for state that's really
-just local function calls. `coil_simulation` was already refactored
-(`docs/REFACTOR_NOTES.md`) into `models/`/`repositories/`/`services/`
+just local function calls. `backend` was already refactored
+(`docs/REFACTOR_NOTES.md`) into `models/`/`repositories/`/`services/` (today under `backend/engine/`)
 specifically so a UI could sit on top of it without owning any business
 logic - so this migration only replaces the view layer. Nothing in
-`coil_simulation/` was touched.
+`backend/` was touched.
 
-The first version of `gui/` shipped as a 3-tab layout (Config Library / New
+The first version of `frontend/` shipped as a 3-tab layout (Config Library / New
 Run / Run History) mirroring the old webapp's nav. A second pass replaced
 that with **one fixed dashboard, no tabs**, added a **live coil-geometry
 diagram**, and added **config export/import** - the tabs felt sparse and
@@ -40,6 +40,12 @@ non-rearrangeable arrangement):
   " (copy)" until free (`X (copy)`, `X (copy) (copy)`, ...) and renames the
   `CoilSet`'s own `config_name` to match, so the list and the form agree;
   **Import** auto-suffixes `(imported)`/`(imported 2)`.
+  The list's name and the form's `config_name` are one value: the config
+  record's `name` is authoritative and `coilset_repository` forces
+  `config_name` to match on every read and write (legacy templates had stored
+  a different free-text label there, e.g. `Gen3_4mm_RC_ferrite` vs
+  `4mm RC ferrite, FJ7`). `config_name` is also left out of the run-cache
+  hash, so renaming a config doesn't invalidate its cached runs.
 - **Right column**, stacked top to bottom:
   - **Coil Geometry** - a live schematic redrawn every frame straight from
     the form's current values: concentric rings for loop/tank/rc sized
@@ -68,19 +74,19 @@ file removal - see Concerns for why this was added.
 | File | What it does |
 |---|---|
 | `pyproject.toml` | `imgui-bundle` + `numpy` (the one third-party import the live xfemm solve path needs) |
-| `src/gui/_sim_path.py` | Puts `coil_simulation/` on `sys.path` so its bare `from repositories import ...` imports resolve |
-| `src/gui/field_layout.py` | `FIELD_GROUPS` (6 sections, presentation-only) + `field_types()`/`field_labels()` read from `CoilSet`'s own field metadata - a drift-guard raises loudly if `CoilSet` ever gains/loses/renames a field without this file being updated |
-| `src/gui/job_runner.py` | `Job`/`JobStatus` + a `ThreadPoolExecutor(max_workers=os.cpu_count())`. Owns `coilset_signature()`/`find_cached()` (the result-reuse cache) and `touch()` (bumps `last_used_at` on a cache hit, updating the in-memory `Job` too if still resident - otherwise the next merge in `history_rows()` clobbers the fresh disk write with the stale in-memory copy) |
-| `src/gui/config_io.py` | Export/import: pure logic, no `imgui` import. `name_conflict()`/`dedupe_name()` (shared by Save/Clone/Import), `export_record()`, `parse_import()` (only accepts the exact round-trip shape `export_record()` writes, not a bare coilset dict - rejects anything else with a specific reason) |
-| `src/gui/panels/coil_diagram.py` | `compute_layout()` (pure scaling/geometry, unit-tested) + `draw()` (the `ImDrawList` rendering) |
-| `src/gui/panels/configs_panel.py` | `draw_list()`/`draw_form()` - the left/center columns. Save/Clone/Export/Import/Delete, the delete-confirmation popup, and the two `portable_file_dialogs` handles (export/import) polled once per frame |
-| `src/gui/panels/runs_panel.py` | `draw_controls()`/`draw_history()` - the right column's run block and history list |
-| `src/gui/main.py` | Entry point - computes the 3 column widths from the available content region each frame, no tab bar |
+| `src/frontend/_sim_path.py` | Puts `backend/` on `sys.path` so `import engine` / `import agent` (e.g. `from engine.repositories import ...`) resolve |
+| `src/frontend/services/field_layout.py` | `FIELD_GROUPS` (6 sections, presentation-only) + `field_types()`/`field_labels()` read from `CoilSet`'s own field metadata - a drift-guard raises loudly if `CoilSet` ever gains/loses/renames a field without this file being updated |
+| `src/frontend/services/job_runner.py` | `Job`/`JobStatus` + a `ThreadPoolExecutor(max_workers=os.cpu_count())`. Owns `coilset_signature()`/`find_cached()` (the result-reuse cache) and `touch()` (bumps `last_used_at` on a cache hit, updating the in-memory `Job` too if still resident - otherwise the next merge in `history_rows()` clobbers the fresh disk write with the stale in-memory copy) |
+| `src/frontend/files_backup/config_io.py` | Export/import: pure logic, no `imgui` import. `name_conflict()`/`dedupe_name()` (shared by Save/Clone/Import), `export_record()`, `parse_import()` (only accepts the exact round-trip shape `export_record()` writes, not a bare coilset dict - rejects anything else with a specific reason) |
+| `src/frontend/visualization/coil_diagram.py` | `compute_layout()` (pure scaling/geometry, unit-tested) + `draw()` (the `ImDrawList` rendering) |
+| `src/frontend/screen_manual/configs_panel.py` | `draw_list()`/`draw_form()` - the left/center columns. Save/Clone/Export/Import/Delete, the delete-confirmation popup, and the two `portable_file_dialogs` handles (export/import) polled once per frame |
+| `src/frontend/screen_manual/runs_panel.py` | `draw_controls()`/`draw_history()` - the right column's run block and history list |
+| `src/frontend/main.py` | Entry point - computes the 3 column widths from the available content region each frame, no tab bar |
 | `tests/*.py` | 38 tests, all against real configs/real `engine.simulate()` calls, not mocks |
 
 ### Verification actually performed
 
-- `engine.simulate()` called directly through `gui`'s own import path before
+- `engine.simulate()` called directly through `frontend`'s own import path before
   any GUI code existed - returned a real `SimResult`.
 - 38 pytest tests, all exercising real code paths (real `CoilSet`s, a real
   `femmcli` solve where relevant, real file writes) rather than mocks:
@@ -88,10 +94,10 @@ file removal - see Concerns for why this was added.
   validation-rejection, name-conflict rejection, job submission →
   completion → persistence, cache-hit reuse and `last_used_at` bumping, the
   diagram's scaling math against real and synthetic buffers.
-- `gui/tests/conftest.py`'s `isolate_results_dir` fixture keeps every test
-  out of the real `coil_simulation/data/results/` - a test used to write
+- `frontend/tests/conftest.py`'s `isolate_results_dir` fixture keeps every test
+  out of the real `backend/data/results/` - a test used to write
   real "failed" entries into the real Run History before this existed.
-  There's no equivalent isolation for `coil_simulation/data/configs/`;
+  There's no equivalent isolation for `backend/data/configs/`;
   config-touching tests clean up what they create instead.
 - The dashboard, the diagram (against several sample buffers), the
   export/import file-dialog wiring, and the delete-confirmation popup were
@@ -136,7 +142,7 @@ Roughly in order of how much they'd bite:
 - **The coil diagram is a proportional schematic, not a literal render.**
   Two views share the panel: the original top-down rings (sized by each
   coil's actual radius) and, added later, an axial cross-section - a direct
-  port of `coil_simulation/engine.py`'s real stacking math, showing Loop
+  port of `backend/engine/core.py`'s real stacking math, showing Loop
   below Tank on the transmit side and RC drawn `distance` mm above them,
   facing down, with ferrite/shield/backplane stacked further outward on
   each side. The cross-section was added specifically because the top-down
@@ -156,16 +162,16 @@ Roughly in order of how much they'd bite:
   then raised a raw `TypeError` from inside `check_valid_coilset()` and
   would have taken the window down; `parse_import()` now type-checks values
   against `field_layout.field_types()`, not just field names.
-- **`coil_simulation` is being actively edited outside this session,
+- **`backend` is being actively edited outside this session,
   uncommitted, by other concurrent sessions in this same repo.** This
   remains the biggest structural risk: if `engine.simulate()`'s or
   `check_valid_coilset()`'s signature changes, or `CoilSet` gains a field,
-  `gui` breaks - loudly for a `CoilSet` field change (the drift-guard
+  `frontend` breaks - loudly for a `CoilSet` field change (the drift-guard
   test), but as a plain `TypeError` for anything else. Nothing here is
   pinned to a commit.
 - **The xfemm mutual-inductance fix lives only in the locally-patched
   vendored `femmcli` binary**, not upstream (`docs/xfemm.md`'s own
-  concerns section already flags this). If `coil_simulation/vendor/` is
+  concerns section already flags this). If `backend/engine/vendor/` is
   ever re-vendored from a fresh xfemm release without reapplying
   `xfemm_flux_linkage_fix.patch`, `M12/M13/M23/k12/k13/k23` go silently
   wrong again.

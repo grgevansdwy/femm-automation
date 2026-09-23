@@ -1,6 +1,6 @@
 # xfemm backend: what was built, the bug, the fix, and what's next
 
-**Status: live.** `engine.py` and the webapp now run on the xfemm backend,
+**Status: live.** `engine/core.py` and the webapp now run on the xfemm backend,
 with real concurrent solving. This doc is the full history plus what's worth
 fixing next.
 
@@ -23,7 +23,7 @@ headlessly - no Wine, no GUI, genuinely parallel processes.
 
 ## What was done, in order
 
-### 1. Research spike (`xfemm_spike/`, gitignored - throwaway/investigative)
+### 1. Research spike (was `xfemm_spike/`, gitignored - deleted 2026-09-18, write-up kept)
 
 Validated the concept on a minimal single-loop-coil case:
 
@@ -35,15 +35,15 @@ Validated the concept on a minimal single-loop-coil case:
 | Cursor stealing | Eliminated - femmcli never opens a window |
 | Gap found | `mi_makeABC` (FEMM's asymptotic boundary helper) fails at mesh time under femmcli - worked around with a manual far-field Dirichlet box |
 
-Full writeup: `xfemm_spike/NOTES.md`.
+Full writeup: [`xfemm_spike_notes.md`](xfemm_spike_notes.md).
 
 ### 2. Production backend built
 
-- **`coil_simulation/vendor/xfemm-4.0-linux64/`** - the prebuilt Linux
+- **`backend/engine/vendor/xfemm-4.0-linux64/`** - the prebuilt Linux
   binaries (`femmcli`, `fmesher`, `fsolver`, `init.lua`, material libs), with
   a one-line patch applied to `femmcli` (see below and
-  `coil_simulation/vendor/README.md`).
-- **`coil_simulation/services/xfemm_backend.py`** - a `LuaScript` class that
+  `backend/engine/vendor/README.md`).
+- **`backend/engine/services/xfemm_backend.py`** - a `LuaScript` class that
   accumulates a self-contained Lua program mirroring `femm_service.py`'s
   `mi_*` calls, plus a Lua port of the flux/voltage summation
   `loop_inductance()`/`loop_ESR()` used to do live in Python (femmcli only
@@ -52,13 +52,14 @@ Full writeup: `xfemm_spike/NOTES.md`.
   Wine/COM session). Also contains `run_femmcli()` (subprocess wrapper, one
   temp directory per call so concurrent solves never collide) and a parser
   for femmcli's stringified complex numbers.
-- **`legacy/wine_backend/`** - unmodified copies of the
-  original `engine.py`/`femm_service.py`, kept as a rollback path (see
-  "Rolling back" below).
+- **The original Wine backend** - unmodified copies of the original
+  `engine.py`/`femm_service.py` (now `engine/core.py`/`engine/services/femm_service.py`).
+  They lived in `legacy/wine_backend/`, which was removed from the working tree on 2026-09-18
+  but is kept in git history (commit `321b8d7`) as a rollback path (see "Rolling back" below).
 
 ### 3. A real correctness bug was found, then fixed
 
-Validating against a real production config (`coil_simulation/data/configs/base_coil.json`
+Validating against a real production config (`backend/data/configs/base_coil.json`
 - ferrite, shields, tank + RC coils), the same generated Lua script was run
 through both `femmcli` and real FEMM under Wine and diffed.
 
@@ -84,7 +85,7 @@ dividing by the real angular frequency instead of the imaginary `j*omega`
 produces a 90° rotation. Circuits carrying real current never hit this
 branch, which is why self-inductance/ESR were unaffected.
 
-**Fix** (`coil_simulation/vendor/xfemm_flux_linkage_fix.patch`, one line):
+**Fix** (`backend/engine/vendor/xfemm_flux_linkage_fix.patch`, one line):
 
 ```cpp
 FluxLinkage = GetVoltageDrop(circnum) / (I*2.*PI*Frequency);
@@ -93,7 +94,7 @@ FluxLinkage = GetVoltageDrop(circnum) / (I*2.*PI*Frequency);
 Built from source with `cmake` (installed via `uvx cmake`, no system package
 needed) + the existing `g++`. No other dependencies required - xfemm bundles
 its own Lua and Triangle mesher. Full rebuild instructions in
-`coil_simulation/vendor/README.md`.
+`backend/engine/vendor/README.md`.
 
 **Validation:** re-ran the same "same script through both backends"
 comparison with the patched `femmcli`, across three structurally different
@@ -110,9 +111,9 @@ Every self- and mutual-inductance/ESR term now matches real FEMM under Wine
 to machine precision. The single-turn spike case was re-checked too (no
 regression - that path never touched the buggy branch).
 
-### 4. Wired into `engine.py` and the webapp
+### 4. Wired into `engine/core.py` and the webapp
 
-Once the fix was validated, `engine.py`/`femm_service.py` were switched to
+Once the fix was validated, `engine/core.py`/`femm_service.py` were switched to
 build a Lua script via `xfemm_backend.LuaScript` and run it through the
 patched `femmcli`, instead of live `femm.mi_*`/COM calls. Verified with a
 real end-to-end run through the actual running webapp (`POST /runs/new` →
@@ -143,13 +144,19 @@ results and no cross-talk between the concurrent temp directories.
 
 ## Rolling back
 
-`legacy/wine_backend/` still holds the original, unmodified
-`engine.py`/`femm_service.py`. Restoring the Wine backend is a two-line `cp`:
+The original, unmodified `engine.py`/`femm_service.py` used to sit in `legacy/wine_backend/`. That folder
+was removed from the working tree on 2026-09-18 but is still in git history (commit `321b8d7`), so restoring the
+Wine backend is a two-line `git show`:
 
 ```
-cp legacy/wine_backend/engine.py coil_simulation/engine.py
-cp legacy/wine_backend/femm_service.py coil_simulation/services/femm_service.py
+git show 321b8d7:legacy/wine_backend/engine.py > backend/engine/core.py
+git show 321b8d7:legacy/wine_backend/femm_service.py > backend/engine/services/femm_service.py
 ```
+
+The archived `engine.py` predates the `engine/` + `agent/` package layout and still uses the old flat
+imports, so after copying it fix three lines in `engine/core.py`: `from services import femm_service`
+→ `from engine.services import femm_service`, `from models.result import SimResult` →
+`from engine.models.result import SimResult`, and `from constants import (` → `from engine.constants import (`.
 
 (`job_runner.py`'s worker-pool change is backend-agnostic and doesn't need
 reverting - it would just mean multiple Wine processes fighting over one
@@ -193,7 +200,7 @@ Roughly in order of how much they'd bite:
   every iteration with the current design.
 - **Maintenance coupling.** The Lua generator (`xfemm_backend.py`) is a
   hand-maintained mirror of `femm_service.py`'s `mi_*` call surface. Any new
-  geometry feature added to `femm_service.py`/`engine.py` needs a matching
+  geometry feature added to `femm_service.py`/`engine/core.py` needs a matching
   Lua port, or it'll silently do nothing (or crash) under the xfemm path.
   This is exactly the class of bug that bit mutual inductance - a mismatch
   that isn't a syntax error, just wrong physics.

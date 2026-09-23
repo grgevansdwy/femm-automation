@@ -13,14 +13,14 @@ that happen to attack the same problem from two directions:
 
 ```
 femm_automation/
-├── femm_coil_simulation/   ← "Noel's repo": the mature, large, script-driven FEMM WPT simulator
+├── femm_backend/   ← "Noel's repo": the mature, large, script-driven FEMM WPT simulator
 └── genki/                  ← "Genki's repo": lab/bench tooling + a cleaner, smaller FEMM rewrite
 ```
 
 Neither directory currently contains a `.git` folder — they are working copies, not live clones.
 There is no `README`, no `requirements.txt`, no `pyproject.toml`, and no test suite anywhere in
-`femm_coil_simulation`. The only prose documentation in the whole tree is
-`femm_coil_simulation/HOW-TO.md`.
+`femm_backend`. The only prose documentation in the whole tree is
+`femm_backend/HOW-TO.md`.
 
 ### The engineering problem being solved
 
@@ -63,7 +63,7 @@ invoked to find the maximum power point. Ferrite and shield **block losses** and
 
 ### The two repos, contrasted
 
-| | `femm_coil_simulation` (Noel) | `genki` (Genki) |
+| | `femm_backend` (Noel) | `genki` (Genki) |
 |---|---|---|
 | Scope | Full 3-coil WPT system, end to end | Small focused sims + bench/lab tooling |
 | Style | One 1300-line top-level script, module-level globals | Dataclasses, `argparse`, `logging`, `__main__` guards |
@@ -81,7 +81,7 @@ side-effecting script**. Section 5 lists the specific obstacles.
 
 ---
 
-## 2. `femm_coil_simulation/` — the primary simulator
+## 2. `femm_backend/` — the primary simulator
 
 ### 2.1 Documentation
 
@@ -399,7 +399,7 @@ Concrete, file-specific obstacles, ordered by how much they block automation:
    around it.
 9. **Circular import** between `femm_model` and `coil_configs` — will bite as soon as import
    order changes (which a GUI's import graph will do).
-10. **Repo hygiene.** No dependency manifest in `femm_coil_simulation`; `.gitignore` doesn't cover
+10. **Repo hygiene.** No dependency manifest in `femm_backend`; `.gitignore` doesn't cover
     `*.ans`/`*.fem`/`results/`, so ~33 MB of solver output and a stray `tmp.ans` sit in the tree; a
     broken `coilbot` symlink; a filename beginning with `-`; no tests, so there is no way to verify a
     refactor preserved the physics.
