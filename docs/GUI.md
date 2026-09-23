@@ -1,6 +1,6 @@
 ---
 owns: frontend/**
-last-verified: 2026-09-22
+last-verified: 2026-09-23
 ---
 
 # GUI: the desktop app
@@ -92,7 +92,12 @@ Three files in `screen_agent/`, each with one job — the mechanics they render 
 turns, search rounds, scoring) belong to `Agent.md`:
 
 - **`agent_panel.py`** — owns `AgentPanelState`: the chat, and which of the other two
-  views to show (live progress / finished summary / history).
+  views to show (live progress / finished summary / history). It also gates planning on the
+  baseline: if a baseline solve failed (the 5 mm one started on picking a config, or any of
+  a finalized plan's distances), `planning_blocked` disables the chat input and Start
+  Search and shows a fixed notice with the solver's error and a **Retry solve** button
+  (`retry_baseline()` re-queues only the failed solves). No LLM turn is involved. It stops
+  applying once the search has started, so follow-up questions stay available.
 - **`agent_candidate_card.py`** — the shared renderer for one round/candidate (geometry +
   result tables + reasoning) and the finished-search summary. Used by *both* the live
   view and history replay so they can never visually drift apart — deliberately its own

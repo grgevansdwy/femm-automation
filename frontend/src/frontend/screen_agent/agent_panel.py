@@ -96,6 +96,35 @@ class AgentPanelState:
         otherwise land in the next conversation."""
         return self.run_state is not None or self.interview_runner.busy
 
+    @property
+    def baseline_error(self) -> str | None:
+        """Why the baseline can't be simulated, or None while every solve of it
+        is done or still going. Plain text for the chat's notice. Checked
+        against baseline_runs, so it covers the 5 mm solve started on picking
+        a config and, once a plan is finalized, each of the plan's distances."""
+        for distance in sorted(self.baseline_runs):
+            run = self.baseline_runs[distance]
+            if not isinstance(run, dict) and run.status.value == "failed":
+                return f"Solve failed at {distance:g} mm: {run.error or 'no reason given'}"
+        return None
+
+    @property
+    def planning_blocked(self) -> bool:
+        """True while a plan can't go anywhere because the baseline can't be
+        simulated: the planning chat and Start Search are locked, since every
+        candidate is compared against a baseline that doesn't exist. Not a
+        block once the search has started - by then its own baseline solve
+        already succeeded, and follow-up questions change nothing."""
+        return self.run_state is None and self.baseline_error is not None
+
+    def retry_baseline(self) -> None:
+        """Re-queues every failed baseline solve. A failed solve is never a
+        cache hit, so this really solves again (a crash or timeout can clear;
+        invalid geometry won't, and fails again with the same message)."""
+        for distance, run in list(self.baseline_runs.items()):
+            if not isinstance(run, dict) and run.status.value == "failed":
+                self.baseline_runs[distance] = self._solve_one(distance)
+
     def poll(self) -> None:
         """Called once per frame from main.py, alongside job_runner.poll()."""
         self.interview_runner.poll()
@@ -193,6 +222,8 @@ class AgentPanelState:
                 self.baseline_runs[d] = self._solve_one(d)
 
     def confirm_plan(self) -> None:
+        if self.planning_blocked:
+            return  # the Start Search button is disabled too - this covers any other caller
         self.plan_confirmed = True
         self.search_marker_index = len(self.interview_state.transcript)
 
@@ -228,6 +259,8 @@ class AgentPanelState:
         text = self.chat_input.strip()
         if not text or self.interview_state is None or self.interview_runner.busy:
             return
+        if self.planning_blocked:
+            return  # keeps the typed text - the chat's notice says why
         self.chat_input = ""
         if self.run_state is not None:
             # The search has started: questions only, nothing about the plan
@@ -654,8 +687,10 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     imgui.push_style_var(imgui.StyleVar_.frame_rounding.value, 16.0)
     imgui.push_style_color(imgui.Col_.button.value, _ACCENT_COLOR)
     imgui.push_style_color(imgui.Col_.button_hovered.value, _ACCENT_HOVER_COLOR)
+    imgui.begin_disabled(state.planning_blocked)
     if imgui.button("Start Search", imgui.ImVec2(160, 34)):
         state.confirm_plan()
+    imgui.end_disabled()
     imgui.pop_style_color(2)
     imgui.pop_style_var()
     imgui.same_line()
@@ -692,6 +727,21 @@ def _draw_send_icon(center: imgui.ImVec2, enabled: bool) -> bool:
         imgui.ImVec2(center.x + tri_r, center.y), fg,
     )
     return clicked
+
+
+_BLOCKED_NOTICE_H = 96.0
+
+
+def _draw_baseline_blocked_notice(state: AgentPanelState, avail_width: float, error: str) -> None:
+    """Fixed, code-written message (never the model's) shown in place of a
+    working chat while the baseline can't be simulated."""
+    imgui.push_text_wrap_pos(avail_width)
+    imgui.text_colored(_ERROR_COLOR, "This baseline can't be simulated, so there is nothing to plan against.")
+    imgui.text_wrapped(error)
+    imgui.text_disabled("Fix it in Manual Runs or pick a different baseline, then retry.")
+    imgui.pop_text_wrap_pos()
+    if imgui.button("Retry solve"):
+        state.retry_baseline()
 
 
 def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
@@ -924,12 +974,17 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
               + _PLAN_TABLE_H
               if show_plan else 0.0)
     input_h = _INPUT_HEIGHT  # the send icon is inline now, no separate button row below
-    feed_h = max(avail.y - input_h - plan_h - status_h - 8.0, 60.0)
+    blocked_error = state.baseline_error if state.planning_blocked else None
+    notice_h = _BLOCKED_NOTICE_H if blocked_error else 0.0
+    feed_h = max(avail.y - input_h - plan_h - status_h - notice_h - 8.0, 60.0)
 
     _draw_chat_feed(state, imgui.ImVec2(avail.x, feed_h))
 
     if show_plan:
         _draw_plan_summary(state, avail.x)
+
+    if blocked_error:
+        _draw_baseline_blocked_notice(state, avail.x, blocked_error)
 
     if running:
         # The "running..." status, pinned where it's always visible - the
@@ -940,7 +995,7 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
 
     # Only disabled while a reply is being generated - the chat stays open
     # through the search and after it (follow-up questions, agent/femm_agent/services/followup.py).
-    imgui.begin_disabled(state.interview_runner.busy)
+    imgui.begin_disabled(state.interview_runner.busy or blocked_error is not None)
     _draw_chat_input_bar(state, avail.x)
     imgui.end_disabled()
 

@@ -232,3 +232,94 @@ def test_off_topic_display_does_not_need_a_tool_outcome_at_all():
         {"id": "c1", "type": "function", "function": {"name": "flag_off_topic", "arguments": {}}}]}
     assert _message_display_text(msg, tool_outcome=None).startswith("That's outside what I can help with here")
     print("  ok  the off-topic redirect shows immediately, before any tool_outcome has landed")
+
+
+# --- a baseline that can't be simulated blocks planning ----------------------------------------
+# No LLM and no FEMM: a fake job runner whose solves fail (or succeed) on demand.
+
+class _FakeJob:
+    def __init__(self, status, error=None, result=None):
+        class _Status:
+            value = status
+        self.status, self.error, self.result = _Status(), error, result
+
+
+class _FakeSolver:
+    """find_cached always misses; submit() returns a job that already failed
+    (fail=True) or is still solving (fail=False). `submitted` counts the solves queued."""
+    def __init__(self, fail=True):
+        self.fail, self.submitted = fail, 0
+
+    def find_cached(self, coilset, distance):
+        return None
+
+    def touch(self, row):
+        return row
+
+    def submit(self, coilset, config_id, config_name, distance):
+        self.submitted += 1
+        return _FakeJob("failed", error="turn space of 1 is less than total turn width of 5") if self.fail \
+            else _FakeJob("running")
+
+
+def _finalized_state(solver):
+    """A state with a baseline picked and a finalized (not yet confirmed) plan, no LLM involved."""
+    import dataclasses
+    from agent.input_chat.models.spec import AgentSpec
+
+    state = AgentPanelState(solver)
+    state.select_config("base_coil")
+    state.interview_state.spec = dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[5.0, 10.0])
+    state.interview_state.finalized = True
+    return state
+
+
+def test_a_failed_baseline_solve_blocks_the_chat_and_start_search():
+    state = _finalized_state(_FakeSolver(fail=True))
+    state.poll()  # syncs the baseline solves to the plan's distances
+    assert state.baseline_error and "Solve failed at 5 mm" in state.baseline_error
+    assert state.planning_blocked
+
+    state.chat_input = "reduce the ESR"
+    state.send_chat()
+    assert state.chat_input == "reduce the ESR", "a blocked send keeps the typed text"
+    assert not state.interview_state.transcript and not state.interview_runner.busy, "no LLM turn is started"
+
+    state.confirm_plan()
+    assert not state.plan_confirmed
+    for _ in range(3):
+        state.poll()
+    assert state.run_state is None, "the search must not start on a baseline that can't be solved"
+
+
+def test_a_baseline_that_is_still_solving_does_not_block():
+    state = _finalized_state(_FakeSolver(fail=False))
+    state.poll()
+    assert state.baseline_error is None and not state.planning_blocked
+    state.confirm_plan()
+    assert state.plan_confirmed
+
+
+def test_retry_baseline_requeues_only_the_failed_solves_and_unblocks_when_they_succeed():
+    solver = _FakeSolver(fail=True)
+    state = _finalized_state(solver)
+    state.poll()
+    queued = solver.submitted
+    assert state.planning_blocked
+
+    solver.fail = False  # e.g. a crash or timeout that has since cleared
+    state.retry_baseline()
+    assert solver.submitted == queued + len(state.baseline_runs), "every failed distance is solved again"
+    assert not state.planning_blocked and state.baseline_error is None
+
+    state.retry_baseline()  # nothing failed now - must not queue anything
+    assert solver.submitted == queued + len(state.baseline_runs)
+
+
+def test_a_failed_baseline_does_not_block_once_the_search_has_started():
+    state = _finalized_state(_FakeSolver(fail=False))
+    state.poll()
+    state.run_state = object()  # a search is (pretend) under way
+    state.baseline_runs[5.0] = _FakeJob("failed", error="late failure")
+    assert state.baseline_error is not None
+    assert not state.planning_blocked, "follow-up questions stay available during and after a search"
