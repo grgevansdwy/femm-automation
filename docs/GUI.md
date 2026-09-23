@@ -147,6 +147,12 @@ Roughly in order of how much they'd bite:
 - **The coil diagram is a proportional schematic, not a literal render.** Turn count,
   trace width, winding path, and sub-mm per-layer offsets aren't modeled even with both
   views — a reasonable place to add fidelity later if needed.
+- **The AI Agent chat feed renders plain text (`imgui.text_colored`), not markdown** —
+  a model reply containing `**bold**`/`_italics_`/backtick spans shows the literal
+  formatting marks, not styled text. The three system prompts
+  (`backend/agent/settings/prompts/*.txt`) are told to write plain text for exactly
+  this reason; a new prompt or a new reply path needs the same instruction, since
+  nothing on the rendering side strips or interprets markdown.
 - **Import only accepts the exact round-trip shape `export_record()` writes** — a bare or
   hand-built coilset dict is rejected with a specific reason, not silently guessed at.
   Every failure mode (non-JSON, valid-JSON-but-wrong-shape, missing/extra/wrong-typed

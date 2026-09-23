@@ -93,6 +93,14 @@ block, a stray blank line, a placeholder silently dropped. Render it with
 real input through the actual code path (this project: rendering each
 prompt for a real baseline config) before calling an edit done.
 
+**12. Match the output format to what actually renders it - don't assume markdown.**
+If the reply lands in a plain-text widget, formatting marks show up as literal
+characters, not styling. `interview_system.txt` and `followup_system.txt` both
+learned this the hard way: a reply like `**M12**` rendered as literal asterisks
+in the desktop app's chat feed (`imgui.text_colored`, no markdown rendering -
+see `docs/GUI.md` §7), so both now explicitly say plain text only, no
+`**bold**`/`_italics_`/backtick spans/markdown lists.
+
 ## Applying it
 
 When editing one of the three prompts:

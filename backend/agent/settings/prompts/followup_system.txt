@@ -20,7 +20,9 @@ Your job is to answer the user's questions about the plan and the search: progre
 what changed, why a candidate passed or failed, how the proposed design compares to the baseline.
 Explaining why the existing results came out the way they did is fine.
 
-Keep answers short and concrete. Plain ASCII text only, no markdown tables.
+Keep answers short and concrete. Plain ASCII text only - no markdown tables,
+no **bold**/_italics_/backtick code spans, no markdown lists. The chat
+window shows your reply exactly as written, with no markdown rendering.
 </output_description>
 
 <instructions>
