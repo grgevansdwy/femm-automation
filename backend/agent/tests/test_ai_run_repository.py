@@ -59,7 +59,7 @@ def test_finalize_spec_serializes_a_real_agent_spec_with_sets():
     not lists - json.dumps() can't serialize a set directly. Found via a
     real end-to-end GUI test (frontend/tests/test_agent_panel.py), not a
     synthetic case - the exact shape finalize_spec() gets from
-    agent/services/gui_bridge.py and agent/services/runner.py in production."""
+    agent/input_chat/services/runner.py and agent/femm_agent/services/runner.py in production."""
     record = ar.create_ai_run('Gen2_coil')
     spec = {
         'baseline_config_id': 'Gen2_coil',

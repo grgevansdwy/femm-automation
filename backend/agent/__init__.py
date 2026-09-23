@@ -6,8 +6,8 @@ Layout - two phases, each laid out like engine/ (models/ = plain data and rules,
 services/ = behavior, tests/), which this builds on:
   input_chat/   the interview: a chat turns a request into an AgentSpec
   femm_agent/   the search: proposes candidates and simulates them against that AgentSpec
-Shared by both, at this level: services/ (llm_client, gui_bridge, runner - the GUI
-boundary), repositories/ (ai_run_repository - one run store for both phases), config.py.
+Each phase's services/ also holds its runner.py - the background-thread entry point the GUI
+calls into. Shared by both, at this level: services/ (llm_client), repositories/ (ai_run_repository - one run store for both phases), config.py.
 
 Every submodule here imports backend's own code as top-level packages
 (e.g. `from engine.core import simulate`, `from engine.repositories.coilset_repository

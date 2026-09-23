@@ -16,15 +16,15 @@ from pathlib import Path
 # frontend/job_runner.py is reused as-is for caching/concurrency (agent solves go
 # through the same cache as manual runs) rather than duplicating it - this
 # is the one place agent/ reaches into frontend/, and only for this CLI wrapper.
-# agent/services/runner.py and agent/femm_agent/services/optimize.py never import frontend themselves - they
-# only depend on the duck-typed SolveJobRunner shape (agent/services/runner.py).
+# agent/femm_agent/services/runner.py and agent/femm_agent/services/optimize.py never import frontend themselves - they
+# only depend on the duck-typed SolveJobRunner shape (agent/femm_agent/services/runner.py).
 _GUI_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 if str(_GUI_SRC) not in sys.path:
     sys.path.insert(0, str(_GUI_SRC))
 
 from frontend.job_runner import JobRunner  # noqa: E402
 
-from agent.services.runner import AgentRunner  # noqa: E402
+from agent.femm_agent.services.runner import AgentRunner  # noqa: E402
 from agent.femm_agent.services.scorer import objective_summary, tool_result  # noqa: E402
 from agent.input_chat.models.spec import AgentSpec  # noqa: E402
 from agent.femm_agent.models.state import AgentRunStatus, RoundStatus  # noqa: E402

@@ -42,8 +42,8 @@ background threads the panels poll.
 ## 3. The one boundary that matters: `frontend/` ↔ `backend/agent/`
 
 ```python
-from agent.services.gui_bridge import InterviewRunner
-from agent.services.runner import AgentRunner
+from agent.input_chat.services.runner import InterviewRunner
+from agent.femm_agent.services.runner import AgentRunner
 ```
 
 These two imports, in `screen_agent/agent_panel.py`, are the **entire** surface area
@@ -191,7 +191,7 @@ Roughly in order of how much they'd bite:
 | `files_backup/backup_io.py` | Backup All / Restore All |
 | `tests/*.py` | 38 tests against real code paths (§6) |
 
-**Import rule:** `frontend/` only ever calls into `agent/services/gui_bridge.py` and
-`agent/services/runner.py`, plus `agent.settings` for the Settings screen — it never
+**Import rule:** `frontend/` only ever calls into `agent/input_chat/services/runner.py` and
+`agent/femm_agent/services/runner.py`, plus `agent.settings` for the Settings screen — it never
 reimplements engine or agent logic, and `agent/` never imports back from `frontend/`
 (the one narrow exception, CLI-only, is noted in `Agent.md`).

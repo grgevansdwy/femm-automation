@@ -1,6 +1,6 @@
 """InterviewRunner: runs one interview turn (agent/input_chat/services/interview.py) on a
 background thread and persists each new transcript message as it lands -
-the interview-phase counterpart to agent/services/runner.py's AgentRunner, same
+the interview-phase counterpart to agent/femm_agent/services/runner.py's AgentRunner, same
 pollable/no-lock conventions. frontend/ only ever calls into this (and
 AgentRunner) - it never reimplements orchestration or touches
 agent/input_chat/services/interview.py directly.

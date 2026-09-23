@@ -35,8 +35,8 @@ BASELINE_DISTANCE = 5.0
 
 class AgentPanelState:
     def __init__(self, job_runner) -> None:
-        from agent.services.gui_bridge import InterviewRunner
-        from agent.services.runner import AgentRunner
+        from agent.input_chat.services.runner import InterviewRunner
+        from agent.femm_agent.services.runner import AgentRunner
 
         self.job_runner = job_runner
         self.interview_runner = InterviewRunner()
@@ -203,14 +203,14 @@ class AgentPanelState:
 
         - finished: it stays in History exactly as it is.
         - unfinished (still planning, or searching): it's discarded - the
-          search is cancelled (agent/services/runner.py's AgentRunner.cancel()) and
+          search is cancelled (agent/femm_agent/services/runner.py's AgentRunner.cancel()) and
           its ai_run, conversation included, is deleted. Individual FEMM
           solves that already completed stay in the run cache.
 
         Either way a reply still in flight is thrown away when it lands."""
         if self.interview_state is None:
             return
-        from agent.services.gui_bridge import InterviewRunner
+        from agent.input_chat.services.runner import InterviewRunner
         from agent.repositories.ai_run_repository import delete_ai_run
 
         finished = self.phase == "finished"
@@ -951,7 +951,7 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
 
 def _round_header(r) -> str:
     """"Round 7 [done]", plus which attempt it belongs to once the search has
-    restarted from zero memory (agent/services/runner.py)."""
+    restarted from zero memory (agent/femm_agent/services/runner.py)."""
     header = f"Round {r.round_num} [{r.status.value}]"
     if r.search_attempt > 1:
         header += f" - restart {r.search_attempt - 1}, round {r.attempt_round} of the new attempt"

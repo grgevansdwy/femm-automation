@@ -15,7 +15,7 @@ in FEMM until the goal is met, the round budget runs out, or the model stops.
       running or finished run, but (structurally, via no tools) can never change it.
 - tests/ - this phase's tests.
 
-No GUI or LLM-transport code lives here: agent/services/runner.py runs
+No GUI or LLM-transport code lives here: agent/femm_agent/services/runner.py runs
 optimize_loop() on a background thread for the GUI, and agent/services/llm_client.py
 is the shared HTTP/streaming plumbing every request goes through, interview phase
 included. Storage is shared with the interview phase: agent/repositories/.

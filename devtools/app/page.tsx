@@ -14,7 +14,7 @@ const LAYERS: LayerInfo[] = [
       "Owns a JobRunner: a pool of worker threads that runs simulations without freezing the window.",
       "Caches results, so re-running an identical design at an identical distance is instant.",
       "Draws the coil diagram and result tables; can open any design in the real FEMM program."],
-    talksTo: "Calls the Engine (to simulate and to load/save designs) and the Agent (only through agent/services/gui_bridge.py and runner.py).",
+    talksTo: "Calls the Engine (to simulate and to load/save designs) and the Agent (only through agent/input_chat/services/runner.py and agent/femm_agent/services/runner.py).",
     files: [
       { label: "main.py", href: codeHref("frontend/src/frontend/main.py", "def main"), note: "Entry point: window, toolbar, the two modes." },
       { label: "services/job_runner.py", href: codeHref("frontend/src/frontend/services/job_runner.py", "class JobRunner"), note: "The queue + worker threads + result cache. The only place simulate() is called." },

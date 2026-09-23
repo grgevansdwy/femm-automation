@@ -106,7 +106,7 @@ def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=N
 def wait_for_jobs(jobs: dict, poll_interval=0.05) -> dict:
     """Blocks the CALLING thread until every job in `jobs` is done or
     failed, returning distance -> result dict. Call this from the agent's
-    own background thread (agent/services/runner.py) - never from a GUI render
+    own background thread (agent/femm_agent/services/runner.py) - never from a GUI render
     thread, which must stay non-blocking every frame."""
     results = {}
     for d, job in jobs.items():

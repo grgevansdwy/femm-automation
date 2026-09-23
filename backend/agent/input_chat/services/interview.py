@@ -6,7 +6,7 @@ just with different tools (finalize_spec, flag_off_topic) and a different
 system prompt.
 
 The handoff to the optimize phase is the AgentSpec itself - once
-InterviewState.finalized is True, agent/services/runner.py's AgentRunner.submit()
+InterviewState.finalized is True, agent/femm_agent/services/runner.py's AgentRunner.submit()
 takes state.spec and neither it nor optimize.py need to know a
 conversation ever happened.
 """

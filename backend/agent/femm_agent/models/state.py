@@ -1,5 +1,5 @@
 """Live, pollable state for one agent run - the Job-equivalent for the
-optimize-phase loop. A background thread (agent/services/runner.py's AgentRunner,
+optimize-phase loop. A background thread (agent/femm_agent/services/runner.py's AgentRunner,
 running agent/femm_agent/services/optimize.py's optimize_loop) mutates these objects directly,
 no lock - the same convention frontend/job_runner.py's Job already uses. A
 render thread (or a CLI polling loop) reads them fresh each time, relying

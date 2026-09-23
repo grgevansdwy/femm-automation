@@ -17,7 +17,7 @@ import pytest
 from agent.femm_agent.services import optimize
 from agent.services.llm_client import LLMError
 from agent.input_chat.models.objective import Objective
-from agent.services.runner import AgentRunner
+from agent.femm_agent.services.runner import AgentRunner
 from agent.input_chat.models.spec import AgentSpec
 from agent.repositories.ai_run_repository import get_ai_run, list_messages
 

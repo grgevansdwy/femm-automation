@@ -76,7 +76,7 @@ class AgentRunner:
 
     def submit(self, spec, ai_run_id: str | None = None) -> AgentRunState:
         """`ai_run_id` lets a caller that already created the ai_runs row
-        (agent/services/gui_bridge.py's InterviewRunner, once its interview
+        (agent/input_chat/services/runner.py's InterviewRunner, once its interview
         finalizes) hand it straight to the optimize phase, so both phases
         land under the SAME history row. Without one (e.g. orchestrator.py's
         CLI wrapper, no interview), a fresh row is created here instead -

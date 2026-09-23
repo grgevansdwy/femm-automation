@@ -417,8 +417,8 @@ relying on any of these:
 | `agent/femm_agent/services/outcome.py` | End-of-run report (§8) |
 | `agent/femm_agent/services/followup.py` | Read-only Q&A about a running/finished search (§9) |
 | `agent/services/llm_client.py` | Raw HTTP to the LLM server (§8) |
-| `agent/services/gui_bridge.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |
-| `agent/services/runner.py` | `AgentRunner` — background-thread wrapper around the search loop, for the GUI; runs on its own thread, never the solve pool (Engine.md §6) |
+| `agent/input_chat/services/runner.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |
+| `agent/femm_agent/services/runner.py` | `AgentRunner` — background-thread wrapper around the search loop, for the GUI; runs on its own thread, never the solve pool (Engine.md §6) |
 | `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table |
 | `agent/*/tests/` | Each phase's own tests; `agent/tests/` is cross-phase (LLM client, run store, live reasoning) |
 

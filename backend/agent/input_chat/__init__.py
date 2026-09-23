@@ -15,7 +15,7 @@ structured input the search (agent/femm_agent/) runs against.
   run_interview_turn(), the finalize_spec tool and its validation.
 - tests/ - this phase's tests.
 
-No GUI or LLM-transport code lives here: agent/services/gui_bridge.py runs a turn
+No GUI or LLM-transport code lives here: agent/input_chat/services/runner.py runs a turn
 on a background thread for the GUI, and agent/services/llm_client.py is the
 shared HTTP/streaming plumbing both phases call into. There is no repositories/
 layer either - a run's interview and search rows live in the same two tables, so
