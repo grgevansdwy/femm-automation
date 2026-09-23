@@ -14,7 +14,7 @@ import time
 
 from agent.services.llm_client import LLMError, call_llm
 from agent.femm_agent.services.prompts import system_prompt
-from agent.femm_agent.models.schema import RATIONALE_KEY, build_tools, coerce_delta
+from agent.femm_agent.models.schema import PROPOSE_TOOL_NAME, RATIONALE_KEY, build_tools, coerce_delta
 from agent.femm_agent.services.scorer import (
     Scored, evaluate_async, misses_summary, objective_summary, rank_key, score, tool_result, wait_for_jobs,
 )
@@ -73,12 +73,15 @@ def _ask_for_proposals(state, round_state, send_messages, tools):
     return None
 
 
-def optimize_loop(state, job_runner) -> None:
+def optimize_loop(state, job_runner, on_round_done=None) -> None:
     """One search attempt, from zero memory: nothing from an earlier attempt
     is sent to the model. Rounds are appended to state.rounds with run-wide
     numbering (so a restarted attempt's rounds follow the first attempt's),
     and state.best stays the best across attempts. Raises RoundFailed when a
-    round's AI request fails every try - see AgentRunner._run()."""
+    round's AI request fails every try - see AgentRunner._run().
+
+    `on_round_done(state)`, if given, is called each time a round finishes (however it
+    ended) - AgentRunner uses it to save the rounds so far."""
     spec = state.spec
     baseline = state.baseline_coilset
     fixed_values = spec.variable_spec.fixed_values  # applied to every candidate, see VariableSpec
@@ -106,6 +109,12 @@ def optimize_loop(state, job_runner) -> None:
 
     no_tool_call_streak = 0  # consecutive text-only replies
 
+    def finish_round(round_state):
+        round_state.status = RoundStatus.DONE
+        round_state.done_at = now()
+        if on_round_done is not None:
+            on_round_done(state)
+
     for call_num in range(1, spec.max_tool_calls + 1):
         # Cancellation checkpoints (see AgentRunState.cancelled): here, after
         # the LLM call returns, before a round's solves are queued, and
@@ -127,9 +136,8 @@ def optimize_loop(state, job_runner) -> None:
         try:
             msg = _ask_for_proposals(state, round_state, send_messages, tools)
         except RoundFailed as exc:
-            round_state.status = RoundStatus.DONE
-            round_state.done_at = now()
             round_state.reasoning_text = f"No proposal - every AI try failed. Last: {exc.error.describe()}"
+            finish_round(round_state)
             raise
         if msg is None or state.cancelled:
             return
@@ -150,8 +158,7 @@ def optimize_loop(state, job_runner) -> None:
             # model thinking out loud before continuing. Give it one nudge
             # before treating a second text-only reply in a row as a genuine stop.
             no_tool_call_streak += 1
-            round_state.status = RoundStatus.DONE
-            round_state.done_at = now()
+            finish_round(round_state)
             if no_tool_call_streak >= 2:
                 state.status = AgentRunStatus.STOPPED_BY_MODEL
                 return
@@ -227,8 +234,7 @@ def optimize_loop(state, job_runner) -> None:
                 tool_message["tool_call_id"] = p.tool_call_id
             this_round.append(tool_message)
 
-        round_state.status = RoundStatus.DONE
-        round_state.done_at = now()
+        finish_round(round_state)
         last_round = this_round
 
         # Stop condition #1: goal met (every required objective passed).
@@ -258,14 +264,26 @@ class _Proposal:
 
 def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed) -> _Proposal:
     """Builds and validates one tool call's candidate - everything that can
-    reject it before a FEMM solve is spent on it."""
-    delta = dict(tc["function"]["arguments"])
+    reject it before a FEMM solve is spent on it. Whatever shape the model's call
+    has, this returns a rejected _Proposal (its error is fed back to the model)
+    rather than raising - one malformed call must not cost the round's other
+    candidates, or the run."""
+    function = tc.get("function") or {}
+    raw_args = function.get("arguments")
+    delta = dict(raw_args) if isinstance(raw_args, dict) else {}
     rationale = str(delta.pop(RATIONALE_KEY, "") or "")  # not a CoilSet field - coerce_delta would reject it
     p = _Proposal(tool_call_id=tc.get("id"), delta=delta, rationale=rationale)
     if index >= limit:
         p.over_limit = True
         p.error = (f"not simulated: over the limit of {limit} candidates per round - "
                    "propose it again next round if it's still worth trying")
+        return p
+    if function.get("name") != PROPOSE_TOOL_NAME:
+        p.error = f"unknown tool {function.get('name')!r} - the only tool is {PROPOSE_TOOL_NAME}"
+        return p
+    if not isinstance(raw_args, dict):
+        p.error = (f"{PROPOSE_TOOL_NAME}'s arguments must be a JSON object of field values, "
+                   f"got {type(raw_args).__name__}")
         return p
     try:
         p.delta = coerce_delta(delta, free_fields)  # fix string-typed args before they hit real arithmetic
@@ -276,6 +294,11 @@ def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed) -> 
         audit = audit_changed_fields(baseline, candidate, allowed)
         if audit["unexpected_fields"]:
             raise ValueError(f"candidate changed field(s) outside the allowed set: {sorted(audit['unexpected_fields'])}")
+        # A candidate identical to the baseline is a wasted solve slot (and, when the baseline
+        # already meets the goal, a false "goal met"). With pins the pinned start point is
+        # itself a different design, so an empty delta stays a legitimate proposal then.
+        if not audit["changed_fields"]:
+            raise ValueError("this changes nothing from the baseline - change at least one field")
         p.candidate, p.changed_fields = candidate, audit["changed_fields"]
     except Exception as exc:
         p.error = str(exc)

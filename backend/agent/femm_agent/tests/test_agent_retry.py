@@ -170,3 +170,85 @@ def test_restart_during_the_retry_pause_discards_the_run(monkeypatch):
         time.sleep(0.02)
     assert state.id not in runner.runs, "the pause ends as soon as the run is cancelled"
     assert len(sent) == 1 and list_messages(state.id, phase="optimize") == []
+
+
+# --- rounds are saved as they finish, not only at the end -----------------------------------------
+
+def _seqs(run_id):
+    return [m["seq"] for m in list_messages(run_id, phase="optimize")]
+
+
+def test_each_round_is_saved_as_soon_as_it_finishes(monkeypatch):
+    from agent.repositories.ai_run_repository import create_ai_run
+    from agent.femm_agent.models.state import AgentRunState
+    from engine.repositories.coilset_repository import get_coilset
+
+    state = AgentRunState(id=create_ai_run("base_coil")["id"], spec=_spec(rounds=3, cut_pct=50.0),
+                          baseline_coilset=get_coilset("base_coil"))
+    saved_when_asked = []
+    replies = iter([_propose(71.0), _propose(70.0), _propose(69.0)])
+
+    def fake_call_llm(messages, tools, **kwargs):
+        saved_when_asked.append(_seqs(state.id))  # what's in the database as each round's request goes out
+        return next(replies)
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    optimize.optimize_loop(state, _Jobs(), on_round_done=AgentRunner._save_rounds)
+
+    assert saved_when_asked == [[], [1], [1, 2]], "round N is already in the database when round N+1 starts"
+    assert _seqs(state.id) == [1, 2, 3] and state.rounds_persisted == 3
+
+
+def test_the_final_save_writes_only_what_is_still_missing(monkeypatch):
+    state, _ = _run(monkeypatch, [_propose(71.0), _propose(70.0)], _spec(rounds=2, cut_pct=50.0))
+    assert _seqs(state.id) == [1, 2], "each round exactly once, however many times it was offered"
+    AgentRunner._persist(state)  # a second full save must add nothing
+    assert _seqs(state.id) == [1, 2]
+
+
+def test_a_database_error_while_saving_a_round_does_not_stop_the_search(monkeypatch):
+    from agent.repositories import ai_run_repository as repo
+
+    real, calls = repo.append_message, []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "append_message", flaky)
+    state, _ = _run(monkeypatch, [_propose(71.0), _propose(70.0)], _spec(rounds=2, cut_pct=50.0))
+
+    assert state.status.value == "budget_exhausted", "the failed save did not fail the run"
+    assert _seqs(state.id) == [1, 2], "the end-of-run save picked up the round the hook missed"
+
+
+def test_nothing_is_saved_for_a_discarded_run_even_if_restart_lands_mid_write(monkeypatch):
+    from agent.repositories import ai_run_repository as repo
+    from agent.repositories.ai_run_repository import create_ai_run
+    from agent.femm_agent.models.state import AgentRunState, RoundState, RoundStatus
+    from engine.repositories.coilset_repository import get_coilset
+
+    def fresh():
+        s = AgentRunState(id=create_ai_run("base_coil")["id"], spec=_spec(), baseline_coilset=get_coilset("base_coil"))
+        s.rounds.append(RoundState(round_num=1, status=RoundStatus.DONE))
+        return s
+
+    cancelled = fresh()
+    cancelled.cancelled = True
+    AgentRunner._save_rounds(cancelled)
+    assert _seqs(cancelled.id) == [], "a run already discarded writes nothing"
+
+    # Restart arrives after the cancel check but before/while the row is written: the row lands,
+    # then the writer notices and deletes the run - no orphaned messages, no leftover run row.
+    racing, real = fresh(), repo.append_message
+
+    def write_then_cancel(*args, **kwargs):
+        row = real(*args, **kwargs)
+        racing.cancelled = True
+        return row
+
+    monkeypatch.setattr(repo, "append_message", write_then_cancel)
+    AgentRunner._save_rounds(racing)
+    assert _seqs(racing.id) == [] and get_ai_run(racing.id) is None

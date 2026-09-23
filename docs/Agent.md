@@ -182,8 +182,13 @@ loop, up to spec.max_tool_calls rounds:
      spec.candidates_per_round `propose_coilset` calls, or with plain text
   3. plain text twice in a row = the model considers itself done -> STOPPED_BY_MODEL
      (once = could just be it thinking out loud -> nudged to continue)
-  4. PREPARE each tool call (instant, no FEMM): fix argument types (coerce_delta),
-     reject anything outside the allowed field set, build "baseline + this delta"
+  4. PREPARE each tool call (instant, no FEMM): reject a call that isn't `propose_coilset`,
+     whose arguments aren't a JSON object, or that changes nothing from the baseline; fix
+     argument types (coerce_delta); reject anything outside the allowed field set; build
+     "baseline + this delta". A malformed call is only ever rejected on its own (its reason
+     goes back to the model) - it never raises, so it can't cost the round's other
+     candidates or the run. (An empty delta is allowed when the user pinned values: the
+     pinned start point is then a different design from the baseline.)
   5. LAUNCH every valid candidate's solves at once, across every distance -- this is
      what lets several candidates solve in parallel (Engine.md §6); an identical
      candidate proposed twice in one round is solved only once
@@ -201,6 +206,15 @@ server itself rejects any field outside it — a second, structural layer under 
 showed and why this change should help) is the only reasoning a human watching the search
 actually reads; it was made required after the model sometimes skipped it when it was
 optional.
+
+**Saving a run.** Interview messages are saved as each turn lands; search rounds are saved
+as each one finishes (`AgentRunner._save_rounds`, called through `optimize_loop`'s
+`on_round_done` hook wherever a round ends), so a crash mid-search loses at most the round
+in flight. `AgentRunState.rounds_persisted` keeps each round to one write, a database error
+in the hook is swallowed (the end-of-run `_persist()` writes whatever was missed, then the
+final status and best candidate), and a Restart landing mid-write makes the writer delete
+the run again rather than leave orphan rows. History still hides `running` runs, so the
+rounds of a run that crashed are stored but not shown.
 
 ### Scoring
 
@@ -271,6 +285,12 @@ copies:
   which lever moves which objective (a mini sensitivity study).
 - **Bracket** — try the same lever in both directions.
 - **Exploit** — once a lever clearly helps, try 2–3 step sizes of it.
+
+The cap is a ceiling, not a target: the prompt says to propose only as many candidates as
+there are distinct, useful ideas — several probes early, fewer once the levers are known or
+a candidate is close to the goal — because every extra candidate costs a full simulation
+and stays in the model's context. (It used to say "use all N unless confident fewer would
+help", which made the cap the default.)
 
 Each result is matched back to its proposal via `tool_call_id`, the same mechanism the
 OpenAI tool-calling format uses to pair several results with several calls in one reply.

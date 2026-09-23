@@ -49,6 +49,10 @@ def coerce_delta(delta: dict, free_fields: dict) -> dict:
 # which would otherwise reject it as an unknown field.
 RATIONALE_KEY = "rationale"
 
+# The name of the one tool the search model is offered (build_tools()) - optimize.py
+# rejects a call to anything else.
+PROPOSE_TOOL_NAME = "propose_coilset"
+
 
 def build_tools(free_fields: dict, baseline_config_id: str) -> list[dict]:
     """The only action the model can take: propose a delta shaped like
@@ -67,7 +71,7 @@ def build_tools(free_fields: dict, baseline_config_id: str) -> list[dict]:
     return [{
         "type": "function",
         "function": {
-            "name": "propose_coilset",
+            "name": PROPOSE_TOOL_NAME,
             "description": (
                 f"Propose one candidate coilset as a delta from the {baseline_config_id} baseline. "
                 "Call it several times in one reply to try several candidates at once - they're "

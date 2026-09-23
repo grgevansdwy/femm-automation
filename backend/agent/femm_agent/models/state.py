@@ -99,3 +99,7 @@ class AgentRunState:
     # Why the run ended, in plain words (agent/femm_agent/services/outcome.py) - set when it
     # finishes, for every outcome except a met goal.
     outcome_report: str | None = None
+    # How many of `rounds` (from the start, in order) are already saved to the
+    # database - AgentRunner saves each round as it finishes, so a crash mid-search
+    # loses at most the round in flight, and never saves a round twice.
+    rounds_persisted: int = 0

@@ -131,7 +131,7 @@ class AgentRunner:
             for attempt in range(1, search_attempts + 1):
                 state.search_attempt = attempt
                 try:
-                    optimize_loop(state, run_jobs)
+                    optimize_loop(state, run_jobs, on_round_done=self._save_rounds)
                     break
                 except RoundFailed:
                     if attempt == search_attempts or state.cancelled:
@@ -153,17 +153,29 @@ class AgentRunner:
                 self._persist(state)
 
     @staticmethod
-    def _persist(state: AgentRunState) -> None:
-        """Writes the whole run - every round, the final status, and the
-        best candidate if any - in one shot at the end, not incrementally
-        per round. Nothing currently needs to read a still-running agent
-        run's progress from disk (the GUI polls `state` directly in
-        memory), so incremental persistence would add concurrency surface
-        for no consumer - see docs/gui_agent_plan.md's milestone 3 notes."""
-        from agent.femm_agent.services.scorer import tool_result
-        from agent.repositories.ai_run_repository import append_message, update_run_status
+    def _save_rounds(state: AgentRunState) -> None:
+        """optimize_loop's on_round_done hook: saves the finished rounds not yet
+        in the database, so a crash mid-search loses at most the round in flight.
+        Never raises - a database hiccup here must not kill the search; _persist()
+        below saves whatever this missed. A round is written at most once
+        (state.rounds_persisted), and nothing is written for a run the user
+        has since discarded."""
+        try:
+            AgentRunner._write_rounds(state, only_finished=True)
+        except Exception:
+            pass
 
-        for round_state in state.rounds:
+    @staticmethod
+    def _write_rounds(state: AgentRunState, only_finished: bool) -> None:
+        from agent.femm_agent.models.state import RoundStatus
+        from agent.repositories.ai_run_repository import append_message, delete_ai_run
+
+        if state.cancelled:
+            return
+        while state.rounds_persisted < len(state.rounds):
+            round_state = state.rounds[state.rounds_persisted]
+            if only_finished and round_state.status != RoundStatus.DONE:
+                break
             payload = {
                 "candidates": [dataclasses.asdict(c) for c in round_state.candidates],
                 "search_attempt": round_state.search_attempt,
@@ -178,6 +190,23 @@ class AgentRunner:
                 state.id, phase="optimize", seq=round_state.round_num, role="assistant",
                 round_num=round_state.round_num, content=round_state.reasoning_text, payload=payload,
             )
+            state.rounds_persisted += 1
+            if state.cancelled:
+                # Restart landed while this row was being written: cancel() only stops
+                # NEW writes, and the GUI's delete may have run before this insert - so
+                # delete again (a no-op if it already ran) rather than leave orphan rows.
+                delete_ai_run(state.id)
+                return
+
+    @staticmethod
+    def _persist(state: AgentRunState) -> None:
+        """The end of the run: saves any round not already saved by _save_rounds()
+        (all of them if that never ran), then the final status and the best
+        candidate if any."""
+        from agent.femm_agent.services.scorer import tool_result
+        from agent.repositories.ai_run_repository import update_run_status
+
+        AgentRunner._write_rounds(state, only_finished=False)
 
         best = state.best
         best_dict = dataclasses.asdict(best.coilset) if best is not None else None

@@ -13,8 +13,14 @@ other, so make each one test a different idea:
   which lever moves which objective
 - bracket: try the same lever in both directions (a bit up, a bit down)
 - exploit: once a lever clearly helps, try two or three step sizes of it
-Use all {{n_candidates}} unless you're confident fewer would be more useful right now - e.g.
-one or two careful refinements when a candidate is already very close to the goal.
+{{n_candidates}} is a ceiling, not a target. Propose only as many candidates as you have
+distinct, useful ideas for right now - never add one just to fill the limit. Every
+extra candidate costs a full simulation, and its result stays in your context for the
+rest of the search. As a guide:
+- early on, with little known, several probes that each move a different lever are worth it;
+- once you know which levers matter, propose fewer, better-aimed candidates;
+- when a candidate is already close to the goal, one or two careful refinements beat five
+  variations of the same idea.
 Never propose the same candidate twice.
 {{/n_candidates}}
 {{^n_candidates}}

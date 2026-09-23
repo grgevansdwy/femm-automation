@@ -235,3 +235,74 @@ def test_candidate_solves_get_a_real_permanently_resolvable_config(monkeypatch):
     assert "agent" not in saved["name"].lower() and "candidate" not in saved["name"].lower(), \
         f"name must look like an ordinary manual config, not {saved['name']!r}"
     print("  ok  a candidate's solve is saved as a real, resolvable config with a plain name")
+
+
+# --- malformed / useless proposals are rejected per candidate, never crash the run ---------------
+
+def _prepare_one(function, **kwargs):
+    from agent.input_chat.models.variables import VariableSpec, allowed_fields, free_fields_for
+    baseline = get_coilset("base_coil")
+    variable_spec = kwargs.pop("variable_spec", VariableSpec())
+    fixed = variable_spec.fixed_values
+    return optimize._prepare({"id": "x", "function": function}, 0, 5, baseline, fixed,
+                             free_fields_for(baseline, variable_spec), allowed_fields(baseline, variable_spec))
+
+
+def test_prepare_rejects_arguments_that_are_not_a_json_object():
+    for bad in (None, [], ["a", "b"], "oops", 5):
+        p = _prepare_one({"name": "propose_coilset", "arguments": bad})
+        assert p.error and "must be a JSON object" in p.error, bad
+        assert p.jobs is None and p.candidate is None
+
+
+def test_prepare_rejects_a_call_to_any_other_tool():
+    p = _prepare_one({"name": "delete_everything", "arguments": {"rationale": "x", "num_loop_turns": 2}})
+    assert "unknown tool 'delete_everything'" in p.error and "propose_coilset" in p.error
+    p = _prepare_one({"arguments": {"rationale": "x", "num_loop_turns": 2}})  # no name at all
+    assert "unknown tool" in p.error
+
+
+def test_prepare_rejects_a_proposal_that_changes_nothing():
+    baseline = get_coilset("base_coil")
+    assert "changes nothing" in _prepare_one({"name": "propose_coilset", "arguments": {"rationale": "x"}}).error
+    same = {"tank_center_r": baseline.tank_center_r, "rationale": "x"}  # "changed" to the value it already has
+    assert "changes nothing" in _prepare_one({"name": "propose_coilset", "arguments": same}).error
+    ok = _prepare_one({"name": "propose_coilset", "arguments": {"tank_center_r": baseline.tank_center_r + 1, "rationale": "x"}})
+    assert ok.error is None and ok.candidate is not None
+
+
+def test_an_empty_proposal_is_allowed_when_pins_make_the_start_point_a_different_design():
+    from agent.input_chat.models.variables import VariableSpec
+    baseline = get_coilset("base_coil")
+    pinned = VariableSpec(fixed_values={"tank_center_r": baseline.tank_center_r + 1})
+    p = _prepare_one({"name": "propose_coilset", "arguments": {"rationale": "just the pinned design"}}, variable_spec=pinned)
+    assert p.error is None
+
+
+def test_a_malformed_call_costs_only_its_own_candidate_and_the_run_carries_on(monkeypatch):
+    baseline = get_coilset("base_coil")
+    spec = dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[10.0], max_tool_calls=1,
+                               candidates_per_round=4,
+                               objectives=[Objective(metric="tank_esr", kind="reduce", tolerance_pct=50.0)])
+    state = AgentRunState(id="r2", spec=spec, baseline_coilset=baseline)
+    jobs = _FakeJobRunner()
+    sent = []
+    batch = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "b1", "type": "function", "function": {"name": "propose_coilset", "arguments": None}},
+        {"id": "b2", "type": "function", "function": {"name": "other_tool", "arguments": {"tank_center_r": 70.0}}},
+        _tool_call("b3", rationale="nothing"),
+        _tool_call("b4", tank_center_r=70.0, rationale="the one good one"),
+    ]}
+
+    def fake_call_llm(messages, tools, **kwargs):
+        sent.append(messages)
+        return batch
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    optimize.optimize_loop(state, jobs)  # must not raise
+
+    candidates = state.rounds[0].candidates
+    assert [c.valid for c in candidates] == [False, False, False, True]
+    assert state.best is not None and state.best.coilset.tank_center_r == 70.0
+    assert state.status == AgentRunStatus.BUDGET_EXHAUSTED
+    print("  ok  malformed calls are rejected one by one and the run carries on")
