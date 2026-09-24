@@ -192,8 +192,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
             key = json.dumps(p.candidate_dict, sort_keys=True, default=str)
             try:
                 if key not in launched:
-                    launched[key] = evaluate_async(p.candidate, spec.distances, job_runner,
-                                                    cloned_from=spec.baseline_config_id)
+                    launched[key] = evaluate_async(p.candidate, spec.distances, job_runner)
                 p.jobs = launched[key]
             except Exception as exc:
                 p.error = str(exc)

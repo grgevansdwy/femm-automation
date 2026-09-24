@@ -303,8 +303,9 @@ def run_geometry(row: dict, job_runner: JobRunner) -> tuple[dict | None, bool]:
 
     A job still resident in this session's JobRunner carries the exact
     CoilSet object that was submitted, so that one is always exact. A row read
-    back from the database doesn't: the `runs` table stores the config's id
-    and a hash of the geometry, not the geometry itself, so this rebuilds it
+    back from the database carries its own `coilset` unless it predates that
+    column; for those the `runs` table has only the config's id and a hash
+    of the geometry, so this rebuilds it
     from that config as it stands TODAY and re-derives the hash to check. A
     mismatch means the config was edited (or replaced) since the run - the
     geometry is still worth opening, but it is no longer what produced the
@@ -314,6 +315,8 @@ def run_geometry(row: dict, job_runner: JobRunner) -> tuple[dict | None, bool]:
     job = job_runner.jobs.get(row["run_id"])
     if job is not None:
         return dataclasses.asdict(job.coilset), True
+    if row.get("coilset"):  # the run stored its own geometry - always exact, needs no config
+        return row["coilset"], True
 
     from engine.repositories.coilset_repository import get_coilset
 

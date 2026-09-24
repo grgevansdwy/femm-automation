@@ -37,6 +37,7 @@ class _Job:
 class _FakeJobRunner:
     def __init__(self, fail_tank_center_r=None):
         self.events = []
+        self.identities = []  # (config_id, config_name) of each submit
         self._fail = fail_tank_center_r
 
     def find_cached(self, coilset, distance):
@@ -47,6 +48,7 @@ class _FakeJobRunner:
 
     def submit(self, coilset, config_id, config_name, distance):
         self.events.append(("submit", coilset.tank_center_r))
+        self.identities.append((config_id, config_name))
         if coilset.tank_center_r == self._fail:
             return _Job(self.events, error="femmcli crashed")
         # A smaller tank lowers tank ESR a little - not enough to meet the goal.
@@ -196,13 +198,13 @@ def test_round_reasoning_text_updates_live_as_the_reply_streams_in(monkeypatch):
     print("  ok  round_state.reasoning_text streams live via call_llm's on_update, before the round finishes")
 
 
-def test_candidate_solves_get_a_real_permanently_resolvable_config(monkeypatch):
-    """Regression test: a candidate's config_id must be a real row in the
-    configs table - not the old "agent" placeholder - so its run stays
-    openable in FEMM even after the in-memory Job is gone (the bug from the
-    "this run's config no longer exists" report). Also checks the name
-    carries no "agent"/"candidate" wording, so it reads like an ordinary
-    manually-created config."""
+def test_candidate_solves_are_runs_only_never_saved_as_configs(monkeypatch):
+    """An agent candidate is recorded as a run (which stores its own
+    geometry) and must NOT create a row in the configs table - the config
+    list holds only configs a person made. Its run name tells candidates
+    apart: "<baseline name> [AI <hash>]"."""
+    from engine.repositories.coilset_repository import list_configs
+
     baseline = get_coilset("base_coil")
     spec = dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[10.0], max_tool_calls=1,
                                candidates_per_round=1,
@@ -215,26 +217,17 @@ def test_candidate_solves_get_a_real_permanently_resolvable_config(monkeypatch):
 
     monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
     job_runner = _FakeJobRunner()
+    configs_before = {c["id"] for c in list_configs()}
     optimize.optimize_loop(state, job_runner)
 
-    submitted = [e for e in job_runner.events if e[0] == "submit"]
-    assert submitted, "the candidate must have actually been solved (not a cache hit)"
+    assert state.rounds[0].candidates[0].valid, "the candidate must have scored successfully"
+    assert {c["id"] for c in list_configs()} == configs_before, "a candidate must not create a config"
 
-    candidate = state.rounds[0].candidates[0]
-    assert candidate.valid, "the candidate must have scored successfully"
-
-    # The fake job runner doesn't hand back a config_id/config_name directly,
-    # so recover it the way runs_panel.py's run_geometry() does once a Job's
-    # in-memory object is gone: resolve straight from the configs table.
-    from engine.repositories.coilset_repository import get_config, list_configs
-
-    matches = [c for c in list_configs() if c["coilset"]["tank_center_r"] == 70.0 and c["id"] != "base_coil"]
-    assert matches, "the candidate must have been saved as a real config row"
-    saved = matches[0]
-    assert get_config(saved["id"]) is not None, "must resolve by id, exactly like a manual run's config"
-    assert "agent" not in saved["name"].lower() and "candidate" not in saved["name"].lower(), \
-        f"name must look like an ordinary manual config, not {saved['name']!r}"
-    print("  ok  a candidate's solve is saved as a real, resolvable config with a plain name")
+    baseline_identity, candidate_identity = job_runner.identities[0], job_runner.identities[-1]
+    assert baseline_identity[0] == "base_coil", "the baseline's own run keeps its real config id"
+    config_id, name = candidate_identity
+    assert config_id is None and name.startswith(f"{baseline.config_name} [AI "), candidate_identity
+    print("  ok  a candidate's solve is a run only, named '<baseline> [AI <hash>]', with no config created")
 
 
 # --- malformed / useless proposals are rejected per candidate, never crash the run ---------------

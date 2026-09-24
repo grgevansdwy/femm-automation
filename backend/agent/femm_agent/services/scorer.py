@@ -2,6 +2,8 @@
 left to the LLM's judgment."""
 
 import dataclasses
+import hashlib
+import json
 import time
 
 from agent.input_chat.models.objective import Objective, is_per_distance, margin
@@ -69,7 +71,14 @@ def design_values(coilset) -> dict:
     return {**dataclasses.asdict(coilset), **coil_diameters(coilset)}
 
 
-def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=None, cloned_from=None):
+def _candidate_name(coilset) -> str:
+    fields = dataclasses.asdict(coilset)
+    base = fields.pop("config_name", None) or "candidate"
+    digest = hashlib.sha256(json.dumps(fields, sort_keys=True, default=str).encode()).hexdigest()[:6]
+    return f"{base} [AI {digest}]"
+
+
+def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=None):
     """Kicks off one solve per distance - never blocks. Each is either a
     cache hit (job_runner.find_cached()/touch(), already resolved, a plain
     dict) or a fresh job_runner.submit() (a live Job, resolved later by
@@ -78,27 +87,19 @@ def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=N
     simulate() directly.
 
     config_id/config_name: pass the coilset's own already-saved identity
-    (e.g. the baseline's config id/name) when `coilset` is already a real
-    row in the configs table. Left as None (the default) for a brand-new
-    candidate that's never been saved anywhere - the first time an actual
-    solve is needed (not a cache hit), it's saved as a real, permanently
-    resolvable config via coilset_repository.save_config(), named by
-    dedupe_name() from coilset.config_name, and every later distance in this
-    same call reuses that same id/name. This is what makes an agent
-    candidate's run open in FEMM exactly like a manually-created config,
-    forever - not just while its Job is still resident in memory."""
+    (the baseline's config id/name) when `coilset` is a real row in the
+    configs table. Left as None for an agent candidate: it is recorded as a
+    run only (the run stores its own geometry, see runs.coilset_json), never
+    as a config, so the config list holds only configs a person made. Its
+    runs are named "<baseline name> [AI <hash>]" so candidates are told apart."""
     jobs = {}
     for d in distances:
         cached = job_runner.find_cached(coilset, d)
         if cached is not None:
             jobs[d] = job_runner.touch(cached)
             continue
-        if config_id is None:
-            from engine.repositories.coilset_repository import dedupe_name, save_config
-
-            config_name = dedupe_name(coilset.config_name)
-            coilset = dataclasses.replace(coilset, config_name=config_name)
-            config_id = save_config(coilset, name=config_name, cloned_from=cloned_from)["id"]
+        if config_id is None and config_name is None:
+            config_name = _candidate_name(coilset)
         jobs[d] = job_runner.submit(coilset, config_id=config_id, config_name=config_name, distance=d)
     return jobs
 

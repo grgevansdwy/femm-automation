@@ -1,6 +1,6 @@
 ---
 owns: backend/engine/**, backend/conftest.py, backend/data/**, frontend/src/frontend/services/job_runner.py
-last-verified: 2026-09-22
+last-verified: 2026-09-24
 ---
 
 # Engine: physics, the FEMM/xfemm backend, and running solves
@@ -279,7 +279,7 @@ machines). `backend/engine/repositories/`:
 |---|---|
 | `db.py` | The connection helper + the engine's own tables. Foreign keys are deliberately OFF (SQLite default) — links between tables (e.g. `runs.config_id` → `configs.id`) are documented, not enforced. |
 | `coilset_repository.py` | CRUD for saved designs (`configs` table). Built-in configs are editable but not deletable by default (the GUI bypasses that guard on explicit user request — see `GUI.md`). |
-| `run_result_repository.py` | CRUD for manual-run results (`runs` table) — every solve, cached and historical. |
+| `run_result_repository.py` | CRUD for run results (`runs` table) — every solve, cached and historical, manual or an AI-agent candidate. Each row stores the exact geometry it solved (`coilset_json`), so a run never depends on a saved config; `config_id` is NULL for an agent candidate, whose `config_name` is `<baseline> [AI <hash>]`. Databases from before the column existed are migrated on connect (`db.connect()`). Older rows without it fall back to rebuilding from the config. |
 | `constants_repository.py` | Reads `backend/data/constants.json`: fixed test-rig values shared by every run — `freq: 6.78e6`, FEMM group tags, per-coil probe-current targets, backplane size. |
 
 The agent's own tables (`ai_runs`, `ai_run_messages`) live in a separate repository —

@@ -102,6 +102,7 @@ class Job:
             "error": self.error,
             "result": self.result,
             "coilset_hash": coilset_signature(self.coilset, self.distance),
+            "coilset": dataclasses.asdict(self.coilset),
         }
 
 

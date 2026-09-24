@@ -98,3 +98,25 @@ if __name__ == '__main__':
     test_list_results_sorted_newest_first()
     test_services_do_no_file_io()
     print("all run-result checks passed")
+
+
+def test_run_stores_its_own_coilset_and_old_databases_are_migrated():
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # A database created before runs.coilset_json existed gets the column added on connect.
+        old = sqlite3.connect(Path(tmp) / 'femm_automation.db')
+        old.executescript("CREATE TABLE runs (run_id TEXT PRIMARY KEY, config_id TEXT, config_name TEXT NOT NULL, "
+                          "distance REAL, status TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, "
+                          "finished_at TEXT, last_used_at TEXT, error TEXT, result_json TEXT, coilset_hash TEXT);")
+        old.close()
+
+        r = RunResultRepository(run_id='cand1', root=tmp)
+        r.save_result_json({**make_payload('cand1'), 'config_id': None, 'coilset': {'tank_center_r': 70.0}})
+        loaded = RunResultRepository.load_result('cand1', root=tmp)
+        assert loaded['coilset'] == {'tank_center_r': 70.0} and loaded['config_id'] is None
+
+        # Re-saving without a coilset (e.g. touch() of an old row) keeps the stored one.
+        r.save_result_json(make_payload('cand1'))
+        assert RunResultRepository.load_result('cand1', root=tmp)['coilset'] == {'tank_center_r': 70.0}
+    print("  ok  a run stores its own coilset; an old-schema database is migrated")

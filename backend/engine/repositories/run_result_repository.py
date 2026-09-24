@@ -33,6 +33,8 @@ def _row_to_record(row) -> dict:
     record = {col: row[col] for col in _ROW_COLUMNS}
     record['result'] = json.loads(row['result_json']) if row['result_json'] is not None else None
     record['coilset_hash'] = row['coilset_hash']
+    if row['coilset_json']:
+        record['coilset'] = json.loads(row['coilset_json'])
     return record
 
 
@@ -53,20 +55,22 @@ class RunResultRepository:
         params['run_id'] = payload.get('run_id', self.run_id)
         params['result_json'] = json.dumps(payload.get('result'), default=str) if payload.get('result') is not None else None
         params['coilset_hash'] = payload.get('coilset_hash')
+        params['coilset_json'] = json.dumps(payload['coilset']) if payload.get('coilset') else None
 
         with db.connection(self._db_path) as conn:
             conn.execute(
                 """INSERT INTO runs
                    (run_id, config_id, config_name, distance, status, created_at,
-                    started_at, finished_at, last_used_at, error, result_json, coilset_hash)
+                    started_at, finished_at, last_used_at, error, result_json, coilset_hash, coilset_json)
                    VALUES (:run_id, :config_id, :config_name, :distance, :status, :created_at,
-                           :started_at, :finished_at, :last_used_at, :error, :result_json, :coilset_hash)
+                           :started_at, :finished_at, :last_used_at, :error, :result_json, :coilset_hash, :coilset_json)
                    ON CONFLICT(run_id) DO UPDATE SET
                        config_id=excluded.config_id, config_name=excluded.config_name,
                        distance=excluded.distance, status=excluded.status, created_at=excluded.created_at,
                        started_at=excluded.started_at, finished_at=excluded.finished_at,
                        last_used_at=excluded.last_used_at, error=excluded.error,
-                       result_json=excluded.result_json, coilset_hash=excluded.coilset_hash""",
+                       result_json=excluded.result_json, coilset_hash=excluded.coilset_hash,
+                       coilset_json=COALESCE(excluded.coilset_json, runs.coilset_json)""",
                 params,
             )
             conn.commit()

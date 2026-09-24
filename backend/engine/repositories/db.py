@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS runs (
     last_used_at  TEXT,
     error         TEXT,
     result_json   TEXT,
-    coilset_hash  TEXT
+    coilset_hash  TEXT,
+    coilset_json  TEXT  -- the exact geometry this run solved, so a run never depends on a saved config
 );
 CREATE INDEX IF NOT EXISTS idx_runs_config_id    ON runs (config_id);
 CREATE INDEX IF NOT EXISTS idx_runs_cache_lookup ON runs (status, coilset_hash);
@@ -86,6 +87,9 @@ def connect(db_path=None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(_SCHEMA)
+    if 'coilset_json' not in {r[1] for r in conn.execute("PRAGMA table_info(runs)")}:
+        conn.execute("ALTER TABLE runs ADD COLUMN coilset_json TEXT")
+        conn.commit()
     return conn
 
 
