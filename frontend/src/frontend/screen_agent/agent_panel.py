@@ -682,52 +682,31 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
         imgui.pop_text_wrap_pos()
     imgui.dummy(imgui.ImVec2(0, 4))
     _draw_plan_metrics_table(state)
-    imgui.dummy(imgui.ImVec2(0, 6))
+    imgui.dummy(imgui.ImVec2(0, 10))
 
-    imgui.push_style_var(imgui.StyleVar_.frame_rounding.value, 16.0)
+    # Full-width primary action with the hint centered beneath it, instead of
+    # a fixed-size pill with the hint squeezed onto its right.
+    imgui.push_style_var(imgui.StyleVar_.frame_rounding.value, 10.0)
     imgui.push_style_color(imgui.Col_.button.value, _ACCENT_COLOR)
     imgui.push_style_color(imgui.Col_.button_hovered.value, _ACCENT_HOVER_COLOR)
     imgui.begin_disabled(state.planning_blocked)
-    if imgui.button("Start Search", imgui.ImVec2(160, 34)):
+    if imgui.button("Start Search", imgui.ImVec2(avail_width, _START_BUTTON_H)):
         state.confirm_plan()
     imgui.end_disabled()
     imgui.pop_style_color(2)
     imgui.pop_style_var()
-    imgui.same_line()
-    imgui.text_disabled("or send another message to adjust it first")
+
+    hint = "or send another message to adjust the plan first"
+    hint_w = imgui.calc_text_size(hint).x
+    imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((avail_width - hint_w) / 2.0, 0.0))
+    imgui.text_disabled(hint)
+    imgui.dummy(imgui.ImVec2(0, 6))
+
+
+_START_BUTTON_H = 38.0
 
 
 _INPUT_HEIGHT = 64.0  # a real multi-line text area, not a single-line box
-_SEND_ICON_D = 34.0  # the round send-icon button's diameter
-_SEND_ICON_MARGIN = 8.0
-
-
-def _draw_send_icon(center: imgui.ImVec2, enabled: bool) -> bool:
-    """A round accent send button - a right-pointing triangle drawn with
-    draw-list primitives, not a text glyph: the font atlas is Basic Latin
-    only (see agent_candidate_card.py's _ASCII_SUBSTITUTIONS), so no arrow/
-    paper-plane character is guaranteed to render. Returns True on click."""
-    draw_list = imgui.get_window_draw_list()
-    radius = _SEND_ICON_D / 2.0
-    imgui.set_cursor_screen_pos(imgui.ImVec2(center.x - radius, center.y - radius))
-    imgui.push_id("chat_send_icon")
-    clicked = imgui.invisible_button("##icon", imgui.ImVec2(_SEND_ICON_D, _SEND_ICON_D)) and enabled
-    hovered = imgui.is_item_hovered()
-    imgui.pop_id()
-
-    bg = _ACCENT_HOVER_COLOR if (hovered and enabled) else _ACCENT_COLOR
-    if not enabled:
-        bg = imgui.ImVec4(bg.x, bg.y, bg.z, 0.35)
-    draw_list.add_circle_filled(center, radius, imgui.get_color_u32(bg))
-    tri_r = 6.5
-    fg = imgui.get_color_u32(imgui.ImVec4(1.0, 1.0, 1.0, 1.0 if enabled else 0.5))
-    draw_list.add_triangle_filled(
-        imgui.ImVec2(center.x - tri_r * 0.5, center.y - tri_r),
-        imgui.ImVec2(center.x - tri_r * 0.5, center.y + tri_r),
-        imgui.ImVec2(center.x + tri_r, center.y), fg,
-    )
-    return clicked
-
 
 _BLOCKED_NOTICE_H = 96.0
 
@@ -745,13 +724,12 @@ def _draw_baseline_blocked_notice(state: AgentPanelState, avail_width: float, er
 
 
 def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
-    """One rounded bar: the multi-line text area with the send icon inline
-    on its right, inside the same outline - no separate button row below."""
+    """One rounded bar: the multi-line text area. Enter sends - there is no
+    send button."""
     imgui.push_style_var(imgui.StyleVar_.frame_rounding.value, 12.0)
     imgui.push_style_var(imgui.StyleVar_.frame_padding.value, imgui.ImVec2(14.0, 10.0))
 
-    icon_col_w = _SEND_ICON_D + _SEND_ICON_MARGIN * 2.0
-    text_w = max(avail_width - icon_col_w, 80.0)
+    text_w = max(avail_width, 80.0)
 
     # The multi-line widget is its own child window, drawn on top of this
     # window's draw list and filled with the theme's dark, mostly-opaque
@@ -801,13 +779,10 @@ def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
                        imgui.get_color_u32(_ACCENT_COLOR if state.chat_input_active else _INPUT_BORDER_COLOR),
                        12.0, 1.5)
 
-    can_send = bool(state.chat_input.strip())
-    icon_center = imgui.ImVec2(box_pos.x + text_w + icon_col_w / 2.0, box_pos.y + _INPUT_HEIGHT / 2.0)
-    send_clicked = _draw_send_icon(icon_center, can_send)
     imgui.pop_style_var(2)
     imgui.set_cursor_screen_pos(imgui.ImVec2(box_pos.x, box_max.y))
 
-    if (send_clicked and can_send) or submitted_via_enter:
+    if submitted_via_enter:
         state.send_chat()
 
 
@@ -970,10 +945,10 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
     show_plan = state.interview_state.finalized and not state.plan_confirmed
     # Context lines + the fixed-height, independently-scrolling metrics
     # table (_PLAN_TABLE_H) + header/button chrome (~80px).
-    plan_h = (80.0 + len(_plan_context_lines(state.interview_state.spec)) * imgui.get_text_line_height_with_spacing()
+    plan_h = (110.0 + len(_plan_context_lines(state.interview_state.spec)) * imgui.get_text_line_height_with_spacing()
               + _PLAN_TABLE_H
               if show_plan else 0.0)
-    input_h = _INPUT_HEIGHT  # the send icon is inline now, no separate button row below
+    input_h = _INPUT_HEIGHT
     blocked_error = state.baseline_error if state.planning_blocked else None
     notice_h = _BLOCKED_NOTICE_H if blocked_error else 0.0
     feed_h = max(avail.y - input_h - plan_h - status_h - notice_h - 8.0, 60.0)
