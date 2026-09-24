@@ -7,6 +7,9 @@ dependencies = [
     "numpy>=2.5.2",
 ]
 
+[project.scripts]
+femm = "frontend.main:main"
+
 [dependency-groups]
 test = ["pytest"]
 

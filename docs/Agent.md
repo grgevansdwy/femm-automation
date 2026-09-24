@@ -163,9 +163,8 @@ instead of a generic restart.
   touch by itself — the search must not change it unless told to.
 
 The `finalize_spec` tool, the objective vocabulary (`match`/`reduce`/`increase`, per the
-metric's kind), and the interview's system prompt are all rendered live for a real
-baseline design by the devtools app (`devtools/`, if present) — the fastest way to see
-the actual current wording rather than reading the `.txt` template.
+metric's kind), and the interview's system prompt live in `backend/agent/input_chat/` and
+`backend/agent/settings/prompts/interview_system.txt`.
 
 ## 5. Phase 2 — the search loop
 
@@ -370,8 +369,8 @@ code was written against a generic "any OpenAI-compatible endpoint" interface pr
 so this could change without a rewrite — and it has: the actual current default
 (`agent/config.py`) is a **llama.cpp** server on an office GPU box
 (`http://192.168.1.74:8854`), serving `Qwen3.8-Flash-Next-UD-Q4_K_XL`, launched with a
-262,144-token context window. Both are settable via `LLM_API_BASE`/`AGENT_MODEL`
-environment variables or the Settings screen.
+262,144-token context window. Everyone shares that one server. Both are settable via
+`LLM_API_BASE`/`AGENT_MODEL` environment variables or the Settings screen.
 
 ## 12. Design decisions worth knowing (condensed; full trade-off tables in
 `docs/archive/ai_agent_design.md` §5)

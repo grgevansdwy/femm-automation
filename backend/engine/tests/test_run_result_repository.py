@@ -76,11 +76,15 @@ def test_list_results_sorted_newest_first():
 def test_services_do_no_file_io():
     """The invariant this whole reorganisation buys.
 
-    Nothing in services/ may touch the filesystem.
+    Nothing in services/ may touch the filesystem - except the two adapters that
+    exist to do it: xfemm_backend.py (writes femmcli's input script, reads its
+    result file) and femm_launcher.py (writes the model for "Open in FEMM").
     """
     offenders = []
     services = Path(__file__).resolve().parent.parent / 'services'
     for f in sorted(services.glob('*.py')):
+        if f.name in ('xfemm_backend.py', 'femm_launcher.py'):
+            continue
         for i, line in enumerate(f.read_text().split('\n'), 1):
             code = line.split('#')[0]
             if re.search(r'\bopen\(|savefig|mkdir|\.write\(', code):

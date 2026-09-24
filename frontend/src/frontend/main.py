@@ -224,6 +224,9 @@ def _gui(state: AppState) -> None:
 
 
 def main() -> None:
+    from engine.repositories.coilset_repository import seed_starter_configs
+
+    seed_starter_configs()  # first launch: no configs yet -> load the starter designs
     state = AppState()
     immapp.run(
         gui_function=lambda: _gui(state),

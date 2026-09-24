@@ -271,9 +271,11 @@ delete the whole folder.
 
 ## 8. The database (engine-owned tables)
 
-One shared SQLite file, `backend/data/femm_automation.db` (gitignored — a fresh checkout
-starts empty; Backup All/Restore All in the GUI toolbar is how data moves between
-machines). `backend/engine/repositories/`:
+One shared SQLite file, `backend/data/femm_automation.db` (gitignored). A fresh
+checkout starts empty, and at launch the app loads the reference designs from
+`backend/data/starter_configs/*.json` if there are no configs
+(`coilset_repository.seed_starter_configs()`); Backup All/Restore All in the GUI toolbar is
+how data moves between machines. `backend/engine/repositories/`:
 
 | File | Owns |
 |---|---|

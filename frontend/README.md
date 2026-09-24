@@ -26,7 +26,7 @@ root.
 
 ```bash
 uv sync
-uv run --package frontend python frontend/src/frontend/main.py
+uv run femm
 ```
 
 A window titled "FEMM Coil Automation" opens as one fixed dashboard - no
@@ -69,12 +69,13 @@ tabs, everything visible at once:
 
 Configs and runs are both stored in one SQLite database,
 `backend/data/femm_automation.db` (see
-`backend/engine/repositories/db.py`) - not JSON files. Nothing seeds it:
-a fresh checkout starts with a completely empty database (no builtins, no
-history) - the database file itself isn't checked into git (it's binary,
-not diff-friendly), and there's no bootstrap/seed data file either.
+`backend/engine/repositories/db.py`) - not JSON files. The database file isn't
+checked into git (it's binary, not diff-friendly), so a fresh checkout starts
+without one; on launch, if there are no configs, the app loads the 13 reference
+designs from `backend/data/starter_configs/*.json`
+(`coilset_repository.seed_starter_configs()`). Run history starts empty.
 
-To get data onto a fresh checkout, or move it to another machine, use
+To move your data to another machine, use
 **Backup All / Restore All** in the top toolbar - it dumps or restores
 every config + every run as one portable `.json` file. Export/Import (the
 Config Library's buttons, and Run History's) work the same way for a single

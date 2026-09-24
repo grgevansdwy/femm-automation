@@ -1,0 +1,4 @@
+{
+  "defaultProvider": "office-gpu",
+  "defaultModel": "Qwen3.8-Flash-Next-UD-Q4_K_XL"
+}

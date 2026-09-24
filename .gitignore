@@ -14,9 +14,9 @@ tmp.ans
 FEMM_Coil_Automation.ini
 
 # SQLite config/result store - all configs and runs, generated locally, not
-# checked in (binary, not diff-friendly). Nothing seeds it: a fresh checkout
-# starts empty; Backup All / Restore All (frontend/src/frontend/backup_io.py) is how
-# data moves between machines.
+# checked in (binary, not diff-friendly). A fresh checkout gets the
+# reference designs from backend/data/starter_configs/ on first launch; Backup All /
+# Restore All (frontend/src/frontend/files_backup/backup_io.py) moves data between machines.
 backend/data/femm_automation.db
 backend/data/femm_automation.db-wal
 backend/data/femm_automation.db-shm
@@ -33,3 +33,6 @@ backend/data/femm_automation.db-shm
 # on every click, and a solve done by hand in FEMM drops a multi-MB .ans
 # next to them.
 backend/data/femm_models/
+
+# Local-only notes on writing system prompts (kept on disk, not in the repo)
+docs/agent-skills.md

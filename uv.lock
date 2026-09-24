@@ -105,6 +105,12 @@ wheels = [
 name = "femm-automation-workspace"
 version = "0.0.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "frontend" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "frontend", editable = "frontend" }]
 
 [[package]]
 name = "fonttools"

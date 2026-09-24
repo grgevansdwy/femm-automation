@@ -8,15 +8,18 @@
 # record's builtin flag, and delete_config() refuses to remove one unless
 # forced. This module is the one place that touches the `configs` table.
 #
-# There's no seed/bootstrap data file anymore - a fresh database starts
-# completely empty. Backup All / Restore All (frontend/src/frontend/files_backup/backup_io.py) is
-# how configs (and runs) move between machines or get restored after
-# testing something risky.
+# A fresh database starts empty, but the desktop app calls
+# seed_starter_configs() at launch: if there are no configs at all it loads the
+# reference designs in backend/data/starter_configs/*.json, so a new checkout
+# has something to simulate. Backup All / Restore All
+# (frontend/src/frontend/files_backup/backup_io.py) is how configs (and runs)
+# move between machines or get restored after testing something risky.
 # =============================================================================
 import dataclasses
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from engine.models.coilset import CoilSet
 from engine.repositories import db
@@ -161,3 +164,19 @@ def delete_config(config_id, force=False):
     with db.connection() as conn:
         conn.execute('DELETE FROM configs WHERE id = ?', (config_id,))
         conn.commit()
+
+
+STARTER_CONFIGS_DIR = Path(__file__).resolve().parents[2] / 'data' / 'starter_configs'
+
+
+def seed_starter_configs() -> int:
+    """If the database has no configs at all, load every record in
+    STARTER_CONFIGS_DIR (same shape as an exported config) and return how
+    many were loaded; otherwise do nothing and return 0."""
+    if list_configs():
+        return 0
+    loaded = 0
+    for path in sorted(STARTER_CONFIGS_DIR.glob('*.json')):
+        restore_config(json.loads(path.read_text()))
+        loaded += 1
+    return loaded

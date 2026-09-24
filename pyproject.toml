@@ -2,10 +2,13 @@
 name = "femm-automation-workspace"
 version = "0.0.0"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = ["frontend"]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+frontend = { workspace = true }
 
 [tool.uv.workspace]
 members = ["backend", "frontend"]

@@ -16,7 +16,7 @@ docs/
   Engine.md           <- the physics + FEMM/xfemm simulation backend
   GUI.md               <- the Dear ImGui desktop app
   Agent.md             <- the AI search agent (interview + optimize loop)
-  agent-skills.md      <- criteria for writing/editing a system prompt (not project-specific facts)
+  agent-skills.md      <- (local only, git-ignored) criteria for writing/editing a system prompt
   archive/             <- superseded/historical/generated docs, kept for the record
 ```
 
