@@ -1,5 +1,17 @@
 # FEMM Coil Automation
 
+## What this project does
+
+A wireless power link is built from three coils (Loop, Tank and Receive, running at 6.78 MHz), and how well
+it works depends on the exact geometry of each coil: turns, radius, trace width and thickness, layers,
+ferrite and so on. This app runs a physics simulation of a design (a finite-element solve, using the
+open-source xfemm solver, a Linux version of FEMM) and reports the inductance of each coil, the mutual
+inductance between them, the resistance (ESR) and the coupling at a chosen separation distance, so you can
+compare designs without building them. You can run and edit designs by hand in the window, or describe a goal
+in plain English ("keep the coupling, lower the resistance") and an AI agent will ask you a few questions,
+then try many geometry changes on its own, simulating each one, and show you the best design it found next to
+your original.
+
 **You need:** a Linux computer with a desktop (these steps assume Ubuntu or Debian), an internet connection,
 and, for the AI, a connection to the office network.
 
