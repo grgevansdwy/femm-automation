@@ -1,5 +1,5 @@
-# =============================================================================
 # main.py                                                         Noel Hosking
+# =============================================================================
 #
 # Thin CLI entry point. The simulation itself lives in engine/core.py so it can be
 # called from other code (e.g. the web UI) as well as from the shell.
