@@ -33,14 +33,30 @@ export default function (pi: ExtensionAPI) {
     ],
   });
 
-  async function cli(args: string[], signal?: AbortSignal, timeoutMs = 120_000) {
+  // Exact count of simulations run in this pi session (a sweep counts one per value). Models miscount their budget,
+  // so every simulate/sweep result carries the running total.
+  let simulationsUsed = 0;
+  const DEFAULT_BUDGET = 12;
+
+  async function cli(args: string[], signal?: AbortSignal, timeoutMs = 180_000, simulations = 0) {  // timeout > the solver's own 120 s limit, so its error message arrives
     const res = await pi.exec("uv", ["run", "python", "agent_cli.py", ...args], {
       cwd: SIM_DIR,
       signal,
       timeout: timeoutMs,
     });
     // agent_cli prints {"error": ...} on stdout with exit code 1; fall back to stderr for crashes.
-    const text = res.stdout.trim() || res.stderr.trim() || `agent_cli exited with code ${res.code}`;
+    let text = res.stdout.trim() || res.stderr.trim() || `agent_cli exited with code ${res.code}`;
+    if (simulations > 0) {
+      simulationsUsed += simulations;
+      try {
+        const obj = JSON.parse(text);
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          text = JSON.stringify({ ...obj, session_simulations_used: simulationsUsed, default_budget: DEFAULT_BUDGET });
+        }
+      } catch {
+        // not JSON (a crash): leave the text as is
+      }
+    }
     return {
       content: [{ type: "text" as const, text }],
       details: {},
@@ -95,7 +111,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, signal) {
       const args = ["simulate", "--config", params.config_id, ...setArgs(params.overrides)];
       if (params.distance !== undefined) args.push("--distance", String(params.distance));
-      return cli(args, signal);
+      return cli(args, signal, undefined, 1);
     },
   });
 
@@ -103,7 +119,7 @@ export default function (pi: ExtensionAPI) {
     name: "femm_sweep",
     label: "Sweep one parameter",
     description:
-      "Simulate the same config once per value of ONE parameter (2-8 values), other overrides held fixed. Returns every point with `pct_vs_base` " +
+      "Simulate the same config once per value of ONE parameter (2-8 values), other overrides held fixed. Returns a compact `summary` table (quote sweep numbers from it verbatim) and every point with `pct_vs_base` " +
       "(same fields as femm_simulate) plus the baseline. Use it to find a lever's direction and size, to bracket a target, and to check a winner's neighbours " +
       "for solver noise. A point whose solve fails carries its own `error`. Counts as one simulation PER VALUE against your budget; takes ~7 s per value.",
     parameters: Type.Object({
@@ -116,7 +132,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, signal) {
       const args = ["sweep", "--config", params.config_id, "--param", params.param, "--values", params.values.join(","), ...setArgs(params.overrides)];
       if (params.distance !== undefined) args.push("--distance", String(params.distance));
-      return cli(args, signal, 420_000);
+      return cli(args, signal, 420_000, new Set(params.values).size);
     },
   });
 

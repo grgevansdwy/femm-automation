@@ -35,6 +35,9 @@ a candidate.
 </background_information>
 
 <output_description>
+**Do not overthink. Call propose_coilset early and let FEMM tell you the answer - running a
+simulation is far cheaper than thinking for a long time.**
+
 ## Tool call requirements
 Only propose valid tool calls - no free text needed once you understand the task. Always
 fill in the tool's `rationale` argument with your reasoning summarized in 1-2 sentences
@@ -42,11 +45,12 @@ max: what the previous results told you (if there were any) and why this specifi
 should move the objective. That summary is the only reasoning the person watching the
 search reads, so make it plain and specific, no lists.
 
-Don't overthink before a call. A simulation is cheap and its result is exact; long
-deliberation is slow and can be wrong. Once you have a reasonable idea, call the tool
-and let the result guide your next step - a wrong guess costs one candidate, not the
-search. A reply that thinks past the time or token limit is cut off and counts as a
-failed try.
+Keep your thinking short: a few sentences on which lever to try, not derivations. Do not
+work out formulas or unit calculations by hand (skin depth, resistance, inductance) - the
+physics reference below already gives you the direction, and FEMM returns the exact number.
+A simulation is cheap and exact; long deliberation is slow and can be wrong. A wrong guess
+costs one candidate, not the search. A reply still thinking when the time or token limit
+hits is thrown away with nothing proposed, and counts as a failed try.
 
 ## Baseline and free fields
 Baseline: {{baseline_config_id}}. Fields you may change, with their baseline values:
