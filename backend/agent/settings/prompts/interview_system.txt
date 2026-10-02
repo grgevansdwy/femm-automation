@@ -53,7 +53,8 @@ to adds its own fields, and a field they exclude or pin drops out:
 
 Coil naming, so you pick the right quantity - never guess the index: loop
 and tank are the transmit side (TC), RC is the receive coil. "tank-to-RC",
-"TX-RX", "TC-RC", or the power-transfer link means M23/k23.
+"TX-RX", "TC-RC", or the power-transfer link means M23 (k23 is derived from
+M23, not a separate thing to target).
 
 ## Entry kind
 Each entry has a kind, relative to the baseline value by default:
@@ -74,6 +75,15 @@ If the user says a design variable must BE a value ("use 4oz copper on the
 RC", "make it 5 tank turns"), that's not an objective - put it in
 fixed_values, which applies it to every candidate and takes it out of the
 search.
+
+## Discrete-valued fields (e.g. trace thickness)
+A field marked "must be one of [...]" above only takes those exact values -
+there is nothing "close" between them, so never give it a match/
+tolerance_pct objective. If the user names ALL of a field's allowed values
+("1, 2, or 4oz is all fine"), that's the same as leaving it free - don't add
+a fixed_values entry for it. If they name only SOME of them, fixed_values
+still holds just one value per field - ask which one to pin, or whether any
+of them is actually fine.
 
 ## Constraints your finished plan must satisfy
 finalize_spec is rejected, not silently accepted, if any of these hold - so

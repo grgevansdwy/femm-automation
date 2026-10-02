@@ -17,7 +17,9 @@ import json
 
 from agent import config
 from agent.services.llm_client import call_llm
-from agent.input_chat.models.objective import DERIVED_QUANTITIES, KINDS, QUANTITY_GLOSSES, SIM_RESULT_METRICS, Objective, is_per_distance
+from agent.input_chat.models.objective import (
+    DERIVED_QUANTITIES, KINDS, NOT_OBJECTIVE_METRICS, QUANTITY_GLOSSES, SIM_RESULT_METRICS, Objective, is_per_distance,
+)
 from agent.femm_agent.services.scorer import design_values
 from agent.input_chat.models.spec import AgentSpec
 from agent.settings.settings import AgentSettings
@@ -73,9 +75,12 @@ FINALIZE_SPEC_TOOL = [{
                         "type": "object",
                         "properties": {
                             "metric": {
-                                "type": "string", "enum": list(QUANTITY_GLOSSES),
+                                "type": "string", "enum": [q for q in QUANTITY_GLOSSES if q not in NOT_OBJECTIVE_METRICS],
                                 "description": "The quantity: a simulated result, an outer diameter, or a "
-                                                "design variable that is free in this search.",
+                                                "design variable that is free in this search. Coupling "
+                                                "coefficients (k12/k13/k23) aren't offered here - they're "
+                                                "derived from M and L, not independently controllable; set "
+                                                "the objective on the underlying M (and/or L) instead.",
                             },
                             "kind": {"type": "string", "enum": list(KINDS)},
                             "tolerance_pct": {
@@ -167,8 +172,14 @@ def interview_system_prompt(baseline_config_id: str, baseline, settings: AgentSe
     sim_lines = "\n".join(f"  {m}: {QUANTITY_GLOSSES[m]}" for m in SIM_RESULT_METRICS)
     design = design_values(baseline)
     derived_lines = "\n".join(f"  {m}: {QUANTITY_GLOSSES[m]}, baseline {design[m]:.4g}" for m in DERIVED_QUANTITIES)
-    variable_lines = "\n".join(f"  {f}: {QUANTITY_GLOSSES[f]}, baseline {design[f]:g}"
-                               for f in free_fields_for(baseline))
+    def _variable_line(name, schema):
+        # Surfaces a discrete field's allowed values (e.g. trace thickness's enum) - without
+        # this, nothing tells the model such a field only takes a few exact values, not a range.
+        enum = schema.get("enum")
+        allowed = f" - must be one of {enum}" if enum else ""
+        return f"  {name}: {QUANTITY_GLOSSES[name]}, baseline {design[name]:g}{allowed}"
+
+    variable_lines = "\n".join(_variable_line(f, s) for f, s in free_fields_for(baseline).items())
     settings = settings or AgentSettings()
     return render(settings.prompt("interview_system"), {
         "baseline_config_id": baseline_config_id,

@@ -664,7 +664,10 @@ def _draw_plan_metrics_table(state: AgentPanelState) -> None:
             if obj is not None:
                 imgui.text_colored(_ACCENT_COLOR, f"{'Required' if obj.required else 'Preferred'}: {obj.describe()}")
             else:
-                imgui.text_disabled("keep as-is")
+                # Not "keep as-is": nothing in scoring/ranking (or the search prompt) holds
+                # a metric with no objective near baseline - it's simply unconstrained and
+                # free to land wherever the search's other changes happen to put it.
+                imgui.text_disabled("No requirement")
         imgui.end_table()
     imgui.end_child()
 

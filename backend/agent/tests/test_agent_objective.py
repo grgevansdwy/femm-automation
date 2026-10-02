@@ -13,7 +13,7 @@ import random
 
 import pytest
 
-from agent.input_chat.services.interview import _build_spec
+from agent.input_chat.services.interview import _build_spec, _interview_tools
 from agent.input_chat.models.objective import Objective, margin
 from agent.femm_agent.services.prompts import system_prompt
 from agent.femm_agent.services.scorer import coil_diameters, evaluate, rank_key, tool_result
@@ -72,7 +72,7 @@ def test_margin_normalizes_by_tolerance():
     assert margin(esr_cut, -49.5) == pytest.approx(-0.01)
     assert margin(Objective("L_loop", "match", 1.0, target_pct=-10.0), -10.5) == pytest.approx(0.5)
     assert margin(Objective("L_loop", "match", 1.0, target_pct=-10.0), -40.0) < 0, "a target is two-sided"
-    assert margin(Objective("k23", "increase", 2.0), 3.0) == pytest.approx(0.5)
+    assert margin(Objective("M23", "increase", 2.0), 3.0) == pytest.approx(0.5)
     # 0% tolerance normalizes against the 1pp floor instead of dividing by zero
     assert margin(Objective("rc_esr", "reduce", 0.0, required=False), 2.0) == pytest.approx(-2.0)
     print("  ok  margin() is a fraction of tolerance, two-sided for a match target, safe at 0%")
@@ -92,6 +92,28 @@ def test_objective_rejects_bad_entries():
     Objective("M23", "match", 0.0, required=False)  # fine as a preference
     Objective("rc_esr", "reduce", 0.0)              # "don't get worse" is a real requirement
     print("  ok  Objective() rejects unknown metrics/kinds and unpassable shapes")
+
+
+def test_objective_rejects_k_as_a_target_since_its_derived_from_m_and_l():
+    """k12/k13/k23 = M / sqrt(L_a * L_b) (engine/core.py) - not an independent, controllable
+    quantity, so an objective can't target it even though it's a legal metric name elsewhere
+    (QUANTITY_GLOSSES, for display) - see interview.py's finalize_spec for the matching
+    tool-schema-level exclusion."""
+    for k in ("k12", "k13", "k23"):
+        with pytest.raises(ValueError, match="derived from M and L"):
+            Objective(k, "match", 5.0)
+    print("  ok  Objective() rejects k12/k13/k23 as an objective target")
+
+
+def test_finalize_specs_objective_metric_enum_excludes_k():
+    """The model can't even select k12/k13/k23 as an objective's metric in the first place -
+    the tool schema's enum, not just Objective()'s validation, keeps it out."""
+    tools = _interview_tools(max_distances=5)
+    finalize_spec = next(t for t in tools if t["function"]["name"] == "finalize_spec")
+    metric_enum = finalize_spec["function"]["parameters"]["properties"]["objectives"]["items"]["properties"]["metric"]["enum"]
+    assert not {"k12", "k13", "k23"} & set(metric_enum)
+    assert "M23" in metric_enum, "the underlying M is still a legal objective target"
+    print("  ok  finalize_spec's objectives.metric enum excludes k12/k13/k23")
 
 
 def test_goal_met_needs_every_required_objective_at_every_distance():
@@ -124,11 +146,11 @@ def test_tool_result_is_json_safe_even_with_numpy_metrics():
 
     import numpy as np
 
-    spec = AgentSpec(distances=DISTANCES, objectives=[Objective("k12", "match", 5.0), Objective("L_loop", "reduce", 10.0)])
+    spec = AgentSpec(distances=DISTANCES, objectives=[Objective("M12", "match", 5.0), Objective("L_loop", "reduce", 10.0)])
     baseline = get_coilset('base_coil')
     base = _baseline_metrics()
     candidate_metrics = {d: {m: np.float64(v) for m, v in r.items()}
-                         for d, r in _candidate_metrics(base, {"k12": 1.0, "L_loop": -12.0}).items()}
+                         for d, r in _candidate_metrics(base, {"M12": 1.0, "L_loop": -12.0}).items()}
     scored = evaluate(baseline, baseline, base, spec, _CachedRunner(candidate_metrics))
     result = tool_result(scored, spec)
     assert type(result["goal_met"]) is bool

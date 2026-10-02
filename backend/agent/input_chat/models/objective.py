@@ -39,9 +39,9 @@ QUANTITY_GLOSSES = {
     "loop_esr": "loop coil ESR, AC resistance (Ohm)",
     "tank_esr": "tank coil ESR, AC resistance (Ohm)",
     "rc_esr": "RC coil ESR, AC resistance (Ohm)",
-    "k12": "loop <-> tank coupling coefficient",
-    "k13": "loop <-> RC coupling coefficient",
-    "k23": "tank <-> RC coupling coefficient",
+    "k12": "loop <-> tank coupling coefficient (derived from M12 and L_loop/L_tank - not an independent objective target)",
+    "k13": "loop <-> RC coupling coefficient (derived from M13 and L_loop/L_rc - not an independent objective target)",
+    "k23": "tank <-> RC coupling coefficient (derived from M23 and L_tank/L_rc - not an independent objective target)",
     "loop_outer_diameter": "loop coil outer diameter (mm)",
     "tank_outer_diameter": "tank coil outer diameter (mm)",
     "rc_outer_diameter": "RC coil outer diameter (mm)",
@@ -57,6 +57,12 @@ QUANTITY_GLOSSES = {
 #   reduce   - at most target_value
 #   increase - at least target_value
 KINDS = ("match", "reduce", "increase")
+
+# Purely derived from M and the coils' own self-inductance (k = M / sqrt(L_a * L_b),
+# engine/core.py) - not independently controllable or simulated, so it stays in
+# QUANTITY_GLOSSES/SIM_RESULT_METRICS (display, follow-up chat) but can't be an
+# objective's target - see Objective.__post_init__ and interview.py's finalize_spec.
+NOT_OBJECTIVE_METRICS = frozenset({"k12", "k13", "k23"})
 
 # Margins are normalized by the objective's tolerance so objectives at very
 # different natural scales rank fairly against each other. A tolerance below
@@ -83,6 +89,10 @@ class Objective:
             raise ValueError(f"unknown quantity {self.metric!r} - must be a simulated result "
                              f"{list(SIM_RESULT_METRICS)}, a derived value {list(DERIVED_QUANTITIES)}, "
                              "or a design variable (CoilSet field)")
+        if self.metric in NOT_OBJECTIVE_METRICS:
+            raise ValueError(f"{self.metric} is derived from M and L (k = M / sqrt(L_a * L_b)), not "
+                             "independently controllable - set the objective on the underlying M "
+                             "(and/or L) instead")
         if self.kind not in KINDS:
             raise ValueError(f"unknown objective kind {self.kind!r} - must be one of {list(KINDS)}")
         if self.tolerance_pct < 0:
