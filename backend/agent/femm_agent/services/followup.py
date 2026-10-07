@@ -1,6 +1,8 @@
 """The follow-up chat: once the user has started a search, the same chat keeps
 going - "how's it going?" while it runs, "why did tank_esr drop?" after it
-finishes - but it can no longer change anything.
+finishes - but it can no longer change anything. (Searching further with the
+same goal is "continue", which code handles before a message ever gets here -
+AgentRunner.continue_run().)
 
 That lock is structural, not a prompt instruction: the model is called with
 no tools at all, so it has no finalize_spec to re-plan with and no
@@ -24,9 +26,12 @@ from agent.settings.templating import render
 _STATUS_TEXT = {
     AgentRunStatus.RUNNING: "still running",
     AgentRunStatus.GOAL_MET: "finished - goal met",
-    AgentRunStatus.BUDGET_EXHAUSTED: "finished - ran out of rounds without meeting the goal",
+    AgentRunStatus.BUDGET_EXHAUSTED: "finished - reached a budget limit without meeting the goal",
     AgentRunStatus.STOPPED_BY_MODEL: "finished - the optimizer stopped proposing without meeting the goal",
+    AgentRunStatus.STALLED: "finished - stopped early because it was no longer getting closer to the goal",
     AgentRunStatus.FAILED: "finished - failed with an error",
+    AgentRunStatus.INTERRUPTED: "interrupted - the app was closed while it was searching",
+    AgentRunStatus.CANCELLED: "stopped by the user before any design met the goal",
 }
 
 
@@ -52,10 +57,22 @@ def run_context(run_state) -> str:
     rounds = list(run_state.rounds)
     lines = [
         f"Search status: {_STATUS_TEXT.get(run_state.status, run_state.status.value)}.",
-        f"Rounds so far: {len(rounds)} of at most {spec.max_tool_calls}.",
+        f"Rounds so far: {len(rounds)}.",
     ]
+    budget = run_state.budget
+    if budget is not None:
+        lines.append(
+            f"Budget for this search{f' (segment {run_state.segment}, after a continue)' if run_state.segment > 1 else ''}: "
+            f"{budget.rounds_used} of {budget.max_rounds} rounds, {budget.elapsed_s() / 60:.0f} of "
+            f"{budget.time_limit_s / 60:.0f} minutes, {budget.simulations_used} of {budget.max_simulations} simulations used.")
+    verdict = run_state.progress
+    if verdict is not None:
+        lines.append(f"Progress, judged by code: {verdict.verdict} ({verdict.rounds_since_improvement} round(s) since "
+                     f"the last real improvement; {verdict.repeats} repeated and {verdict.near_copies} near-copy proposals).")
+        if verdict.untried_fields:
+            lines.append(f"Fields the search may change but hasn't yet: {', '.join(verdict.untried_fields)}")
     if run_state.outcome_report:
-        lines.append(f"Why the goal wasn't met:\n{run_state.outcome_report}")
+        lines.append(f"How the search ended (report written by code):\n{run_state.outcome_report}")
     if run_state.status == AgentRunStatus.RUNNING and rounds:
         current = rounds[-1]
         lines.append(f"Round {current.round_num} is currently: {current.status.value} "

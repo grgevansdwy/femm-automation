@@ -102,7 +102,7 @@ def test_a_round_queues_every_solve_before_waiting_and_isolates_failures(monkeyp
     tool_messages = [m for m in sent[1] if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in tool_messages] == ["c1", "c2", "c3", "c4", "c5"]
     assert json.loads(tool_messages[0]["content"])["valid"] is True
-    assert state.status == AgentRunStatus.BUDGET_EXHAUSTED
+    assert state.stop_reason == "rounds"
     print("  ok  a batch queues all its solves first, isolates failures, and tags results with tool_call_id")
 
 
@@ -297,5 +297,5 @@ def test_a_malformed_call_costs_only_its_own_candidate_and_the_run_carries_on(mo
     candidates = state.rounds[0].candidates
     assert [c.valid for c in candidates] == [False, False, False, True]
     assert state.best is not None and state.best.coilset.tank_center_r == 70.0
-    assert state.status == AgentRunStatus.BUDGET_EXHAUSTED
+    assert state.stop_reason == "rounds"
     print("  ok  malformed calls are rejected one by one and the run carries on")

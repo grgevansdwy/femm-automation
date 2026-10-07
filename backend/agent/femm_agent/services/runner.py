@@ -24,7 +24,7 @@ from typing import Protocol
 
 from agent.femm_agent.services.optimize import RoundFailed, optimize_loop
 from agent.femm_agent.services.outcome import outcome_report
-from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, now
+from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, Budget, now, status_for
 
 
 def _git_commit() -> str | None:
@@ -54,16 +54,17 @@ class SolveJobRunner(Protocol):
 
 class _RunJobs:
     """Wraps the shared job runner for one agent run, remembering every job
-    it submits so AgentRunner.cancel() can drop that run's still-queued
-    solves (and only that run's). A job submitted after cancellation - the
+    it submits so AgentRunner.stop() can drop that run's still-queued
+    solves (and only that run's). A job submitted after a stop - the
     loop racing past its last checkpoint - is dropped straight away."""
 
     def __init__(self, job_runner: SolveJobRunner, state: AgentRunState) -> None:
         self._inner = job_runner
         self._state = state
         self.jobs: list = []
-        # Counted for the run log and report only - nothing is limited by them yet.
-        # Both include the baseline's own solves.
+        # What the run actually cost, for the run log and report: both include
+        # the baseline's own solves. The limit is counted separately, baseline
+        # free, on state.Budget (scorer.evaluate_async).
         self.simulations = 0  # fresh solves submitted (one candidate at one distance)
         self.cache_hits = 0
 
@@ -84,16 +85,21 @@ class _RunJobs:
             self._inner.cancel(job.id)
         return job
 
+    def cancel(self, job_id) -> bool:
+        return self._inner.cancel(job_id)
+
     def cancel_queued(self) -> None:
         for job in list(self.jobs):
             self._inner.cancel(job.id)
 
 
 class AgentRunner:
-    def __init__(self, job_runner: SolveJobRunner) -> None:
+    def __init__(self, job_runner: SolveJobRunner, clock=time.monotonic) -> None:
         self.runs: dict[str, AgentRunState] = {}
         self._job_runner = job_runner
         self._run_jobs: dict[str, _RunJobs] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._clock = clock  # what each search's Budget reads time from (a test passes its own)
 
     def submit(self, spec, ai_run_id: str | None = None) -> AgentRunState:
         """`ai_run_id` lets a caller that already created the ai_runs row
@@ -112,10 +118,45 @@ class AgentRunner:
         # run, since its config can be edited or deleted later.
         transition(ai_run_id, "running", started_at=now().isoformat(), baseline_coilset=dataclasses.asdict(baseline))
         from agent.services.run_log import RunLog
-        state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline, log=RunLog(ai_run_id))
+        state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline, log=RunLog(ai_run_id),
+                              budget=Budget.for_spec(spec, self._clock))
         self.runs[state.id] = state
+        self._start_thread(state)
+        return state
+
+    def _start_thread(self, state: AgentRunState) -> None:
         self._run_jobs[state.id] = _RunJobs(self._job_runner, state)
-        threading.Thread(target=self._run, args=(state.id,), daemon=True).start()
+        thread = threading.Thread(target=self._run, args=(state.id,), daemon=True)
+        self._threads[state.id] = thread
+        thread.start()
+
+    def continue_run(self, run_id: str) -> AgentRunState:
+        """ "continue": searches on from where a finished search stopped, as a
+        new segment of the same run - a fresh budget (the run's own settings),
+        the same memory (everything tried so far), rounds appended after the
+        existing ones, candidates still compared with the original baseline.
+        Raises ValueError if that run isn't here or is still searching."""
+        from agent.repositories.ai_run_repository import transition
+        state = self.runs.get(run_id)
+        if state is None:
+            raise ValueError(f"no search {run_id!r} in this session to continue")
+        if state.status == AgentRunStatus.RUNNING:
+            raise ValueError("this search is still running")
+        thread = self._threads.get(run_id)
+        if thread is not None:
+            thread.join(timeout=30)  # the finished segment's last save
+            if thread.is_alive():
+                raise ValueError("this search is still finishing - try again in a moment")
+        transition(run_id, "running")
+        state.segment += 1
+        state.segment_start_round = len(state.rounds)
+        state.budget = Budget.for_spec(state.spec, self._clock)
+        state.search_attempt = 1
+        state.cancelled = False
+        state.stalled_notice_sent = False
+        state.stop_reason = state.finished_at = state.outcome_report = state.error = None
+        state.status = AgentRunStatus.RUNNING
+        self._start_thread(state)
         return state
 
     def poll(self) -> None:
@@ -125,13 +166,14 @@ class AgentRunner:
         frontend/job_runner.py's JobRunner.poll()."""
         pass
 
-    def cancel(self, run_id: str) -> None:
-        """Discards a running search: flags it so optimize_loop stops at its
-        next checkpoint and _run() skips persisting it, and drops its FEMM
-        solves that haven't started yet. Solves already running finish and
-        land in the run cache like any other solve. Returns immediately -
-        the background thread may still be waiting on an LLM reply or a
-        solve, whose result is thrown away when it arrives."""
+    def stop(self, run_id: str) -> None:
+        """Asks a running search to stop: flags it so optimize_loop ends at its
+        next checkpoint, and drops its FEMM solves that haven't started yet.
+        Solves already running finish and land in the run cache like any
+        other solve. Returns immediately - the background thread may still be
+        waiting on an LLM reply (which is aborted) or a solve. The run is
+        kept: its finished rounds, its best design, and an ending of
+        'cancelled' (or 'goal_met' if a design already met the goal)."""
         state = self.runs.get(run_id)
         if state is None:
             return
@@ -140,14 +182,16 @@ class AgentRunner:
         if run_jobs is not None:
             run_jobs.cancel_queued()
 
+    cancel = stop  # the name other callers know it by
+
     def _run(self, run_id: str) -> None:
-        """Runs the search, restarting it from zero memory when a round's AI
-        request fails every try (optimize.RoundFailed), up to settings.search_attempts
-        attempts in total. Earlier attempts' rounds stay in state.rounds (and
-        History) and state.best stays the best across attempts; only what
-        the model is sent starts over. Whatever the ending, a plain-language
-        report of why the goal wasn't met is left in state.outcome_report and
-        state.error (agent/femm_agent/services/outcome.py)."""
+        """Runs one search segment to its end. When a round's AI request
+        fails every try (optimize.RoundFailed) the search resumes - same
+        memory, same budget still counting - until settings.search_attempts
+        rounds have failed that way. Whatever the ending, the rule that
+        ended it is left in state.stop_reason, the status follows from it
+        (state.status_for), a plain-language report is left in
+        state.outcome_report (agent/femm_agent/services/outcome.py), and the run is saved."""
         state = self.runs[run_id]
         run_jobs = self._run_jobs[run_id]
         search_attempts = state.spec.settings.search_attempts
@@ -155,42 +199,46 @@ class AgentRunner:
         started = time.monotonic()
         self._log_run_start(state)
         try:
-            for attempt in range(1, search_attempts + 1):
-                state.search_attempt = attempt
+            while True:
                 try:
                     optimize_loop(state, run_jobs, on_round_done=self._save_rounds)
                     break
                 except RoundFailed:
-                    if attempt == search_attempts or state.cancelled:
-                        state.status = AgentRunStatus.FAILED
+                    if state.cancelled:
+                        state.stop_reason = "user_stopped"
+                    elif state.search_attempt >= search_attempts:
+                        state.stop_reason = "llm_failed"
+                    else:
+                        state.stop_reason = state.budget.exhausted()
+                    if state.stop_reason is not None:
                         break
-                    # Start over from zero memory - see optimize_loop().
+                    state.search_attempt += 1  # resume: everything tried so far is still in memory
         except Exception as exc:
             internal_error = repr(exc)
-            state.status = AgentRunStatus.FAILED
+            state.stop_reason = "internal_error"
             if state.log is not None:
                 state.log.warning("AgentRunner._run", "the search stopped on an internal error", exc)
         finally:
+            if state.stop_reason is None:  # can't happen unless the loop returned without saying why
+                state.stop_reason = "user_stopped" if state.cancelled else "internal_error"
+            status = status_for(state.stop_reason, state.best is not None and state.best.goal_met)
             state.finished_at = now()
-            if not state.cancelled:
-                state.outcome_report = outcome_report(state, internal_error)
-                state.error = state.outcome_report if state.status == AgentRunStatus.FAILED else None
+            state.budget_history.append(state.budget.as_dict(state.segment))
+            state.outcome_report = outcome_report(state, internal_error, status=status)
+            state.error = state.outcome_report if status == AgentRunStatus.FAILED else None
+            state.status = status  # last: a poller that sees the search finished finds the report already there
             if state.log is not None:
                 state.log.run_end(
-                    status="cancelled" if state.cancelled else state.status.value,
-                    stop_reason=None,  # which rule ended it - recorded from milestone M2
+                    status=status.value, stop_reason=state.stop_reason, segment=state.segment,
                     rounds=len(state.rounds), simulations=run_jobs.simulations, cache_hits=run_jobs.cache_hits,
+                    budget=state.budget_history[-1],
                     llm_failures=len(state.llm_failures), seconds=round(time.monotonic() - started, 1))
-            if state.cancelled:
-                self.runs.pop(run_id, None)
-                self._run_jobs.pop(run_id, None)
-            else:
-                try:
-                    self._persist(state)
-                except Exception as exc:
-                    if state.log is not None:
-                        state.log.warning("AgentRunner._persist", "could not save the finished run", exc)
-                    raise
+            try:
+                self._persist(state)
+            except Exception as exc:
+                if state.log is not None:
+                    state.log.warning("AgentRunner._persist", "could not save the finished run", exc)
+                raise
 
     @staticmethod
     def _log_run_start(state: AgentRunState) -> None:
@@ -205,7 +253,7 @@ class AgentRunner:
             spec = state.spec
             tools = build_tools(free_fields_for(state.baseline_coilset, spec.variable_spec), spec.baseline_config_id)
             state.log.run_start(
-                segment=1, git_commit=_git_commit(), settings=dataclasses.asdict(spec.settings),
+                segment=state.segment, git_commit=_git_commit(), settings=dataclasses.asdict(spec.settings),
                 spec=dataclasses.asdict(spec), baseline_coilset=dataclasses.asdict(state.baseline_coilset),
                 tools=tools)
         except Exception as exc:
@@ -217,8 +265,7 @@ class AgentRunner:
         in the database, so a crash mid-search loses at most the round in flight.
         Never raises - a database hiccup here must not kill the search; _persist()
         below saves whatever this missed. A round is written at most once
-        (state.rounds_persisted), and nothing is written for a run the user
-        has since discarded."""
+        (state.rounds_persisted)."""
         try:
             AgentRunner._write_rounds(state, only_finished=True)
         except Exception as exc:
@@ -228,10 +275,8 @@ class AgentRunner:
     @staticmethod
     def _write_rounds(state: AgentRunState, only_finished: bool) -> None:
         from agent.femm_agent.models.state import RoundStatus
-        from agent.repositories.ai_run_repository import append_message, delete_ai_run
+        from agent.repositories.ai_run_repository import append_message
 
-        if state.cancelled:
-            return
         while state.rounds_persisted < len(state.rounds):
             round_state = state.rounds[state.rounds_persisted]
             if only_finished and round_state.status != RoundStatus.DONE:
@@ -242,6 +287,10 @@ class AgentRunner:
                 "attempt_round": round_state.attempt_round,
                 "llm_failures": round_state.llm_failures,
                 "llm_stats": round_state.llm_stats,
+                "segment": round_state.segment,
+                "no_reply": round_state.no_reply,
+                "verdict": round_state.verdict,
+                "rounds_since_improvement": round_state.rounds_since_improvement,
                 # Same AI-vs-FEMM split the live feed shows, so history can too.
                 "llm_seconds": _seconds_between(round_state.proposing_started_at, round_state.evaluating_started_at),
                 "femm_seconds": _seconds_between(round_state.evaluating_started_at, round_state.done_at),
@@ -251,18 +300,13 @@ class AgentRunner:
                 round_num=round_state.round_num, content=round_state.reasoning_text, payload=payload,
             )
             state.rounds_persisted += 1
-            if state.cancelled:
-                # Restart landed while this row was being written: cancel() only stops
-                # NEW writes, and the GUI's delete may have run before this insert - so
-                # delete again (a no-op if it already ran) rather than leave orphan rows.
-                delete_ai_run(state.id)
-                return
 
     @staticmethod
     def _persist(state: AgentRunState) -> None:
-        """The end of the run: saves any round not already saved by _save_rounds()
-        (all of them if that never ran), then the final status and the best
-        candidate if any."""
+        """The end of a search segment, however it ended (a stop by the user
+        included): saves any round not already saved by _save_rounds() (all of
+        them if that never ran), then the final status, the rule that ended
+        it, what each segment spent, and the best candidate if any."""
         from agent.femm_agent.services.scorer import tool_result
         from agent.repositories.ai_run_repository import transition
 
@@ -273,9 +317,10 @@ class AgentRunner:
         best_round = next((r.round_num for r in state.rounds for c in r.candidates
                            if c.valid and c.candidate_coilset == best_dict), None) if best is not None else None
         transition(
-            # `error` holds the outcome report for any ending but a met goal,
-            # so History can show why (agent/femm_agent/services/outcome.py).
+            # `error` holds the outcome report, so History can show how the
+            # search ended (agent/femm_agent/services/outcome.py).
             state.id, state.status.value, error=state.outcome_report,
+            stop_reason=state.stop_reason, budget=state.budget_history,
             finished_at=state.finished_at.isoformat() if state.finished_at else None,
             best_round=best_round,
             best_coilset=(dataclasses.asdict(best.coilset) if best is not None else None),

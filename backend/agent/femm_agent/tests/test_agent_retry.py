@@ -4,9 +4,12 @@
 # Checks the search's failure handling end to end through AgentRunner, with a
 # scripted fake LLM (no server) and a fake job runner (no FEMM):
 # - a round's AI request is retried once before the round fails,
-# - a failed round restarts the whole search once, from zero memory,
-# - the end-of-run report says why the goal wasn't met (AI server cause,
+# - a failed round makes the search resume, with its memory kept,
+# - a stopped search is kept, not discarded,
+# - the end-of-run report says how the search ended (AI server cause,
 #   budget used up, internal error), and History gets the same report.
+# A script that runs out answers with plain text, so a search that has met
+# its goal ends on the plateau rule (see test_agent_budget.py for the rules).
 #     python3 -m pytest agent/femm_agent/tests/test_agent_retry.py  (run from backend/)
 # =============================================================================
 import dataclasses
@@ -60,7 +63,11 @@ def _timeout():
     return LLMError("no_response", "", elapsed_s=600.0, time_limit_s=600.0)
 
 
-def _spec(rounds=3, cut_pct=10.0):
+def _done():
+    return {"role": "assistant", "content": "Nothing more to try."}
+
+
+def _spec(rounds=10, cut_pct=10.0):
     return dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[10.0], max_tool_calls=rounds,
                                candidates_per_round=1,
                                objectives=[Objective(metric="tank_esr", kind="reduce", tolerance_pct=cut_pct)])
@@ -73,7 +80,7 @@ def _run(monkeypatch, script, spec):
 
     def fake_call_llm(messages, tools, **kwargs):
         sent.append(messages)
-        step = script[len(sent) - 1]
+        step = script[len(sent) - 1] if len(sent) <= len(script) else _done()
         if isinstance(step, Exception):
             raise step
         return step
@@ -91,56 +98,67 @@ def _run(monkeypatch, script, spec):
 def test_one_failed_ai_try_is_retried_within_the_round(monkeypatch):
     state, sent = _run(monkeypatch, [_propose(71.0), _timeout(), _propose(60.0)], _spec())
 
-    assert state.status.value == "goal_met" and state.search_attempt == 1, "no restart needed"
-    assert len(state.rounds) == 2
+    assert state.status.value == "goal_met" and state.search_attempt == 1, "no resume needed"
+    assert (len(state.rounds), state.stop_reason) == (4, "plateau"), "2 proposing rounds, then 2 with nothing better"
     assert [f["ai_try"] for f in state.rounds[1].llm_failures] == [1]
     assert sent[1] == sent[2], "the retry resends the same request"
-    assert state.outcome_report is None
+    assert state.outcome_report.startswith("Goal met:") and state.error is None
     print("  ok  a single failed AI try is retried in the same round")
 
 
-def test_a_failed_round_restarts_the_search_from_zero_memory(monkeypatch):
-    # Attempt 1: round 1 proposes, round 2 fails both tries -> restart.
-    # Attempt 2: round 1 meets the goal.
+def test_a_failed_round_resumes_the_search_with_its_memory_kept(monkeypatch):
+    # Round 1 proposes, round 2 fails both tries -> the search resumes, and round 3 meets the goal.
     state, sent = _run(monkeypatch, [_propose(71.0), _timeout(), _timeout(), _propose(60.0)], _spec())
 
     assert state.status.value == "goal_met" and state.search_attempt == 2
-    assert len(sent[1]) > 2, "attempt 1's second round carried memory of round 1"
-    assert len(sent[3]) == 2, "attempt 2 starts from zero: just the system prompt and the task"
-    assert [(r.round_num, r.search_attempt, r.attempt_round) for r in state.rounds] == [(1, 1, 1), (2, 1, 2), (3, 2, 1)]
-    assert len(state.rounds[1].llm_failures) == 2 and not state.rounds[1].candidates
+    resumed = sent[3]
+    assert [m["role"] for m in resumed] == ["system", "user", "user"], "no raw last round, but the memory is there"
+    assert "'tank_center_r': 71.0" in resumed[2]["content"], "what round 1 tried is still known after the resume"
+    assert [(r.round_num, r.search_attempt, r.attempt_round) for r in state.rounds[:3]] == [(1, 1, 1), (2, 1, 2), (3, 2, 1)]
+    assert len(state.rounds[1].llm_failures) == 2 and not state.rounds[1].candidates and state.rounds[1].no_reply
     assert state.best.coilset.tank_center_r == 60.0
+    assert state.budget.rounds_used == len(state.rounds) == 5, "rounds are counted across the resume, the failed one too"
 
     saved = [m["payload"] for m in list_messages(state.id, phase="optimize")]
-    assert [p["search_attempt"] for p in saved] == [1, 1, 2]
+    assert [p["search_attempt"] for p in saved] == [1, 1, 2, 2, 2]
     assert [f["kind"] for f in saved[1]["llm_failures"]] == ["no_response", "no_response"]
     assert get_ai_run(state.id)["best_round"] == 3, "the round that actually produced the best candidate"
-    print("  ok  a round failing every try restarts the search once, from zero memory")
+    print("  ok  a round failing every try makes the search resume with everything it had tried")
 
 
-def test_failing_again_after_the_restart_reports_why(monkeypatch):
+def test_failing_again_after_the_resume_reports_why(monkeypatch):
     too_slow = LLMError("too_slow", "", elapsed_s=600.0, tokens=9000, time_limit_s=600.0)
     state, _ = _run(monkeypatch, [_propose(71.0), _timeout(), too_slow, _timeout(), _timeout()], _spec())
 
-    assert state.status.value == "failed" and state.search_attempt == 2
+    assert (state.status.value, state.stop_reason, state.search_attempt) == ("failed", "llm_failed", 2)
     report = state.outcome_report
     assert report.startswith("Search failed: the AI server sent nothing back within 600 s")
-    assert "restarted from zero and failed again" in report
+    assert "the search resumed with its memory kept, and it happened again (2 failed rounds)" in report
     assert "attempt 1, round 2, try 2: The AI was still generating" in report
     assert "attempt 2, round 3, try 1: The AI server sent nothing back" in report
     assert "Causes: no_response x3, too_slow x1." in report
     assert "Closest candidate (round 1) still missed: tank_esr" in report
-    assert get_ai_run(state.id)["error"] == report, "History shows the same report"
-    print("  ok  a search that fails after its restart ends with a report of the causes")
+    row = get_ai_run(state.id)
+    assert (row["error"], row["stop_reason"]) == (report, "llm_failed"), "History shows the same report"
+    assert state.error == report
+    print("  ok  a search that fails again after resuming ends with a report of the causes")
+
+
+def test_a_winner_found_before_the_ai_server_was_lost_is_still_the_result(monkeypatch):
+    state, _ = _run(monkeypatch, [_propose(60.0), _timeout(), _timeout(), _timeout(), _timeout()], _spec())
+    assert (state.status.value, state.stop_reason) == ("goal_met", "llm_failed")
+    assert state.best.coilset.tank_center_r == 60.0 and state.error is None
 
 
 def test_budget_exhausted_reports_the_closest_miss(monkeypatch):
     state, _ = _run(monkeypatch, [_propose(71.0), _propose(70.0)], _spec(rounds=2, cut_pct=50.0))
 
-    assert state.status.value == "budget_exhausted"
+    assert (state.status.value, state.stop_reason) == ("budget_exhausted", "rounds")
     report = state.outcome_report
-    assert report.startswith("Goal not met: used every round (2 per attempt)")
+    assert report.startswith("Target not achieved: the search used all 2 rounds (2 rounds, 2 candidates)")
     assert "Closest candidate (round 2) still missed: tank_esr -3.7% (needs >= 50% lower)" in report
+    assert 'reply "continue"' in report, "round 2 got closer by more than noise: still improving at the limit"
+    assert "impossible" not in report
     assert get_ai_run(state.id)["error"] == report
     print("  ok  running out of rounds reports the closest candidate and what it missed")
 
@@ -149,10 +167,11 @@ def test_an_internal_error_is_not_retried(monkeypatch):
     state, sent = _run(monkeypatch, [_propose(71.0), ValueError("bug in the loop")], _spec())
 
     assert state.status.value == "failed" and state.search_attempt == 1 and len(sent) == 2
+    assert state.stop_reason == "internal_error" and get_ai_run(state.id)["stop_reason"] == "internal_error"
     assert state.outcome_report.startswith("Failed with an internal error (a bug in this app, not the AI server)")
 
 
-def test_restart_during_the_retry_pause_discards_the_run(monkeypatch):
+def test_stopping_during_the_retry_pause_ends_the_search_at_once_and_keeps_the_run(monkeypatch):
     sent = []
 
     def fake_call_llm(messages, tools, **kwargs):
@@ -165,12 +184,38 @@ def test_restart_during_the_retry_pause_discards_the_run(monkeypatch):
     state = runner.submit(_spec())
     while not sent:
         time.sleep(0.01)
-    runner.cancel(state.id)
+    runner.stop(state.id)
     deadline = time.monotonic() + 3
-    while state.id in runner.runs and time.monotonic() < deadline:
+    while get_ai_run(state.id)["status"] == "running" and time.monotonic() < deadline:
         time.sleep(0.02)
-    assert state.id not in runner.runs, "the pause ends as soon as the run is cancelled"
-    assert len(sent) == 1 and list_messages(state.id, phase="optimize") == []
+    row = get_ai_run(state.id)
+    assert (row["status"], row["stop_reason"]) == ("cancelled", "user_stopped"), "the pause ends as soon as it is stopped"
+    assert len(sent) == 1 and _seqs(state.id) == [1], "the run and its one (empty) round are kept"
+    assert state.id in runner.runs and state.outcome_report.startswith("Target not achieved: you stopped the search")
+
+
+def test_a_stopped_search_is_kept_with_its_rounds_and_its_best_design(monkeypatch):
+    sent, runner = [], AgentRunner(_Jobs())
+
+    def fake_call_llm(messages, tools, **kwargs):
+        sent.append(messages)
+        if len(sent) == 2:
+            runner.stop(state.id)  # the user clicks Stop while round 2's request is out
+        return _propose(72.0 - len(sent))
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    state = runner.submit(_spec(cut_pct=50.0))
+    deadline = time.monotonic() + 5
+    while get_ai_run(state.id)["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    row = get_ai_run(state.id)
+    assert (row["status"], row["stop_reason"], row["best_round"]) == ("cancelled", "user_stopped", 1)
+    assert row["best_coilset"]["tank_center_r"] == 71.0 and row["spec"] is not None
+    assert _seqs(state.id) == [1, 2] and len(sent) == 2
+    assert state.rounds[1].candidates[0].error == "not simulated: the search was stopped"
+    assert row["budget"] == [state.budget.as_dict(1)] and row["budget"][0]["rounds_used"] == 2
+    print("  ok  Stop keeps the run: status cancelled, every finished round, the best design so far")
 
 
 # --- rounds are saved as they finish, not only at the end -----------------------------------------
@@ -225,36 +270,6 @@ def test_a_database_error_while_saving_a_round_does_not_stop_the_search(monkeypa
     assert _seqs(state.id) == [1, 2], "the end-of-run save picked up the round the hook missed"
 
 
-def test_nothing_is_saved_for_a_discarded_run_even_if_restart_lands_mid_write(monkeypatch):
-    from agent.repositories import ai_run_repository as repo
-    from agent.repositories.ai_run_repository import create_ai_run
-    from agent.femm_agent.models.state import AgentRunState, RoundState, RoundStatus
-    from engine.repositories.coilset_repository import get_coilset
-
-    def fresh():
-        s = AgentRunState(id=create_ai_run("base_coil")["id"], spec=_spec(), baseline_coilset=get_coilset("base_coil"))
-        s.rounds.append(RoundState(round_num=1, status=RoundStatus.DONE))
-        return s
-
-    cancelled = fresh()
-    cancelled.cancelled = True
-    AgentRunner._save_rounds(cancelled)
-    assert _seqs(cancelled.id) == [], "a run already discarded writes nothing"
-
-    # Restart arrives after the cancel check but before/while the row is written: the row lands,
-    # then the writer notices and deletes the run - no orphaned messages, no leftover run row.
-    racing, real = fresh(), repo.append_message
-
-    def write_then_cancel(*args, **kwargs):
-        row = real(*args, **kwargs)
-        racing.cancelled = True
-        return row
-
-    monkeypatch.setattr(repo, "append_message", write_then_cancel)
-    AgentRunner._save_rounds(racing)
-    assert _seqs(racing.id) == [] and get_ai_run(racing.id) is None
-
-
 # --- the run log (agent/services/run_log.py) ---------------------------------
 
 def _run_logged(monkeypatch, server_script, spec, jobs=None):
@@ -266,7 +281,7 @@ def _run_logged(monkeypatch, server_script, spec, jobs=None):
 
     def fake_request(stream, body, settings, time_limit_s, max_tokens, should_abort, on_update):
         served.append(body)
-        step = server_script[len(served) - 1]
+        step = server_script[len(served) - 1] if len(served) <= len(server_script) else _done()
         if isinstance(step, Exception):
             raise step
         return step
@@ -286,8 +301,8 @@ def test_a_search_leaves_a_log_of_every_request_from_start_to_end(monkeypatch):
     assert state.status.value == "goal_met"
 
     events = read_log(state.log.path)
-    assert [e["event"] for e in events] == ["run_start", "llm_call", "llm_call", "llm_call", "run_end"]
-    start, calls, end = events[0], events[1:4], events[4]
+    assert [e["event"] for e in events] == ["run_start"] + ["llm_call"] * 5 + ["run_end"]
+    start, calls, end = events[0], events[1:4], events[-1]
     assert start["run_id"] == state.id and start["segment"] == 1
     assert start["spec"]["baseline_config_id"] == "base_coil" and start["settings"]["temperature"] == 1.0
     assert start["baseline_coilset"]["tank_center_r"] == 72.688
@@ -305,7 +320,8 @@ def test_a_search_leaves_a_log_of_every_request_from_start_to_end(monkeypatch):
     assert report.rebuild_request(events, 2, ai_try=1) == served[1]
     assert report.rebuild_request(events, 2) == served[2]
 
-    assert (end["status"], end["stop_reason"], end["rounds"]) == ("goal_met", None, 2)
+    assert (end["status"], end["stop_reason"], end["rounds"], end["segment"]) == ("goal_met", "plateau", 4, 1)
+    assert end["budget"]["simulations_used"] == 2, "the budget counts the two candidates, not the baseline"
     # One distance: the baseline and two candidates, none cached by this fake.
     assert (end["simulations"], end["cache_hits"], end["llm_failures"]) == (3, 0, 1)
     print("  ok  a search logs run_start, every AI request (failed tries too) and run_end")
@@ -325,7 +341,7 @@ def test_a_round_that_cannot_be_saved_is_logged_as_a_warning_and_the_search_carr
     state, _ = _run_logged(monkeypatch, [_propose(71.0), _propose(60.0)], _spec())
 
     assert state.status.value == "goal_met"
-    assert len(list_messages(state.id, phase="optimize")) == 2, "the end-of-run save wrote what the hook missed"
+    assert _seqs(state.id) == [1, 2, 3, 4], "the end-of-run save wrote the round the hook missed"
     warnings = [e for e in read_log(state.log.path) if e["event"] == "warning"]
     assert [w["where"] for w in warnings] == ["AgentRunner._save_rounds"]
     assert "RuntimeError: database is locked" in warnings[0]["exception"]

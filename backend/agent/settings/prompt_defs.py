@@ -70,9 +70,10 @@ PROMPT_DEFS = {d.key: d for d in [
 
     PromptDef("followup_system", "Follow up chat",
               "Sent to the AI for the chat after a search has started. It answers questions about the run "
-              "and changes nothing.",
+              "and changes nothing (typing \"continue\" is handled by the app, not by this prompt).",
               {"running": "set while the search is still running, empty once it has finished",
-               "run_data": "the live snapshot of the run: plan, baseline, rounds, best candidate"},
+               "run_data": "the live snapshot of the run: plan, budget used, progress verdict, baseline, rounds, "
+                           "best candidate"},
               required=("run_data",),
               switches=("running",)),
 ]}

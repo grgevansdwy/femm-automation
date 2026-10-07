@@ -79,7 +79,11 @@ def _candidate_name(coilset) -> str:
     return f"{base} [AI {digest}]"
 
 
-def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=None):
+class SimulationLimit(Exception):
+    """A candidate needs more fresh solves than the search's budget has left."""
+
+
+def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=None, budget=None):
     """Kicks off one solve per distance - never blocks. Each is either a
     cache hit (job_runner.find_cached()/touch(), already resolved, a plain
     dict) or a fresh job_runner.submit() (a live Job, resolved later by
@@ -92,12 +96,25 @@ def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=N
     configs table. Left as None for an agent candidate: it is recorded as a
     run only (the run stores its own geometry, see runs.coilset_json), never
     as a config, so the config list holds only configs a person made. Its
-    runs are named "<baseline name> [AI <hash>]" so candidates are told apart."""
+    runs are named "<baseline name> [AI <hash>]" so candidates are told apart.
+
+    `budget` (state.Budget), if given, is charged one simulation per fresh
+    solve; cache hits are free. A candidate is all or nothing: if it needs
+    more fresh solves than the budget has left, nothing is submitted and
+    SimulationLimit is raised. The baseline's own solves pass no budget."""
+    cached = {d: job_runner.find_cached(coilset, d) for d in distances}
+    fresh = sum(1 for d in distances if cached[d] is None)
+    if budget is not None:
+        if fresh > budget.simulations_left():
+            budget.simulation_limit_hit = True
+            raise SimulationLimit(f"needs {fresh} simulation(s), {budget.simulations_left()} left of "
+                                  f"{budget.max_simulations}")
+        budget.simulations_used += fresh
+        budget.cache_hits += len(cached) - fresh
     jobs = {}
     for d in distances:
-        cached = job_runner.find_cached(coilset, d)
-        if cached is not None:
-            jobs[d] = job_runner.touch(cached)
+        if cached[d] is not None:
+            jobs[d] = job_runner.touch(cached[d])
             continue
         if config_id is None and config_name is None:
             config_name = _candidate_name(coilset)
@@ -105,17 +122,23 @@ def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=N
     return jobs
 
 
-def wait_for_jobs(jobs: dict, poll_interval=0.05) -> dict:
+def wait_for_jobs(jobs: dict, poll_interval=0.05, on_wait=None) -> dict:
     """Blocks the CALLING thread until every job in `jobs` is done or
     failed, returning distance -> result dict. Call this from the agent's
     own background thread (agent/femm_agent/services/runner.py) - never from a GUI render
-    thread, which must stay non-blocking every frame."""
+    thread, which must stay non-blocking every frame. `on_wait()`, if given,
+    is called before waiting and on every poll - optimize_loop uses it to drop
+    still-queued solves once the search's time limit has passed."""
     results = {}
+    if on_wait is not None:
+        on_wait()
     for d, job in jobs.items():
         if isinstance(job, dict):  # a cache hit - find_cached()/touch() already resolved it
             results[d] = job["result"]
             continue
         while job.status not in ("done", "failed"):
+            if on_wait is not None:
+                on_wait()
             time.sleep(poll_interval)
         if job.status == "failed":
             raise RuntimeError(job.error or f"solve failed at distance {d}")

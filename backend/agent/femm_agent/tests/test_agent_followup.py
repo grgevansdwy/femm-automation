@@ -64,9 +64,12 @@ def test_run_context_covers_plan_baseline_rounds_and_best():
 def test_prompt_wording_tracks_whether_the_search_is_still_running():
     running = followup.followup_system_prompt(_run_state(AgentRunStatus.RUNNING))
     finished = followup.followup_system_prompt(_run_state())
-    assert "still running" in running and "throws this unfinished search away" in running
+    assert "still running" in running and "it stays in History as cancelled" in running
     assert "has finished" in finished and "this run stays in History" in finished
     assert "BEST CANDIDATE SO FAR" in running and "PROPOSED DESIGN" in finished
+    assert 'single word "continue"' in finished and 'single word "continue"' not in running
+    assert "Stop and keep the best" in running and "Never call a target impossible" in finished
+    assert "{{" not in running + finished
     print("  ok  the follow-up prompt says the right thing about Restart while running vs. finished")
 
 
