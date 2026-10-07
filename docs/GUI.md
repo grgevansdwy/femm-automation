@@ -1,6 +1,6 @@
 ---
 owns: frontend/**
-last-verified: 2026-09-24
+last-verified: 2026-10-07
 ---
 
 # GUI: the desktop app
@@ -113,7 +113,8 @@ view and the finished summary call `draw()` directly.
 ### The Settings screen
 
 `screen_settings/settings_panel.py`, opened from the AI Agent view, edits the agent's
-`AgentSettings`: the three system prompts, the LLM connection (URL, model, limits), and
+`AgentSettings`: the three system prompts, the LLM connection (URL, model, limits, and the sampling
+values sent with every request: temperature, top-p, seed), and
 the search budget (rounds, candidates per round, retries). This is the second — and
 last — `frontend/` ↔ `agent/` touch point (`agent.settings`). Full detail: `Agent.md`.
 

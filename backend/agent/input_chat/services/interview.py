@@ -274,7 +274,8 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
     )
 
 
-def run_interview_turn(state: InterviewState, user_message: str | None = None, should_abort=None) -> None:
+def run_interview_turn(state: InterviewState, user_message: str | None = None, should_abort=None,
+                       log=None) -> None:
     """One exchange, mutated in place - the same in-place-mutation
     convention agent/femm_agent/models/state.py's AgentRunState uses, so a background thread
     can run this while a render thread polls `state`. `user_message=None`
@@ -295,7 +296,7 @@ def run_interview_turn(state: InterviewState, user_message: str | None = None, s
         live-reasoning callback, same error handling. `tools=None` is how a
         reply is forced to be plain text - see the follow-up call below."""
         return call_llm(
-            [system_message] + state.transcript, tools, settings=state.settings, should_abort=should_abort,
+            [system_message] + state.transcript, tools, settings=state.settings, should_abort=should_abort, log=log,
             on_update=lambda content, reasoning: setattr(state, "live_reasoning", reasoning or content),
         )
 

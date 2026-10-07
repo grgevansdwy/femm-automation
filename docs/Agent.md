@@ -1,6 +1,6 @@
 ---
 owns: backend/agent/**
-last-verified: 2026-09-23
+last-verified: 2026-10-07
 ---
 
 # Agent: the AI search agent
@@ -241,6 +241,11 @@ their weakest `reduce`/`increase` margin, then preferences; candidates that brok
 rank by how far outside the band they landed, so there's always a "best attempt" even
 when nothing fully passed.
 
+`points_past_bar()` and `blended_score()` (same file) measure a passing design for the
+report and the benchmark only — percentage points past each required `reduce`/`increase`
+target at the worst distance, and 50% the smallest of those + 50% their average. They do
+not affect ranking or when the search stops.
+
 ## 6. What the model remembers
 
 A chat model has no memory of its own — every request re-sends everything it should
@@ -314,6 +319,31 @@ a stalled-looking round is distinguishable from a genuine hang.
 | Wall-clock time per request (queue + read + generate), enforced even if the server sends nothing | `llm_time_limit_s` (default 900 s) |
 | Reply length, thinking included — a runaway reply that hits this counts as a failed try | `llm_max_tokens` (default 32,000) |
 
+**Sampling is sent explicitly** with every request — `temperature`, `top_p`, `seed`
+(settings of the same names; defaults 1.0 / 0.95 / -1, the office server's own defaults,
+where seed -1 means a new random seed per request). A run therefore doesn't change when
+the server's defaults do. The request also asks for a usage block
+(`stream_options.include_usage`), which is where the prompt and reply token counts come
+from; with llama.cpp's `timings` as the fallback, and none at all if the server sends
+neither. `build_payload()` is the one place the request body is assembled.
+
+**Run log** (`agent/services/run_log.py`) — a developer tool; the app writes it and
+never reads it. One JSON-lines file per run, `backend/data/agent_logs/<ai_run_id>.jsonl`
+(git-ignored), written through the `log` argument of `call_llm()` by all three phases:
+
+| `event` | What it holds |
+|---|---|
+| `run_start` | git commit, the full settings snapshot, the spec, the baseline coilset, the search tool schema |
+| `llm_call` | phase (`interview`/`search`/`followup`), round / search attempt / try, server, model, sampling, limits, SHA-256 of the system prompt and of the tool schema, the **full messages sent**, the **full reply** (reasoning included) or the error (kind, detail, and what had arrived), sizes, token counts, timings |
+| `warning` | where, a message, and the full exception text — the only place a raw exception is written (a round that couldn't be saved, a solve that failed, an internal error) |
+| `run_end` | status, rounds, fresh simulations and cache hits (both include the baseline's own solves), failed AI tries, seconds |
+
+A log write that fails never fails the request: it is reported once on stderr and the run
+carries on. `python -m agent.report` (from `backend/`) summarises runs from the database
+(opened read-only) and these logs — per-run and cross-run tables, `--run ID` for one run
+round by round, and `--run ID --request N` to print round N's exact request body rebuilt
+from the log, ready to re-send.
+
 `LLMError.kind` — `no_response` (time limit hit, server sent nothing — busy or still
 reading the prompt), `too_slow` (tokens were still arriving), `length_limit` (hit the
 token cap), `unreachable`, `http_error`, `bad_reply` (unparseable stream/tool arguments),
@@ -349,7 +379,7 @@ point the user at Restart instead.
 ## 10. Settings — what's editable without touching code
 
 `agent/settings/settings.py::AgentSettings` — the LLM connection (URL, model, time
-limit, token cap), the search budget (max rounds, candidates per round, best-kept
+limit, token cap, and the sampling values `temperature` / `top_p` / `seed` of §8), the search budget (max rounds, candidates per round, best-kept
 count, retry counts, max distances), and the three system prompts, each **one** template
 of plain text with `{{placeholder}}` fills and `{{#name}}...{{/name}}` conditional
 blocks (a batch-size-dependent paragraph, ferrite/metal notes that only appear if those
@@ -419,7 +449,9 @@ relying on any of these:
 | Path | Role |
 |---|---|
 | `agent/config.py` | Default value of every tunable number — what `AgentSettings` starts from |
-| `agent/orchestrator.py`, `__main__.py` | CLI entry (`python -m agent`, from `backend/`) — hardcoded objective, no interview, same `optimize_loop()`/`run_interview_turn()` underneath as the GUI; the one place agent code imports `frontend.job_runner.JobRunner` as its throwaway solver pool |
+| `agent/orchestrator.py`, `__main__.py` | CLI entry (`python -m agent`, from `backend/`) — hardcoded objective, no interview, same `optimize_loop()`/`run_interview_turn()` underneath as the GUI; imports `frontend.services.job_runner.JobRunner` as its throwaway solver pool |
+| `agent/report.py` | Command-line run report from the database and the run logs (§8) |
+| `agent/benchmark.py` | Fixed goals × repeats against the real LLM server; results in `backend/data/benchmark/<label>/`, summary in `docs/summarize_result.md` |
 | `agent/settings/settings.py` | `AgentSettings`, validation, load/save |
 | `agent/settings/prompt_defs.py`, `prompts/*.txt` | The three editable system prompts and their placeholders |
 | `agent/settings/templating.py` | The `{{placeholder}}`/`{{#name}}...{{/name}}` engine |
@@ -436,13 +468,14 @@ relying on any of these:
 | `agent/femm_agent/services/outcome.py` | End-of-run report (§8) |
 | `agent/femm_agent/services/followup.py` | Read-only Q&A about a running/finished search (§9) |
 | `agent/services/llm_client.py` | Raw HTTP to the LLM server (§8) |
+| `agent/services/run_log.py` | `RunLog` — the per-run JSON-lines log of every AI request and warning (§8) |
 | `agent/input_chat/services/runner.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |
 | `agent/femm_agent/services/runner.py` | `AgentRunner` — background-thread wrapper around the search loop, for the GUI; runs on its own thread, never the solve pool (Engine.md §6) |
 | `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table |
 | `agent/*/tests/` | Each phase's own tests; `agent/tests/` is cross-phase (LLM client, run store, live reasoning) |
 
 **Import rule:** `agent/`'s core imports `engine/`, never `frontend/` (the sole
-exception is `orchestrator.py`'s CLI-only `JobRunner` borrow, above). Inside `agent/`,
+exceptions are `orchestrator.py`'s and `benchmark.py`'s command-line-only `JobRunner` borrow, above). Inside `agent/`,
 `femm_agent/` imports `input_chat/`'s models (`AgentSpec`, `Objective`, `VariableSpec` are
 the contract the interview hands the search) — the two exceptions running the other way
 are `input_chat/models/variables.py` reusing `femm_agent/models/schema.py`'s field-schema

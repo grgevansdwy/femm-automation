@@ -28,6 +28,24 @@ def test_editing_a_number_marks_it_changed_and_save_stores_only_that():
     assert not state.dirty and load_settings().candidates_per_round == 2 and "Saved" in state.message
 
 
+def test_sampling_is_editable_under_llm_connection():
+    from frontend.screen_settings import settings_panel
+    fields = settings_panel._SECTION_FIELDS["LLM connection"]
+    assert {"temperature", "top_p", "seed"} <= set(fields)
+    for name in fields:  # every row has a label, a help line and a known input type
+        assert name in settings_panel.FIELD_LABELS and name in settings_panel.FIELD_HELP
+    assert "seed" in settings_panel._INT_FIELDS and {"temperature", "top_p"} <= set(settings_panel._FLOAT_FIELDS)
+
+    state = SettingsPanelState()
+    state.set_field("temperature", 0.3)
+    state.set_field("seed", 7)
+    assert state.save() is True
+    assert agent_settings_repository.load_overrides() == {"temperature": 0.3, "seed": 7}
+
+    state.set_field("top_p", 0.0)
+    assert state.save() is False and any("Sampling top-p" in p for p in state.problems())
+
+
 def test_invalid_input_blocks_save_and_names_the_field():
     state = SettingsPanelState()
     state.set_field("candidates_per_round", 0)

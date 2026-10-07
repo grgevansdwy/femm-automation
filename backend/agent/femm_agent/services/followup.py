@@ -143,11 +143,11 @@ def _conversation_messages(transcript: list[dict]) -> list[dict]:
     return messages
 
 
-def run_followup_turn(conversation, user_message: str, run_state, should_abort=None) -> None:
+def run_followup_turn(conversation, user_message: str, run_state, should_abort=None, log=None) -> None:
     """One follow-up exchange, appended in place to `conversation.transcript`
     (the planning chat's agent.input_chat.services.interview.InterviewState - same chat, same
     transcript). Never touches conversation.spec/finalized, and calls the
-    model with no tools."""
+    model with no tools. `log` (a RunLog), if given, records the request."""
     conversation.error = None
     conversation.live_reasoning = ""
     conversation.transcript.append({"role": "user", "content": user_message})
@@ -155,7 +155,7 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
     send_messages += _conversation_messages(conversation.transcript)
     try:
         msg = call_llm(
-            send_messages, None, settings=run_state.spec.settings, should_abort=should_abort,
+            send_messages, None, settings=run_state.spec.settings, should_abort=should_abort, log=log,
             on_update=lambda content, reasoning: setattr(conversation, "live_reasoning", reasoning or content),
         )
     except Exception as exc:

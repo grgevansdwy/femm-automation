@@ -17,8 +17,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from agent.services import llm_client
+from agent import report
+from agent.femm_agent.models.schema import build_tools
+from agent.services import llm_client, run_log
 from agent.services.llm_client import LLMError, call_llm
+from agent.services.run_log import RunLog, read_log
 from agent.settings.settings import AgentSettings
 
 
@@ -28,19 +31,21 @@ def _chunk(delta=None, finish=None, **extra):
 
 class _FakeServer:
     """Serves one scripted behaviour per test. `behaviour(handler)` writes
-    the response; `requests` records each request body, `disconnects` counts
+    the response; `requests` records each request body (`raw_requests` its exact bytes), `disconnects` counts
     writes that failed because the client had gone away."""
 
     def __init__(self, behaviour):
         server = self
-        self.requests, self.disconnects = [], 0
+        self.requests, self.raw_requests, self.disconnects = [], [], 0
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
 
             def do_POST(self):
-                server.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                server.raw_requests.append(raw)
+                server.requests.append(json.loads(raw))
                 try:
                     behaviour(self)
                 except (BrokenPipeError, ConnectionResetError):
@@ -140,13 +145,20 @@ def test_streamed_reply_is_assembled_with_tool_arguments_decoded(serve):
     print("  ok  a streamed reply (reasoning, content, split tool arguments) is assembled")
 
 
-def test_settings_choose_model_and_limits_and_sampling_is_left_to_the_server(serve):
+def test_settings_choose_model_limits_and_sampling_which_is_always_sent(serve):
     server = serve(lambda h: h.sse([_chunk({"content": "OK"}, finish="stop")]))
-    settings = AgentSettings(api_base_url=server.url, model="other-model", llm_max_tokens=123)
+    settings = AgentSettings(api_base_url=server.url, model="other-model", llm_max_tokens=123,
+                             temperature=0.4, top_p=0.8, seed=7)
     call_llm([{"role": "user", "content": "hi"}], None, settings=settings)
     body = server.requests[0]
     assert (body["model"], body["max_tokens"]) == ("other-model", 123)
-    assert "temperature" not in body and "top_p" not in body, "sampling is never sent - the server's own defaults apply"
+    assert (body["temperature"], body["top_p"], body["seed"]) == (0.4, 0.8, 7)
+
+    call_llm([{"role": "user", "content": "hi"}], None, settings=AgentSettings(api_base_url=server.url))
+    body = server.requests[1]
+    assert (body["temperature"], body["top_p"], body["seed"]) == (1.0, 0.95, -1), \
+        "the defaults are sent too - sampling is never left to whatever the server defaults to"
+    assert body["stream_options"] == {"include_usage": True}
 
 
 def test_no_tools_omits_the_key(serve):
@@ -243,3 +255,105 @@ def test_broken_tool_arguments_are_bad_reply(serve):
     with pytest.raises(LLMError) as err:
         call_llm([{"role": "user", "content": "hi"}], [{"type": "function"}])
     assert err.value.kind == "bad_reply" and "invalid JSON arguments" in str(err.value)
+
+
+# --- the run log (agent/services/run_log.py) ---------------------------------
+
+_MESSAGES = [{"role": "system", "content": "You design coils."}, {"role": "user", "content": "Start proposing."}]
+
+
+def test_a_logged_request_holds_exactly_what_was_sent_and_what_came_back(serve):
+    server = serve(lambda h: h.sse([
+        _chunk({"reasoning_content": "thinking"}),
+        _chunk({"content": "OK"}, finish="stop"),
+        {"choices": [], "usage": {"prompt_tokens": 41, "completion_tokens": 9}},
+    ]))
+    log, stats = RunLog("run1"), {}
+    reply = call_llm(_MESSAGES, None, log=log.bind(phase="search", round=3, search_attempt=1, ai_try=2), stats=stats)
+
+    (entry,) = read_log(log.path)
+    assert entry["event"] == "llm_call" and entry["run_id"] == "run1"
+    assert (entry["phase"], entry["round"], entry["search_attempt"], entry["ai_try"]) == ("search", 3, 1, 2)
+    assert entry["messages"] == server.requests[0]["messages"] == _MESSAGES
+    assert entry["reply"] == reply and entry["reply"]["reasoning_content"] == "thinking"
+    assert (entry["base_url"], entry["model"]) == (server.url, AgentSettings().model)
+    assert entry["sampling"] == {"temperature": 1.0, "top_p": 0.95, "seed": -1}
+    assert entry["prompt_sha256"] == llm_client.sha256_text("You design coils.") and entry["tools_sha256"] is None
+    assert (entry["prompt_tokens"], entry["reply_tokens"]) == (41, 9) and stats["prompt_tokens"] == 41
+    assert entry["chars_in"] == len(server.raw_requests[0]) and entry["chars_out"] == len("thinkingOK")
+    assert "error" not in entry and entry["elapsed_s"] >= 0
+
+
+def test_prompt_tokens_are_null_when_the_server_sends_no_usage(serve):
+    serve(lambda h: h.sse([_chunk({"content": "OK"}, finish="stop")]))
+    log = RunLog("run1")
+    call_llm(_MESSAGES, None, log=log)
+    assert read_log(log.path)[0]["prompt_tokens"] is None
+
+
+def test_llama_cpp_timings_give_the_prompt_tokens_when_there_is_no_usage_block(serve):
+    serve(lambda h: h.sse([_chunk({"content": "OK"}, finish="stop",
+                                  timings={"prompt_n": 5, "cache_n": 30, "predicted_n": 2})]))
+    log = RunLog("run1")
+    call_llm(_MESSAGES, None, log=log)
+    entry = read_log(log.path)[0]
+    assert (entry["prompt_tokens"], entry["reply_tokens"]) == (35, 2)
+
+
+def test_a_failed_request_is_logged_with_its_kind_and_what_had_arrived(serve):
+    serve(lambda h: h.sse([_chunk({"reasoning_content": "still thinking"}, finish="length")]))
+    log = RunLog("run1")
+    with pytest.raises(LLMError):
+        call_llm(_MESSAGES, None, log=log)
+    (entry,) = read_log(log.path)
+    assert entry["error"]["kind"] == "length_limit" and entry["error"]["reasoning"] == "still thinking"
+    assert "reply" not in entry and entry["messages"] == _MESSAGES
+
+
+def test_an_unreachable_server_is_logged_too(monkeypatch):
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    log = RunLog("run1")
+    with pytest.raises(LLMError):
+        call_llm(_MESSAGES, None, settings=AgentSettings(api_base_url=f"http://127.0.0.1:{port}"), time_limit_s=5,
+                 log=log)
+    assert read_log(log.path)[0]["error"]["kind"] == "unreachable"
+
+
+def test_a_log_that_cannot_be_written_does_not_fail_the_request(serve, monkeypatch, tmp_path, capsys):
+    serve(lambda h: h.sse([_chunk({"content": "OK"}, finish="stop")]))
+    blocker = tmp_path / "a_file_not_a_folder"
+    blocker.write_text("")
+    monkeypatch.setattr(run_log, "LOG_DIR", blocker / "logs")
+    log = RunLog("run1")
+    assert call_llm(_MESSAGES, None, log=log)["content"] == "OK"
+    assert call_llm(_MESSAGES, None, log=log)["content"] == "OK"
+    assert capsys.readouterr().err.count("could not write") == 1, "reported once, not per request"
+
+
+def test_a_search_request_can_be_rebuilt_from_the_log_byte_for_byte(serve):
+    """SPEC.md N5: the exact request the model saw can be replayed from the log."""
+    server = serve(lambda h: h.sse([_chunk({"content": "OK"}, finish="stop")]))
+    tools = build_tools({"tank_center_r": {"type": "number"}, "num_tank_turns": {"type": "integer"}}, "base_coil")
+    settings = AgentSettings(api_base_url=server.url, model="m", llm_max_tokens=777, temperature=0.3, seed=11)
+    messages = _MESSAGES + [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+            "name": "propose_coilset", "arguments": {"tank_center_r": 70.5, "rationale": "é shrink"}}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": json.dumps({"valid": True, "x": 1e-07})},
+    ]
+    log = RunLog("run1")
+    log.run_start(segment=1, tools=tools)
+    for round_num in (1, 2):
+        call_llm(messages[:2] if round_num == 1 else messages, tools, settings=settings,
+                 log=log.bind(phase="search", round=round_num, search_attempt=1, ai_try=1))
+
+    events = read_log(log.path)
+    assert report.rebuild_request(events, 1) == server.raw_requests[0]
+    assert report.rebuild_request(events, 2) == server.raw_requests[1]
+    with pytest.raises(ValueError, match="no search request for round 9"):
+        report.rebuild_request(events, 9)
+    events[0]["tools"] = tools[:0]
+    with pytest.raises(ValueError, match="tool schema"):
+        report.rebuild_request(events, 1)
+

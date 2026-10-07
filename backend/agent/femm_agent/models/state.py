@@ -103,3 +103,6 @@ class AgentRunState:
     # database - AgentRunner saves each round as it finishes, so a crash mid-search
     # loses at most the round in flight, and never saves a round twice.
     rounds_persisted: int = 0
+    # The run's log file (agent/services/run_log.py's RunLog), or None - every AI
+    # request, warning and swallowed error of this run is written through it.
+    log: "RunLog | None" = dataclasses.field(default=None, repr=False, compare=False)

@@ -90,10 +90,12 @@ _BASE_COIL_RECORD = {
 def isolate_db(tmp_path, monkeypatch):
     import frontend.services.job_runner as job_runner
     import frontend.screen_manual.runs_panel as runs_panel
+    from agent.services import run_log
     from engine.repositories import db
     from engine.repositories.coilset_repository import restore_config
 
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "femm_automation.db")
+    monkeypatch.setattr(run_log, "LOG_DIR", tmp_path / "agent_logs")  # agent run logs, never data/agent_logs
     monkeypatch.setattr(job_runner, "RESULTS_ROOT", tmp_path)
     monkeypatch.setattr(runs_panel, "RESULTS_ROOT", tmp_path)
 

@@ -14,6 +14,7 @@ packages with their own sys.path setup).
 
 import pytest
 
+from agent.services import run_log
 from engine.repositories import db
 from engine.repositories.coilset_repository import restore_config
 
@@ -85,4 +86,5 @@ _BASE_COIL_RECORD = {
 @pytest.fixture(autouse=True)
 def isolate_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "femm_automation.db")
+    monkeypatch.setattr(run_log, "LOG_DIR", tmp_path / "agent_logs")  # agent run logs, never data/agent_logs
     restore_config(_BASE_COIL_RECORD)

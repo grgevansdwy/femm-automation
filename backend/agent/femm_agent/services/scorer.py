@@ -245,3 +245,23 @@ def misses_summary(result: dict) -> str:
 
 def _shown(o: dict) -> str:
     return f"{o['value']:g}" if o.get("target_value") is not None else f"{o['worst_change_pct']:+.1f}%"
+
+
+def points_past_bar(result: dict) -> list[float]:
+    """For each required reduce/increase objective of a tool_result(): how many
+    percentage points past its bar the design got at its worst distance
+    (negative = short of it)."""
+    points = []
+    for o in result["objectives"]:
+        if o["required"] and o["kind"] != "match":
+            change = o["worst_change_pct"]
+            points.append((-change if o["kind"] == "reduce" else change) - o["tolerance_pct"])
+    return points
+
+
+def blended_score(result: dict) -> float | None:
+    """SPEC.md's score for a passing design: 50% the smallest points-past-the-bar,
+    50% the average. None when the goal has no required reduce/increase objective."""
+    points = points_past_bar(result)
+    return 0.5 * min(points) + 0.5 * (sum(points) / len(points)) if points else None
+

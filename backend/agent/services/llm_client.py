@@ -20,6 +20,11 @@ wall-clock limit (settings.llm_time_limit_s, no matter what the server sends), c
 reply at settings.llm_max_tokens, and can abort early (should_abort, e.g. Restart).
 A failure raises LLMError with a `kind` saying *why* - see LLMError.
 
+Sampling (settings.temperature / top_p / seed) is sent explicitly with every
+request, so a run's behaviour doesn't silently change with the server's defaults.
+With `log` (agent/services/run_log.py's RunLog) every request is also written to
+the run's log file in full - what was sent, what came back or why it failed.
+
 A caller can also watch the reply arrive: `on_update(content_so_far,
 reasoning_so_far)`, if given, is called from the worker thread every time new
 text lands - the model's chain-of-thought often runs for minutes before any
@@ -30,6 +35,7 @@ agent/input_chat/services/interview.py's InterviewState.live_reasoning) - same G
 convention as everywhere else a background thread feeds a polling GUI.
 """
 
+import hashlib
 import http.client
 import json
 import socket
@@ -115,6 +121,7 @@ class _Stream:
         self.tool_calls: dict[int, dict] = {}
         self.finish_reason: str | None = None
         self.server_tokens: int | None = None
+        self.prompt_tokens: int | None = None  # None if the server reports neither usage nor timings
         self.error: tuple[str, str] | None = None  # (kind, detail)
         self.closed_by_caller = False
 
@@ -145,9 +152,15 @@ def _apply_chunk(stream: _Stream, chunk: dict) -> None:
     timings = chunk.get("timings") or {}
     if timings.get("predicted_n") is not None:
         stream.server_tokens = timings["predicted_n"]
+    if timings.get("prompt_n") is not None:
+        # llama.cpp: prompt_n is only what it had to read this time; cache_n is
+        # the part of the prompt it reused from the previous request.
+        stream.prompt_tokens = timings["prompt_n"] + (timings.get("cache_n") or 0)
     usage = chunk.get("usage") or {}
     if usage.get("completion_tokens") is not None:
         stream.server_tokens = usage["completion_tokens"]
+    if usage.get("prompt_tokens") is not None:
+        stream.prompt_tokens = usage["prompt_tokens"]
     for choice in chunk.get("choices") or []:
         delta = choice.get("delta") or {}
         got_token = False
@@ -225,9 +238,40 @@ def _worker(stream: _Stream, body: bytes, socket_timeout: float, base_url: str, 
         stream.done.set()
 
 
+def build_payload(messages, tools, settings: AgentSettings, max_tokens: int) -> dict:
+    """The request body for one call - the one place it is assembled, so a
+    logged request can be rebuilt exactly (agent/report.py's rebuild_request)."""
+    payload = {"model": settings.model, "messages": messages, "stream": True, "max_tokens": max_tokens,
+               "temperature": settings.temperature, "top_p": settings.top_p, "seed": settings.seed,
+               # Asks the server for a final usage block (prompt and reply token counts).
+               "stream_options": {"include_usage": True}}
+    if tools:  # no tools at all (the follow-up chat) - omit the key rather than send an empty list
+        payload["tools"] = tools
+    return payload
+
+
+def encode_payload(payload: dict) -> bytes:
+    return json.dumps(payload).encode()
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def tools_sha256(tools) -> str | None:
+    return sha256_text(json.dumps(tools, sort_keys=True)) if tools else None
+
+
+def _system_prompt_sha256(messages) -> str | None:
+    for m in messages:
+        if isinstance(m, dict) and m.get("role") == "system" and isinstance(m.get("content"), str):
+            return sha256_text(m["content"])
+    return None
+
+
 def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_limit_s: float | None = None,
              max_tokens: int | None = None,
-             should_abort=None, stats: dict | None = None, on_update=None):
+             should_abort=None, stats: dict | None = None, on_update=None, log=None):
     """One request/response round trip. messages is whatever the caller
     decides to send - chat APIs are stateless per request, so the server
     only knows what's actually in this list. `tools` is explicit rather than
@@ -239,20 +283,57 @@ def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_lim
     time_limit_s is a hard wall-clock limit for the whole request (waiting in
     the server's queue, reading the prompt, and generating), enforced even
     when the server sends nothing. should_abort() is polled while waiting.
-    stats, if given, is filled with elapsed_s/tokens/first_token_s for a
+    stats, if given, is filled with elapsed_s/tokens/prompt_tokens/first_token_s for a
     successful request too. on_update(content_so_far, reasoning_so_far), if
     given, is called (from the request's own worker thread) every time new
     text arrives, so a caller can show live progress before the reply is
-    done - see the module docstring. Raises LLMError on any failure."""
+    done - see the module docstring. `log`, if given (a RunLog), gets one
+    llm_call line for this request however it ends. Raises LLMError on any failure."""
     settings = settings or load_settings()
     time_limit_s = settings.llm_time_limit_s if time_limit_s is None else time_limit_s
     max_tokens = settings.llm_max_tokens if max_tokens is None else max_tokens
-    payload = {"model": settings.model, "messages": messages, "stream": True, "max_tokens": max_tokens}
-    if tools:  # no tools at all (the follow-up chat) - omit the key rather than send an empty list
-        payload["tools"] = tools
-    body = json.dumps(payload).encode()
+    body = encode_payload(build_payload(messages, tools, settings, max_tokens))
 
     stream = _Stream()
+    message, error = None, None
+    try:
+        message = _request(stream, body, settings, time_limit_s, max_tokens, should_abort, on_update)
+        return message
+    except LLMError as exc:
+        error = exc
+        raise
+    finally:
+        reply_tokens = stream.server_tokens if stream.server_tokens is not None else stream.tokens
+        first_token_s = None if stream.first_token_at is None else round(stream.first_token_at - stream.started, 1)
+        elapsed_s = round(time.monotonic() - stream.started, 1)
+        if message is not None and stats is not None:
+            stats.update(elapsed_s=elapsed_s, tokens=reply_tokens, prompt_tokens=stream.prompt_tokens,
+                         first_token_s=first_token_s)
+        if log is not None and (message is not None or error is not None):
+            entry = {
+                "base_url": settings.api_base_url, "model": settings.model,
+                "sampling": {"temperature": settings.temperature, "top_p": settings.top_p, "seed": settings.seed},
+                "max_tokens": max_tokens, "time_limit_s": time_limit_s,
+                "prompt_sha256": _system_prompt_sha256(messages), "tools_sha256": tools_sha256(tools),
+                "messages": messages,
+                "chars_in": len(body), "chars_out": len(stream.content) + len(stream.reasoning),
+                "prompt_tokens": stream.prompt_tokens, "reply_tokens": reply_tokens,
+                "elapsed_s": elapsed_s, "first_token_s": first_token_s,
+            }
+            if message is not None:
+                entry["reply"] = message
+            else:
+                # What had arrived when it failed is kept too: a too_slow or
+                # length_limit reply is mostly chain-of-thought worth reading.
+                entry["error"] = {"kind": error.kind, "detail": error.detail, "message": error.describe(),
+                                  "content": stream.content, "reasoning": stream.reasoning}
+            log.llm_call(**entry)
+
+
+def _request(stream: _Stream, body: bytes, settings: AgentSettings, time_limit_s: float, max_tokens: int,
+             should_abort, on_update) -> dict:
+    """Sends `body` and assembles the streamed reply into `stream`; returns the
+    assistant message or raises LLMError."""
     worker = threading.Thread(target=_worker, args=(stream, body, time_limit_s + 60.0, settings.api_base_url, on_update), daemon=True)
     worker.start()
 
@@ -291,8 +372,4 @@ def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_lim
                 raise fail("bad_reply", f"tool call {tc['function']['name']!r} had invalid JSON arguments ({exc})")
             calls.append(tc)
         message["tool_calls"] = calls
-    if stats is not None:
-        stats.update(elapsed_s=round(time.monotonic() - stream.started, 1),
-                     tokens=stream.server_tokens if stream.server_tokens is not None else stream.tokens,
-                     first_token_s=None if stream.first_token_at is None else round(stream.first_token_at - stream.started, 1))
     return message

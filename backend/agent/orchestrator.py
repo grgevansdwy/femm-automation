@@ -22,7 +22,7 @@ _GUI_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 if str(_GUI_SRC) not in sys.path:
     sys.path.insert(0, str(_GUI_SRC))
 
-from frontend.job_runner import JobRunner  # noqa: E402
+from frontend.services.job_runner import JobRunner  # noqa: E402
 
 from agent.femm_agent.services.runner import AgentRunner  # noqa: E402
 from agent.femm_agent.services.scorer import objective_summary, tool_result  # noqa: E402

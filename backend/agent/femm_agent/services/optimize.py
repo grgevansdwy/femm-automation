@@ -48,6 +48,7 @@ def _ask_for_proposals(state, round_state, send_messages, tools):
         try:
             msg = call_llm(
                 send_messages, tools, settings=settings, should_abort=lambda: state.cancelled, stats=stats,
+                log=_bound_log(state, round_state),
                 # Live chain-of-thought, visible in the GUI the instant it
                 # arrives - not just after the whole round finishes (see
                 # llm_client.call_llm's docstring). Overwritten with the
@@ -71,6 +72,22 @@ def _ask_for_proposals(state, round_state, send_messages, tools):
             while time.monotonic() < deadline and not state.cancelled:
                 time.sleep(0.2)
     return None
+
+
+def _bound_log(state, round_state):
+    """The run's log with this round's position attached, or None (no log)."""
+    if state.log is None:
+        return None
+    return state.log.bind(phase="search", round=round_state.round_num, search_attempt=state.search_attempt,
+                          ai_try=round_state.ai_try)
+
+
+def _warn(state, round_state, where: str, message: str, exc: Exception) -> None:
+    """Writes the full exception to the run's log - the model and the GUI only
+    ever get str(exc)."""
+    log = _bound_log(state, round_state)
+    if log is not None:
+        log.warning(where, message, exc)
 
 
 def optimize_loop(state, job_runner, on_round_done=None) -> None:
@@ -196,6 +213,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
                 p.jobs = launched[key]
             except Exception as exc:
                 p.error = str(exc)
+                _warn(state, round_state, "optimize_loop.launch", f"could not queue solves for {p.delta}", exc)
 
         for p in proposals:
             if state.cancelled:
@@ -215,6 +233,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
                         state.best = scored
                 except Exception as exc:
                     p.error = str(exc)
+                    _warn(state, round_state, "optimize_loop.collect", f"solve or scoring failed for {p.delta}", exc)
             if p.error is not None:
                 # Invalid geometry becomes a rejected tool result, not a crash.
                 result = {"valid": False, "error": p.error}

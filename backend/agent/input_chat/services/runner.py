@@ -28,6 +28,10 @@ class InterviewRunner:
         # that happens finishes on its own thread, but writes nothing - its
         # ai_run was deleted (or, for a finished run, the chat was closed).
         self.discarded: bool = False
+        self._log = None  # the run's RunLog (agent/services/run_log.py), once start() has an ai_run id
+
+    def _phase_log(self, phase: str):
+        return self._log.bind(phase=phase) if self._log is not None else None
 
     def poll(self) -> None:
         """No-op, kept for the same per-frame-call-uniformity reason as
@@ -43,13 +47,16 @@ class InterviewRunner:
         happens once the user actually sends something."""
         from agent.repositories.ai_run_repository import create_ai_run
         from agent.settings.settings import load_settings
+        from agent.services.run_log import RunLog
         self.ai_run_id = create_ai_run(baseline_config_id)["id"]
+        self._log = RunLog(self.ai_run_id)
         self._persisted_count = 0
         self._persisted_spec = None
         return InterviewState(baseline_config_id=baseline_config_id, settings=load_settings())
 
     def send(self, state: InterviewState, user_message: str) -> None:
-        self._run_turn_async(state, lambda: run_interview_turn(state, user_message, should_abort=lambda: self.discarded))
+        self._run_turn_async(state, lambda: run_interview_turn(state, user_message, should_abort=lambda: self.discarded,
+                                                                log=self._phase_log("interview")))
 
     def send_followup(self, state: InterviewState, run_state, user_message: str) -> None:
         """A question after the search has started (running or finished) -
@@ -58,7 +65,8 @@ class InterviewRunner:
         Conversation section shows the whole exchange in order."""
         from agent.femm_agent.services.followup import run_followup_turn
         self._run_turn_async(state, lambda: run_followup_turn(state, user_message, run_state,
-                                                              should_abort=lambda: self.discarded))
+                                                              should_abort=lambda: self.discarded,
+                                                              log=self._phase_log("followup")))
 
     def discard(self) -> None:
         self.discarded = True

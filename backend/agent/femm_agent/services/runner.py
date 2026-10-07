@@ -16,12 +16,25 @@ overkill.
 """
 
 import dataclasses
+import subprocess
 import threading
+import time
+from pathlib import Path
 from typing import Protocol
 
 from agent.femm_agent.services.optimize import RoundFailed, optimize_loop
 from agent.femm_agent.services.outcome import outcome_report
 from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, now
+
+
+def _git_commit() -> str | None:
+    """The checked-out commit, for the run log (which code produced this run)."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent,
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
 
 
 def _seconds_between(start, end) -> float | None:
@@ -49,9 +62,16 @@ class _RunJobs:
         self._inner = job_runner
         self._state = state
         self.jobs: list = []
+        # Counted for the run log and report only - nothing is limited by them yet.
+        # Both include the baseline's own solves.
+        self.simulations = 0  # fresh solves submitted (one candidate at one distance)
+        self.cache_hits = 0
 
     def find_cached(self, coilset, distance):
-        return self._inner.find_cached(coilset, distance)
+        row = self._inner.find_cached(coilset, distance)
+        if row is not None:
+            self.cache_hits += 1
+        return row
 
     def touch(self, row):
         return self._inner.touch(row)
@@ -59,6 +79,7 @@ class _RunJobs:
     def submit(self, coilset, config_id, config_name, distance):
         job = self._inner.submit(coilset, config_id=config_id, config_name=config_name, distance=distance)
         self.jobs.append(job)
+        self.simulations += 1
         if self._state.cancelled:
             self._inner.cancel(job.id)
         return job
@@ -87,7 +108,8 @@ class AgentRunner:
             from agent.repositories.ai_run_repository import create_ai_run, finalize_spec
             ai_run_id = create_ai_run(spec.baseline_config_id)["id"]
             finalize_spec(ai_run_id, dataclasses.asdict(spec))
-        state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline)
+        from agent.services.run_log import RunLog
+        state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline, log=RunLog(ai_run_id))
         self.runs[state.id] = state
         self._run_jobs[state.id] = _RunJobs(self._job_runner, state)
         threading.Thread(target=self._run, args=(state.id,), daemon=True).start()
@@ -127,6 +149,8 @@ class AgentRunner:
         run_jobs = self._run_jobs[run_id]
         search_attempts = state.spec.settings.search_attempts
         internal_error = None
+        started = time.monotonic()
+        self._log_run_start(state)
         try:
             for attempt in range(1, search_attempts + 1):
                 state.search_attempt = attempt
@@ -141,16 +165,48 @@ class AgentRunner:
         except Exception as exc:
             internal_error = repr(exc)
             state.status = AgentRunStatus.FAILED
+            if state.log is not None:
+                state.log.warning("AgentRunner._run", "the search stopped on an internal error", exc)
         finally:
             state.finished_at = now()
             if not state.cancelled:
                 state.outcome_report = outcome_report(state, internal_error)
                 state.error = state.outcome_report if state.status == AgentRunStatus.FAILED else None
+            if state.log is not None:
+                state.log.run_end(
+                    status="cancelled" if state.cancelled else state.status.value,
+                    stop_reason=None,  # which rule ended it - recorded from milestone M2
+                    rounds=len(state.rounds), simulations=run_jobs.simulations, cache_hits=run_jobs.cache_hits,
+                    llm_failures=len(state.llm_failures), seconds=round(time.monotonic() - started, 1))
             if state.cancelled:
                 self.runs.pop(run_id, None)
                 self._run_jobs.pop(run_id, None)
             else:
-                self._persist(state)
+                try:
+                    self._persist(state)
+                except Exception as exc:
+                    if state.log is not None:
+                        state.log.warning("AgentRunner._persist", "could not save the finished run", exc)
+                    raise
+
+    @staticmethod
+    def _log_run_start(state: AgentRunState) -> None:
+        """The run_start line: everything needed to say which code, settings,
+        goal and baseline produced this run, and the tool schema its requests
+        carried. Never raises - a run must start whether or not it can be logged."""
+        if state.log is None:
+            return
+        try:
+            from agent.femm_agent.models.schema import build_tools
+            from agent.input_chat.models.variables import free_fields_for
+            spec = state.spec
+            tools = build_tools(free_fields_for(state.baseline_coilset, spec.variable_spec), spec.baseline_config_id)
+            state.log.run_start(
+                segment=1, git_commit=_git_commit(), settings=dataclasses.asdict(spec.settings),
+                spec=dataclasses.asdict(spec), baseline_coilset=dataclasses.asdict(state.baseline_coilset),
+                tools=tools)
+        except Exception as exc:
+            state.log.warning("AgentRunner._log_run_start", "could not write the run_start line", exc)
 
     @staticmethod
     def _save_rounds(state: AgentRunState) -> None:
@@ -162,8 +218,9 @@ class AgentRunner:
         has since discarded."""
         try:
             AgentRunner._write_rounds(state, only_finished=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            if state.log is not None:
+                state.log.warning("AgentRunner._save_rounds", "could not save a finished round", exc)
 
     @staticmethod
     def _write_rounds(state: AgentRunState, only_finished: bool) -> None:

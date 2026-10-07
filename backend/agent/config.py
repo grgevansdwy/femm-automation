@@ -35,6 +35,13 @@ MAX_DISTANCES = 5  # each one is a full extra FEMM solve per candidate - a hard 
 # idle server.
 LLM_TIME_LIMIT_S = float(os.environ.get("AGENT_LLM_TIME_LIMIT_S", "900"))
 LLM_MAX_TOKENS = int(os.environ.get("AGENT_LLM_MAX_TOKENS", "32000"))
+# Sampling, sent explicitly with every request so a run doesn't change when the
+# server's own defaults do. These are the office server's defaults as read from
+# its /props on 2026-10-07 (it also applies top_k 20 and min_p 0.05, left to it).
+# SEED -1 = a fresh random seed per request, so repeated searches differ.
+TEMPERATURE = 1.0
+TOP_P = 0.95
+SEED = -1
 # Retry policy for a search (agent/femm_agent/services/runner.py, agent/femm_agent/services/optimize.py): a round's AI
 # request is tried this many times; if every try fails, the whole search
 # starts over from zero memory, up to SEARCH_ATTEMPTS times in total.

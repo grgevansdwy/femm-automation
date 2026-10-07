@@ -28,6 +28,21 @@ def test_defaults_come_from_config():
     assert load_settings() == s, "nothing saved -> exactly the defaults"
 
 
+def test_sampling_defaults_are_the_servers_and_bad_values_are_rejected():
+    s = AgentSettings()
+    assert (s.temperature, s.top_p, s.seed) == (config.TEMPERATURE, config.TOP_P, config.SEED) == (1.0, 0.95, -1)
+    for field, bad in (("temperature", -0.1), ("temperature", 2.5), ("temperature", "hot"), ("top_p", 0),
+                       ("top_p", 1.1), ("seed", -2), ("seed", 1.5), ("seed", True)):
+        problems = dataclasses.replace(AgentSettings(), **{field: bad}).validate()
+        assert len(problems) == 1 and problems[0].startswith("Sampling"), (field, bad, problems)
+    assert dataclasses.replace(AgentSettings(), temperature=0, top_p=1, seed=0).validate() == []
+
+    s.temperature, s.seed = 0.2, 42
+    save_settings(s)
+    assert repository.load_overrides() == {"temperature": 0.2, "seed": 42}
+    assert (load_settings().temperature, load_settings().top_p, load_settings().seed) == (0.2, 0.95, 42)
+
+
 def test_only_changes_from_the_default_are_stored_and_reset_removes_them():
     s = load_settings()
     s.candidates_per_round = 2
@@ -114,7 +129,7 @@ def test_settings_snapshot_survives_json_and_ignores_unknown_keys():
 
 
 def test_saved_values_that_no_longer_fit_the_code_are_ignored():
-    repository.replace_overrides({"removed_setting": 1, "temperature": 0.3, "top_p": 0.9,
+    repository.replace_overrides({"removed_setting": 1, "top_k": 20, "min_p": 0.05,
                                   "prompt:removed_prompt": "x", "max_tool_calls": 7})
     assert load_settings().max_tool_calls == 7
 
