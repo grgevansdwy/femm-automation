@@ -9,7 +9,7 @@
 import pytest
 
 from agent import report
-from agent.repositories.ai_run_repository import append_message, create_ai_run, finalize_spec, update_run_status
+from agent.repositories.ai_run_repository import append_message, create_ai_run, finalize_spec, transition
 from agent.services import run_log
 from agent.services.run_log import RunLog
 from engine.repositories import db
@@ -36,7 +36,8 @@ def _finished_run(with_log=True) -> str:
         append_message(run_id, phase="optimize", seq=n, role="assistant", round_num=n, content="",
                        payload={"candidates": candidates, "llm_seconds": 30.0, "femm_seconds": 10.0,
                                 "llm_stats": {"tokens": 100}})
-    update_run_status(run_id, status="goal_met", finished_at="2099-01-01T00:00:00+00:00", best_round=2,
+    transition(run_id, "running")
+    transition(run_id, "goal_met", finished_at="2099-01-01T00:00:00+00:00", best_round=2,
                       best_tool_result={"goal_met": True, "objectives": [
                           _objective(-14.0), _objective(-20.0), _objective(3.0, kind="match")]})
     if with_log:

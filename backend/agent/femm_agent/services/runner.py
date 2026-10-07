@@ -104,10 +104,13 @@ class AgentRunner:
         every agent run gets persisted history either way."""
         from engine.repositories.coilset_repository import get_coilset  # deferred - resolves via agent/__init__.py's sys.path bootstrap
         baseline = get_coilset(spec.baseline_config_id)
+        from agent.repositories.ai_run_repository import create_ai_run, finalize_spec, transition
         if ai_run_id is None:
-            from agent.repositories.ai_run_repository import create_ai_run, finalize_spec
             ai_run_id = create_ai_run(spec.baseline_config_id)["id"]
             finalize_spec(ai_run_id, dataclasses.asdict(spec))
+        # Start Search: the plan is confirmed. The baseline is copied into the
+        # run, since its config can be edited or deleted later.
+        transition(ai_run_id, "running", started_at=now().isoformat(), baseline_coilset=dataclasses.asdict(baseline))
         from agent.services.run_log import RunLog
         state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline, log=RunLog(ai_run_id))
         self.runs[state.id] = state
@@ -261,7 +264,7 @@ class AgentRunner:
         (all of them if that never ran), then the final status and the best
         candidate if any."""
         from agent.femm_agent.services.scorer import tool_result
-        from agent.repositories.ai_run_repository import update_run_status
+        from agent.repositories.ai_run_repository import transition
 
         AgentRunner._write_rounds(state, only_finished=False)
 
@@ -269,10 +272,10 @@ class AgentRunner:
         best_dict = dataclasses.asdict(best.coilset) if best is not None else None
         best_round = next((r.round_num for r in state.rounds for c in r.candidates
                            if c.valid and c.candidate_coilset == best_dict), None) if best is not None else None
-        update_run_status(
+        transition(
             # `error` holds the outcome report for any ending but a met goal,
             # so History can show why (agent/femm_agent/services/outcome.py).
-            state.id, status=state.status.value, error=state.outcome_report,
+            state.id, state.status.value, error=state.outcome_report,
             finished_at=state.finished_at.isoformat() if state.finished_at else None,
             best_round=best_round,
             best_coilset=(dataclasses.asdict(best.coilset) if best is not None else None),

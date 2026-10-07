@@ -9,8 +9,13 @@ agent/input_chat/services/interview.py directly.
 import dataclasses
 import threading
 import time
+from datetime import datetime, timezone
 
 from agent.input_chat.services.interview import InterviewState, run_interview_turn
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class InterviewRunner:
@@ -24,11 +29,12 @@ class InterviewRunner:
         self.turn_started_at: float | None = None
         self._persisted_count = 0
         self._persisted_spec = None  # the spec object last written by finalize_spec(), so a re-finalized plan is written once
-        # Set by discard() (the GUI's Restart). A turn still in flight when
-        # that happens finishes on its own thread, but writes nothing - its
-        # ai_run was deleted (or, for a finished run, the chat was closed).
+        # Set by discard() (the GUI's Restart, or picking another baseline). A
+        # turn still in flight when that happens finishes on its own thread,
+        # but writes nothing more - the chat was closed.
         self.discarded: bool = False
-        self._log = None  # the run's RunLog (agent/services/run_log.py), once start() has an ai_run id
+        self._baseline_config_id: str | None = None
+        self._log = None  # the run's RunLog (agent/services/run_log.py), once the run has an id
 
     def _phase_log(self, phase: str):
         return self._log.bind(phase=phase) if self._log is not None else None
@@ -39,22 +45,30 @@ class InterviewRunner:
         pass
 
     def start(self, baseline_config_id: str) -> InterviewState:
-        """Creates the ai_runs history row (status='interviewing') and an
-        empty InterviewState - deliberately does NOT fire an opening LLM
-        turn. An unprompted first turn produced a long multi-question wall
-        of text (real, observed behavior); the chat input's own placeholder
-        now prompts for an objective directly, so the first LLM call only
-        happens once the user actually sends something."""
-        from agent.repositories.ai_run_repository import create_ai_run
+        """An empty InterviewState for a new chat. Nothing is saved yet: the
+        ai_runs row is created by the first send(), so opening the panel or
+        picking a baseline leaves no empty row behind. Deliberately does NOT
+        fire an opening LLM turn either - an unprompted first turn produced
+        a long multi-question wall of text (real, observed behavior); the
+        chat input's own placeholder prompts for an objective directly."""
         from agent.settings.settings import load_settings
-        from agent.services.run_log import RunLog
-        self.ai_run_id = create_ai_run(baseline_config_id)["id"]
-        self._log = RunLog(self.ai_run_id)
+        self.ai_run_id = None
+        self._baseline_config_id = baseline_config_id
+        self._log = None
         self._persisted_count = 0
         self._persisted_spec = None
         return InterviewState(baseline_config_id=baseline_config_id, settings=load_settings())
 
+    def _ensure_run(self, baseline_config_id: str) -> None:
+        """The user's first message: the run gets its row ('interviewing') and its log."""
+        if self.ai_run_id is None:
+            from agent.repositories.ai_run_repository import create_ai_run
+            from agent.services.run_log import RunLog
+            self.ai_run_id = create_ai_run(baseline_config_id)["id"]
+            self._log = RunLog(self.ai_run_id)
+
     def send(self, state: InterviewState, user_message: str) -> None:
+        self._ensure_run(state.baseline_config_id)
         self._run_turn_async(state, lambda: run_interview_turn(state, user_message, should_abort=lambda: self.discarded,
                                                                 log=self._phase_log("interview")))
 
@@ -71,6 +85,21 @@ class InterviewRunner:
     def discard(self) -> None:
         self.discarded = True
 
+    def cancel_conversation(self) -> None:
+        """Closes a chat whose search never started (Restart or a new baseline
+        while planning): nothing more is written for it, and its row - if the
+        user ever sent a message - is kept as 'cancelled', plan and all.
+        A no-op for a row that is past planning (the search owns its status)."""
+        from agent.repositories.ai_run_repository import IllegalTransition, transition
+        self.discarded = True
+        if self.ai_run_id is None:
+            return
+        try:
+            transition(self.ai_run_id, "cancelled", finished_at=_now_iso())
+        except (IllegalTransition, KeyError) as exc:
+            if self._log is not None:
+                self._log.warning("InterviewRunner.cancel_conversation", "the chat could not be marked cancelled", exc)
+
     def _run_turn_async(self, state: InterviewState, turn) -> None:
         self.busy = True
         self.turn_started_at = time.monotonic()
@@ -81,6 +110,12 @@ class InterviewRunner:
             turn()
             if not self.discarded:
                 self._persist_new_messages(state)
+        except Exception as exc:
+            # Last resort: a turn must never die silently on its thread, leaving
+            # the chat with no reply and no reason.
+            state.error = f"This turn failed with an internal error: {exc}"
+            if self._log is not None:
+                self._log.warning("InterviewRunner._run_turn", "an interview or follow-up turn raised", exc)
         finally:
             self.busy = False
             self.turn_started_at = None
@@ -96,8 +131,8 @@ class InterviewRunner:
         self._persisted_count = len(state.transcript)
 
         # Only a newly finalized plan - a follow-up turn leaves the spec
-        # untouched, and re-writing it would flip a finished run's status
-        # back to 'running' (finalize_spec() sets that).
+        # untouched, and re-writing it would move a finished run back to
+        # 'plan_ready' (finalize_spec() sets that).
         if state.finalized and state.spec is not None and state.spec is not self._persisted_spec:
             finalize_spec(self.ai_run_id, dataclasses.asdict(state.spec))
             self._persisted_spec = state.spec

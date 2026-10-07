@@ -13,30 +13,61 @@
 # =============================================================================
 import contextlib
 import json
+import sqlite3
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from engine.repositories import db
 
+# The schema version this module writes, kept in SQLite's `PRAGMA user_version`
+# (0 = the ai_runs table as it was before run lifecycle states existed).
+SCHEMA_VERSION = 1
+
+# How a run moves: interviewing -> plan_ready (the model proposed a plan the code
+# accepted) -> running (the user clicked Start Search) -> one terminal status.
+# `status` says how it ended; `stop_reason` says which rule ended it.
+TERMINAL_STATUSES = ('goal_met', 'budget_exhausted', 'stopped_by_model', 'stalled', 'failed',
+                     'interrupted', 'cancelled')
+STATUSES = ('interviewing', 'plan_ready', 'running') + TERMINAL_STATUSES
+STOP_REASONS = ('nothing_left', 'plateau', 'stalled', 'rounds', 'time', 'simulations', 'model_stopped',
+                'user_stopped', 'llm_failed', 'internal_error')
+
+# Every allowed status change (SPEC-DETAILED.md section 5). transition() is the
+# one function that changes a row's status and rejects anything not listed here.
+_ALLOWED = {
+    'interviewing': {'plan_ready', 'cancelled'},
+    'plan_ready': {'plan_ready', 'running', 'cancelled'},
+    'running': set(TERMINAL_STATUSES),
+    # A finished run can be continued (running) or given a revised plan (plan_ready).
+    **{status: {'running', 'plan_ready'} for status in TERMINAL_STATUSES},
+}
+
 # The agent's tables - what engine/repositories/db.py used to create for it.
 # (Foreign keys are documentation only, exactly as in db.py - see db.connect().)
-_AI_SCHEMA = """
-CREATE TABLE IF NOT EXISTS ai_runs (
+_RUNS_TABLE = """
+CREATE TABLE {name} (
     id                    TEXT PRIMARY KEY,
     baseline_config_id    TEXT REFERENCES configs (id),  -- documents intent only, not enforced - see connect()
     spec_json             TEXT,  -- NULL while still interviewing
-    status                TEXT NOT NULL CHECK (status IN
-        ('interviewing', 'running', 'goal_met', 'budget_exhausted', 'stopped_by_model', 'failed')),
+    status                TEXT NOT NULL CHECK (status IN (%s)),
     created_at            TEXT NOT NULL,
-    started_at            TEXT,  -- when the optimize phase began
+    started_at            TEXT,  -- when the search began (Start Search)
     finished_at           TEXT,
-    error                 TEXT,
+    error                 TEXT,  -- the outcome report, for any ending
     best_round            INTEGER,
     best_coilset_json     TEXT,  -- denormalized, for fast history-list rendering
-    best_tool_result_json TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_ai_runs_created_at ON ai_runs (created_at);
+    best_tool_result_json TEXT,
+    stop_reason           TEXT,  -- which rule ended the search (STOP_REASONS); NULL while not terminal
+    budget_json           TEXT,  -- list, one entry per search segment: limits in force and what was used
+    fragility_json        TEXT,  -- list of fragility checks (filled from milestone M3b)
+    baseline_coilset_json TEXT   -- the baseline as it was at Start Search (a config can be edited later)
+)""" % ", ".join(f"'{s}'" for s in STATUSES)
+_RUNS_INDEX = "CREATE INDEX IF NOT EXISTS idx_ai_runs_created_at ON ai_runs (created_at)"
+_V0_COLUMNS = ("id, baseline_config_id, spec_json, status, created_at, started_at, finished_at, error, "
+               "best_round, best_coilset_json, best_tool_result_json")
 
+_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ai_run_messages (
     id           TEXT PRIMARY KEY,
     ai_run_id    TEXT NOT NULL REFERENCES ai_runs (id),  -- documents intent only, not enforced - see connect()
@@ -52,14 +83,92 @@ CREATE INDEX IF NOT EXISTS idx_ai_run_messages_run ON ai_run_messages (ai_run_id
 """
 
 
+class MigrationError(RuntimeError):
+    """The ai_runs table could not be brought to SCHEMA_VERSION. Nothing was
+    changed (the rebuild is one transaction); the message names the backup copy."""
+
+
+class IllegalTransition(ValueError):
+    """transition() was asked for a status change that isn't in _ALLOWED."""
+
+
+_checked_paths: set[str] = set()  # database files whose schema this process has already checked
+
+
+def _ensure_schema(conn) -> None:
+    """Creates the agent's tables in a new database, or migrates an older
+    ai_runs table. Checked once per database file per process - every entry
+    point (the app, the benchmark, `python -m agent`, tests) opens the
+    database through _connection(), so none can meet an old table."""
+    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    if path in _checked_paths:
+        return
+    has_runs = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ai_runs'").fetchone()
+    if not has_runs:
+        conn.execute(_RUNS_TABLE.format(name="ai_runs"))
+        conn.execute(_RUNS_INDEX)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+    elif conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+        _migrate_v0(conn, Path(path))
+    conn.executescript(_MESSAGES_SCHEMA)
+    _checked_paths.add(path)
+
+
+def _migrate_v0(conn, path: Path) -> None:
+    """Version 0 -> 1: SQLite can't alter a CHECK constraint, so ai_runs is
+    rebuilt with the new statuses and columns. The whole database file is
+    copied to backups/ first; then one transaction copies every row over
+    unchanged (new columns NULL). Any failure rolls back and raises
+    MigrationError naming the backup."""
+    backup_dir = path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"{path.stem}-v0-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
+    copy = sqlite3.connect(backup_path)
+    try:
+        with copy:
+            conn.backup(copy)
+    finally:
+        copy.close()
+
+    previous_isolation = conn.isolation_level
+    conn.isolation_level = None  # explicit BEGIN/COMMIT, so the DDL below is really one transaction
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        before = conn.execute("SELECT COUNT(*) FROM ai_runs").fetchone()[0]
+        conn.execute(_RUNS_TABLE.format(name="ai_runs_new"))
+        conn.execute(f"INSERT INTO ai_runs_new ({_V0_COLUMNS}) SELECT {_V0_COLUMNS} FROM ai_runs")
+        after = conn.execute("SELECT COUNT(*) FROM ai_runs_new").fetchone()[0]
+        if after != before:
+            raise RuntimeError(f"row count changed while copying ai_runs ({before} -> {after})")
+        conn.execute("DROP TABLE ai_runs")  # every row is in ai_runs_new, counted above, same transaction
+        conn.execute("ALTER TABLE ai_runs_new RENAME TO ai_runs")
+        conn.execute(_RUNS_INDEX)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.execute("COMMIT")
+    except Exception as exc:
+        with contextlib.suppress(sqlite3.Error):
+            conn.execute("ROLLBACK")
+        raise MigrationError(
+            f"Could not update the agent's run history in {path} ({exc!r}). Nothing was changed. "
+            f"A copy of the database made just before is at {backup_path}.") from exc
+    finally:
+        conn.isolation_level = previous_isolation
+
+
+def migrate_if_needed() -> None:
+    """Opens the database once so its schema is checked now. The desktop app
+    calls this at startup, where a MigrationError can be shown and stop the
+    app before anything else touches the database."""
+    with _connection():
+        pass
+
+
 @contextlib.contextmanager
 def _connection():
-    """db.connection() plus this module's own tables. db.connect() only creates
-    the engine's tables; the CREATE ... IF NOT EXISTS here is idempotent, so
-    it costs next to nothing after the first call - the same per-call approach
-    db.connect() already takes for its own schema."""
+    """db.connection() plus this module's own tables (see _ensure_schema)."""
     with db.connection() as conn:
-        conn.executescript(_AI_SCHEMA)
+        _ensure_schema(conn)
         yield conn
 
 
@@ -97,6 +206,10 @@ def _run_row_to_record(row) -> dict:
         'best_round': row['best_round'],
         'best_coilset': json.loads(row['best_coilset_json']) if row['best_coilset_json'] else None,
         'best_tool_result': json.loads(row['best_tool_result_json']) if row['best_tool_result_json'] else None,
+        'stop_reason': row['stop_reason'],
+        'budget': json.loads(row['budget_json']) if row['budget_json'] else None,
+        'fragility': json.loads(row['fragility_json']) if row['fragility_json'] else None,
+        'baseline_coilset': json.loads(row['baseline_coilset_json']) if row['baseline_coilset_json'] else None,
     }
 
 
@@ -114,30 +227,20 @@ def _message_row_to_record(row) -> dict:
     }
 
 
+_JSON_COLUMNS = {'spec': 'spec_json', 'best_coilset': 'best_coilset_json', 'best_tool_result': 'best_tool_result_json',
+                 'budget': 'budget_json', 'fragility': 'fragility_json', 'baseline_coilset': 'baseline_coilset_json'}
+_PLAIN_COLUMNS = ('id', 'baseline_config_id', 'status', 'created_at', 'started_at', 'finished_at', 'error',
+                  'best_round', 'stop_reason')
+
+
 def _upsert_run(conn, record) -> None:
+    values = {name: record.get(name) for name in _PLAIN_COLUMNS}
+    values.update({column: _dumps(record.get(key)) for key, column in _JSON_COLUMNS.items()})
+    columns = list(values)
     conn.execute(
-        """INSERT INTO ai_runs (id, baseline_config_id, spec_json, status, created_at, started_at,
-                                 finished_at, error, best_round, best_coilset_json, best_tool_result_json)
-           VALUES (:id, :baseline_config_id, :spec_json, :status, :created_at, :started_at,
-                   :finished_at, :error, :best_round, :best_coilset_json, :best_tool_result_json)
-           ON CONFLICT(id) DO UPDATE SET
-               baseline_config_id=excluded.baseline_config_id, spec_json=excluded.spec_json,
-               status=excluded.status, created_at=excluded.created_at, started_at=excluded.started_at,
-               finished_at=excluded.finished_at, error=excluded.error, best_round=excluded.best_round,
-               best_coilset_json=excluded.best_coilset_json, best_tool_result_json=excluded.best_tool_result_json""",
-        {
-            'id': record['id'],
-            'baseline_config_id': record['baseline_config_id'],
-            'spec_json': _dumps(record['spec']),
-            'status': record['status'],
-            'created_at': record['created_at'],
-            'started_at': record['started_at'],
-            'finished_at': record['finished_at'],
-            'error': record['error'],
-            'best_round': record['best_round'],
-            'best_coilset_json': _dumps(record['best_coilset']),
-            'best_tool_result_json': _dumps(record['best_tool_result']),
-        },
+        f"INSERT INTO ai_runs ({', '.join(columns)}) VALUES ({', '.join(':' + c for c in columns)}) "
+        f"ON CONFLICT(id) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in columns if c != 'id')}",
+        values,
     )
     conn.commit()
 
@@ -156,46 +259,66 @@ def create_ai_run(baseline_config_id) -> dict:
         'best_round': None,
         'best_coilset': None,
         'best_tool_result': None,
+        'stop_reason': None,
+        'budget': None,
+        'fragility': None,
+        'baseline_coilset': None,
     }
     with _connection() as conn:
         _upsert_run(conn, record)
     return record
 
 
+_TRANSITION_FIELDS = ('spec', 'started_at', 'finished_at', 'error', 'stop_reason', 'budget', 'fragility',
+                      'baseline_coilset', 'best_round', 'best_coilset', 'best_tool_result')
+
+
+def transition(ai_run_id, new_status, **fields) -> dict:
+    """The one way a run's status changes. Raises IllegalTransition (and writes
+    nothing) for a move that isn't in _ALLOWED, KeyError for an unknown run.
+
+    `fields` may set any of _TRANSITION_FIELDS along with the status; a field
+    not passed (or passed as None) keeps what the row already has, so a
+    terminal-status call doesn't have to re-pass a best_coilset an earlier
+    call already set. Moving to 'running' clears finished_at, stop_reason and
+    error first: they describe an ending the run is leaving behind (continue)."""
+    unknown = set(fields) - set(_TRANSITION_FIELDS)
+    if unknown:
+        raise TypeError(f"transition() can't set {sorted(unknown)}")
+    with _connection() as conn:
+        row = conn.execute('SELECT * FROM ai_runs WHERE id = ?', (ai_run_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"No such ai_run: {ai_run_id!r}")
+        record = _run_row_to_record(row)
+        if new_status not in _ALLOWED.get(record['status'], ()):
+            raise IllegalTransition(f"ai_run {ai_run_id}: {record['status']} -> {new_status} is not an allowed change")
+        if new_status == 'running':
+            record.update(finished_at=None, stop_reason=None, error=None)
+        record['status'] = new_status
+        record.update({name: value for name, value in fields.items() if value is not None})
+        _upsert_run(conn, record)
+    return record
+
+
 def finalize_spec(ai_run_id, spec) -> None:
-    """Interview phase concluded - stores the finalized spec and moves the
-    run into 'running' (the optimize phase begins here)."""
-    record = get_ai_run(ai_run_id)
-    if record is None:
-        raise KeyError(f"No such ai_run: {ai_run_id!r}")
-    record['spec'] = spec
-    record['status'] = 'running'
-    record['started_at'] = _now_iso()
-    with _connection() as conn:
-        _upsert_run(conn, record)
+    """The model proposed a plan and the code accepted it: stores the spec and
+    moves the run to 'plan_ready'. Nothing is searched until the user clicks
+    Start Search (AgentRunner.submit() moves it to 'running'). Called again
+    for a revised plan."""
+    transition(ai_run_id, 'plan_ready', spec=spec)
 
 
-def update_run_status(ai_run_id, status, error=None, finished_at=None,
-                       best_round=None, best_coilset=None, best_tool_result=None) -> None:
-    """Only overwrites fields explicitly passed - error/finished_at/best_*
-    default to whatever the row already has, not None, so a terminal-status
-    call doesn't have to re-pass a best_coilset an earlier call already set."""
-    record = get_ai_run(ai_run_id)
-    if record is None:
-        raise KeyError(f"No such ai_run: {ai_run_id!r}")
-    record['status'] = status
-    if error is not None:
-        record['error'] = error
-    if finished_at is not None:
-        record['finished_at'] = finished_at
-    if best_round is not None:
-        record['best_round'] = best_round
-    if best_coilset is not None:
-        record['best_coilset'] = best_coilset
-    if best_tool_result is not None:
-        record['best_tool_result'] = best_tool_result
+def reap_running() -> int:
+    """Marks every 'running' row 'interrupted' - called once when the app
+    starts, when no search can be running (a search lives in the app's own
+    process, and one app instance per database is assumed). Finished rounds
+    stay with the row. Returns how many rows it changed."""
     with _connection() as conn:
-        _upsert_run(conn, record)
+        cursor = conn.execute(
+            "UPDATE ai_runs SET status = 'interrupted', finished_at = COALESCE(finished_at, ?) WHERE status = 'running'",
+            (_now_iso(),))
+        conn.commit()
+        return cursor.rowcount
 
 
 def append_message(ai_run_id, phase, seq, role, round_num=None, content=None, payload=None) -> dict:
@@ -251,8 +374,8 @@ def list_messages(ai_run_id, phase=None) -> list[dict]:
 
 def delete_ai_run(ai_run_id) -> None:
     """Removes an ai_run and all its messages. No-op if it doesn't exist.
-    Used when the GUI discards an unfinished run (Restart before the search
-    finished) - a finished run is never deleted this way."""
+    Only ever an explicit user action (Delete in History) - a stopped or
+    cancelled run is kept, with its plan and every finished round."""
     with _connection() as conn:
         conn.execute('DELETE FROM ai_run_messages WHERE ai_run_id = ?', (ai_run_id,))
         conn.execute('DELETE FROM ai_runs WHERE id = ?', (ai_run_id,))

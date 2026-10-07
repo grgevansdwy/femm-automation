@@ -226,6 +226,18 @@ def _gui(state: AppState) -> None:
 def main() -> None:
     from engine.repositories.coilset_repository import seed_starter_configs
 
+    # Before anything reads the agent's tables: bring them to the current
+    # schema (a backup copy is made first), then mark searches the last
+    # session left 'running' as interrupted - none can be running now (one
+    # app instance per database is assumed).
+    from agent.repositories.ai_run_repository import MigrationError, migrate_if_needed, reap_running
+    try:
+        migrate_if_needed()
+    except MigrationError as exc:
+        print(f"FEMM Coil Automation can't start: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    reap_running()
+
     seed_starter_configs()  # first launch: no configs yet -> load the starter designs
     state = AppState()
     immapp.run(

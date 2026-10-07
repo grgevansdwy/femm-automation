@@ -52,3 +52,7 @@ backend/data/benchmark/
 # Per-run AI request logs (backend/agent/services/run_log.py): full prompts and replies,
 # a developer tool the app never reads.
 backend/data/agent_logs/
+
+# Copies of the database made before a schema migration or the one-time cleanup
+# (agent/repositories/ai_run_repository.py, agent/cleanup_runs.py).
+backend/data/backups/

@@ -203,7 +203,7 @@ def test_each_round_is_saved_as_soon_as_it_finishes(monkeypatch):
 def test_the_final_save_writes_only_what_is_still_missing(monkeypatch):
     state, _ = _run(monkeypatch, [_propose(71.0), _propose(70.0)], _spec(rounds=2, cut_pct=50.0))
     assert _seqs(state.id) == [1, 2], "each round exactly once, however many times it was offered"
-    AgentRunner._persist(state)  # a second full save must add nothing
+    AgentRunner._write_rounds(state, only_finished=False)  # a second full save must add nothing
     assert _seqs(state.id) == [1, 2]
 
 

@@ -12,7 +12,10 @@
 # and it runs against the real database - cleans up nothing itself, so
 # prefer pytest for repeated runs.
 # =============================================================================
+import pytest
+
 from agent.repositories import ai_run_repository as ar
+from engine.repositories import db
 
 
 def test_create_ai_run_starts_interviewing():
@@ -23,29 +26,197 @@ def test_create_ai_run_starts_interviewing():
     print("  ok  create_ai_run() starts a run in 'interviewing' with no spec yet")
 
 
-def test_finalize_spec_moves_to_running():
+def test_finalize_spec_moves_to_plan_ready_not_running():
     record = ar.create_ai_run('Gen2_coil')
     spec = {'objective_text': 'match M23 within 5%', 'distances': [3.0, 5.0]}
     ar.finalize_spec(record['id'], spec)
 
     updated = ar.get_ai_run(record['id'])
-    assert updated['status'] == 'running'
+    assert updated['status'] == 'plan_ready', "a proposed plan is not a live search"
     assert updated['spec'] == spec
-    assert updated['started_at'] is not None
-    print("  ok  finalize_spec() stores the spec and moves the run to 'running'")
+    assert updated['started_at'] is None, "the search starts at Start Search, not when the plan is proposed"
+
+    ar.finalize_spec(record['id'], {**spec, 'distances': [5.0]})
+    assert ar.get_ai_run(record['id'])['spec']['distances'] == [5.0], "a revised plan replaces it"
+    print("  ok  finalize_spec() stores the spec and moves the run to 'plan_ready'")
 
 
-def test_update_run_status_only_overwrites_passed_fields():
-    record = ar.create_ai_run('Gen2_coil')
-    ar.update_run_status(record['id'], 'running', best_round=3, best_coilset={'loop_r': 50})
-    ar.update_run_status(record['id'], 'goal_met', finished_at='2026-09-10T00:00:00+00:00')
+def _run_in(status):
+    """A run walked to `status` through allowed changes only."""
+    run_id = ar.create_ai_run('Gen2_coil')['id']
+    if status == 'interviewing':
+        return run_id
+    if status == 'cancelled':
+        ar.transition(run_id, 'cancelled')
+        return run_id
+    ar.finalize_spec(run_id, {'distances': [5.0]})
+    if status != 'plan_ready':
+        ar.transition(run_id, 'running')
+        if status != 'running':
+            ar.transition(run_id, status)
+    return run_id
 
-    updated = ar.get_ai_run(record['id'])
-    assert updated['status'] == 'goal_met'
-    assert updated['finished_at'] == '2026-09-10T00:00:00+00:00'
-    assert updated['best_round'] == 3, "best_round from the earlier call should survive"
-    assert updated['best_coilset'] == {'loop_r': 50}, "best_coilset from the earlier call should survive"
-    print("  ok  update_run_status() leaves unpassed fields untouched")
+
+def test_transition_only_overwrites_passed_fields():
+    run_id = _run_in('plan_ready')
+    ar.transition(run_id, 'running', started_at='2026-09-09T00:00:00+00:00', baseline_coilset={'loop_r': 65})
+    ar.transition(run_id, 'goal_met', finished_at='2026-09-10T00:00:00+00:00', best_round=3,
+                  best_coilset={'loop_r': 50}, stop_reason='plateau', budget=[{'segment': 1, 'rounds_used': 3}])
+
+    updated = ar.get_ai_run(run_id)
+    assert (updated['status'], updated['stop_reason'], updated['best_round']) == ('goal_met', 'plateau', 3)
+    assert updated['baseline_coilset'] == {'loop_r': 65}, "set by the earlier call, kept by this one"
+    assert updated['budget'] == [{'segment': 1, 'rounds_used': 3}] and updated['fragility'] is None
+
+    # "continue": back to running. The old ending's fields are cleared, the best design is not.
+    ar.transition(run_id, 'running')
+    updated = ar.get_ai_run(run_id)
+    assert (updated['finished_at'], updated['stop_reason'], updated['error']) == (None, None, None)
+    assert updated['best_coilset'] == {'loop_r': 50} and updated['started_at'] == '2026-09-09T00:00:00+00:00'
+    print("  ok  transition() leaves unpassed fields untouched and clears the old ending on a continue")
+
+
+def test_every_allowed_status_change_works_and_every_other_one_is_rejected():
+    """SPEC-DETAILED.md section 5, both ways: the table is the whole truth."""
+    terminal = set(ar.TERMINAL_STATUSES)
+    allowed = {
+        'interviewing': {'plan_ready', 'cancelled'},
+        'plan_ready': {'plan_ready', 'running', 'cancelled'},
+        'running': terminal,
+        **{s: {'running', 'plan_ready'} for s in terminal},
+    }
+    assert set(allowed) == set(ar.STATUSES)
+    for old in ar.STATUSES:
+        for new in ar.STATUSES:
+            run_id = _run_in(old)
+            if new in allowed[old]:
+                ar.transition(run_id, new)
+                assert ar.get_ai_run(run_id)['status'] == new
+            else:
+                with pytest.raises(ar.IllegalTransition):
+                    ar.transition(run_id, new, error='must not be written')
+                after = ar.get_ai_run(run_id)
+                assert after['status'] == old and after['error'] is None, f"{old} -> {new} must change nothing"
+
+    with pytest.raises(KeyError):
+        ar.transition('does-not-exist', 'running')
+    with pytest.raises(TypeError):
+        ar.transition(_run_in('plan_ready'), 'running', status='goal_met')
+    print("  ok  transition() allows exactly the changes in the lifecycle table")
+
+
+def test_reaper_marks_running_rows_interrupted_and_touches_nothing_else():
+    ids = {status: _run_in(status) for status in ('interviewing', 'plan_ready', 'running', 'goal_met', 'cancelled')}
+    ar.append_message(ids['running'], phase='optimize', seq=1, role='assistant', round_num=1, payload={'candidates': []})
+
+    assert ar.reap_running() == 1
+    assert ar.get_ai_run(ids['running'])['status'] == 'interrupted'
+    assert ar.get_ai_run(ids['running'])['finished_at'] is not None
+    assert len(ar.list_messages(ids['running'])) == 1, "finished rounds stay with the run"
+    assert {s: ar.get_ai_run(i)['status'] for s, i in ids.items() if s != 'running'} == \
+        {s: s for s in ids if s != 'running'}
+    assert ar.reap_running() == 0 and not [r for r in ar.list_ai_runs() if r['status'] == 'running']
+    ar.transition(ids['running'], 'running')  # an interrupted run can be continued
+    print("  ok  reap_running(): no row is left 'running' after an app start")
+
+
+# --- migration from the pre-lifecycle table (version 0) -----------------------
+
+_V0_SCHEMA = """
+CREATE TABLE ai_runs (
+    id TEXT PRIMARY KEY, baseline_config_id TEXT, spec_json TEXT,
+    status TEXT NOT NULL CHECK (status IN
+        ('interviewing', 'running', 'goal_met', 'budget_exhausted', 'stopped_by_model', 'failed')),
+    created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, error TEXT, best_round INTEGER,
+    best_coilset_json TEXT, best_tool_result_json TEXT
+);
+CREATE INDEX idx_ai_runs_created_at ON ai_runs (created_at);
+CREATE TABLE ai_run_messages (
+    id TEXT PRIMARY KEY, ai_run_id TEXT NOT NULL, phase TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL,
+    round_num INTEGER, content TEXT, payload_json TEXT, created_at TEXT NOT NULL
+);
+"""
+_V0_ROWS = [
+    ('a', 'base_coil', None, 'interviewing', '2026-09-01T00:00:00+00:00', None, None, None, None, None, None),
+    ('b', 'base_coil', '{"distances": [5.0]}', 'running', '2026-09-02T00:00:00+00:00', '2026-09-02T00:01:00+00:00',
+     None, None, None, None, None),
+    ('c', 'gone_config', '{"distances": [3.0]}', 'goal_met', '2026-09-03T00:00:00+00:00', '2026-09-03T00:01:00+00:00',
+     '2026-09-03T01:00:00+00:00', None, 4, '{"loop_r": 50}', '{"goal_met": true}'),
+    ('d', 'base_coil', '{}', 'failed', '2026-09-04T00:00:00+00:00', None, '2026-09-04T01:00:00+00:00',
+     'Search failed: the AI server could not be reached.', None, None, None),
+]
+
+
+def _v0_database(path):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.executescript(_V0_SCHEMA)
+    conn.executemany("INSERT INTO ai_runs VALUES (?,?,?,?,?,?,?,?,?,?,?)", _V0_ROWS)
+    conn.execute("INSERT INTO ai_run_messages VALUES ('m1','c','optimize',1,'assistant',1,'thinking','{}','2026-09-03')")
+    conn.commit()
+    conn.close()
+
+
+def _raw(path, sql):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(sql).fetchall()
+    finally:
+        conn.close()
+
+
+def test_migration_keeps_every_row_makes_a_backup_and_opens_the_new_statuses(tmp_path, monkeypatch):
+    path = tmp_path / "old" / "femm_automation.db"
+    path.parent.mkdir()
+    _v0_database(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+
+    ar.migrate_if_needed()
+
+    assert _raw(path, "PRAGMA user_version") == [(1,)]
+    old_columns = "id, baseline_config_id, spec_json, status, created_at, started_at, finished_at, error, " \
+                  "best_round, best_coilset_json, best_tool_result_json"
+    assert _raw(path, f"SELECT {old_columns} FROM ai_runs ORDER BY id") == _V0_ROWS, "every value carried over unchanged"
+    assert _raw(path, "SELECT stop_reason, budget_json, fragility_json, baseline_coilset_json FROM ai_runs") == \
+        [(None, None, None, None)] * 4
+    assert _raw(path, "SELECT COUNT(*) FROM ai_run_messages") == [(1,)]
+    assert _raw(path, "SELECT name FROM sqlite_master WHERE name = 'idx_ai_runs_created_at'") == [('idx_ai_runs_created_at',)]
+
+    (backup,) = list((path.parent / "backups").glob("femm_automation-v0-*.db"))
+    assert _raw(backup, "PRAGMA user_version") == [(0,)]
+    assert _raw(backup, f"SELECT {old_columns} FROM ai_runs ORDER BY id") == _V0_ROWS
+
+    ar.transition('b', 'cancelled')  # a status the old table's CHECK would have refused
+    assert ar.get_ai_run('c')['best_coilset'] == {'loop_r': 50}
+    ar.migrate_if_needed()
+    assert len(list((path.parent / "backups").glob("*.db"))) == 1, "an up-to-date database is not migrated again"
+    print("  ok  version 0 -> 1: rows unchanged, backup written, new statuses accepted")
+
+
+def test_a_migration_that_fails_half_way_changes_nothing_and_names_the_backup(tmp_path, monkeypatch):
+    path = tmp_path / "old" / "femm_automation.db"
+    path.parent.mkdir()
+    _v0_database(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    # Fails after the new table is built and filled, before the old one is replaced.
+    monkeypatch.setattr(ar, "_RUNS_INDEX", "CREATE INDEX broken ON no_such_table (x)")
+
+    with pytest.raises(ar.MigrationError) as failure:
+        ar.migrate_if_needed()
+
+    (backup,) = list((path.parent / "backups").glob("femm_automation-v0-*.db"))
+    assert str(backup) in str(failure.value)
+    assert _raw(path, "PRAGMA user_version") == [(0,)]
+    assert _raw(path, "SELECT COUNT(*) FROM ai_runs") == [(4,)]
+    assert _raw(path, "SELECT name FROM sqlite_master WHERE name = 'ai_runs_new'") == [], "the half-built table is gone"
+    assert "stop_reason" not in [c[1] for c in _raw(path, "PRAGMA table_info(ai_runs)")]
+
+    monkeypatch.undo()  # the real index statement again
+    monkeypatch.setattr(db, "DB_PATH", path)
+    ar.migrate_if_needed()
+    assert _raw(path, "PRAGMA user_version") == [(1,)], "the next start retries and succeeds"
+    print("  ok  an interrupted migration rolls back completely")
 
 
 def test_get_ai_run_missing_returns_none():
