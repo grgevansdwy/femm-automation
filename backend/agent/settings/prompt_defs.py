@@ -49,12 +49,14 @@ PROMPT_DEFS = {d.key: d for d in [
                "distances": "the distances being simulated, e.g. [3.0, 5.0]",
                "n_candidates": "candidates per turn when it is more than one (empty when one at a time)",
                "keep_best": "how many best candidates are re-shown each turn",
+               "favourite": "the objective you asked to push as far as possible (empty if none)",
+               "noise_points": "the smallest change that counts as a real improvement, in points",
                "thicknesses": "the allowed copper thicknesses",
                "ferrite_fields": "the ferrite fields you opened up (empty if none)",
                "metal_fields": "the shield/backplane fields you opened up (empty if none)",
                "radii": "the coil radii at the start point, with the gap-to-radius ratio"},
               required=("objectives", "free_fields"),
-              switches=("n_candidates", "ferrite_fields", "metal_fields")),
+              switches=("n_candidates", "ferrite_fields", "metal_fields", "favourite")),
 
     PromptDef("interview_system", "Input chat",
               "Sent to the AI at the start of the chat where it turns your request into an objective. "

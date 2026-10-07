@@ -223,6 +223,7 @@ class AgentRunner:
                 state.stop_reason = "user_stopped" if state.cancelled else "internal_error"
             status = status_for(state.stop_reason, state.best is not None and state.best.goal_met)
             state.finished_at = now()
+            state.budget.stop()
             state.budget_history.append(state.budget.as_dict(state.segment))
             state.outcome_report = outcome_report(state, internal_error, status=status)
             state.error = state.outcome_report if status == AgentRunStatus.FAILED else None

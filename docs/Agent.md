@@ -223,6 +223,11 @@ whenever some design meets the goal, whichever rule ended the search; otherwise
 `budget_exhausted` (rules 2), `stopped_by_model` (6), `stalled` (5), `failed`, or
 `cancelled` (1).
 
+The search prompt tells the model the same thing (`## After a candidate meets the goal`):
+keep proposing after a pass, how passing designs are compared (the score below, or the
+favourite), that a change under `noise_points` is not an improvement, and that the app
+ends the search. Without it the model answers in plain text at the first pass.
+
 **Budget** (`femm_agent/models/state.py::Budget`) — rounds, wall clock, and fresh
 simulations, counted for the whole search across resumes. A text-only reply uses a round.
 One simulation = one fresh solve of one candidate at one distance

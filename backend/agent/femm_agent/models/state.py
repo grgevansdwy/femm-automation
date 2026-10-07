@@ -84,6 +84,7 @@ class Budget:
     # the limit is reached even if a few simulations remain unspent.
     simulation_limit_hit: bool = False
     started: float | None = None  # clock() when the segment began
+    ended: float | None = None    # clock() when it ended - the time used stops growing there
     clock: object = dataclasses.field(default=time.monotonic, repr=False, compare=False)
 
     @classmethod
@@ -95,8 +96,14 @@ class Budget:
         if self.started is None:
             self.started = self.clock()
 
+    def stop(self) -> None:
+        if self.started is not None and self.ended is None:
+            self.ended = self.clock()
+
     def elapsed_s(self) -> float:
-        return 0.0 if self.started is None else self.clock() - self.started
+        if self.started is None:
+            return 0.0
+        return (self.clock() if self.ended is None else self.ended) - self.started
 
     def remaining_s(self) -> float:
         return self.time_limit_s - self.elapsed_s()

@@ -121,6 +121,25 @@ def test_prompt_asks_for_a_batch_only_when_the_spec_allows_one():
     print("  ok  the system prompt describes batching only when candidates_per_round > 1")
 
 
+def test_prompt_says_the_search_goes_on_after_a_pass_and_how_passing_designs_compare():
+    from agent.femm_agent.services.prompts import system_prompt
+    from agent.input_chat.models.variables import free_fields_for
+
+    baseline = get_coilset("base_coil")
+    spec = AgentSpec(baseline_config_id="base_coil", distances=[10.0])
+    free = free_fields_for(baseline, spec.variable_spec)
+    blended = system_prompt(baseline, free, spec, {10.0: _METRICS})
+    favourite = system_prompt(baseline, free, dataclasses.replace(spec, favourite_metric="tank_esr"), {10.0: _METRICS})
+
+    for text in (blended, favourite):
+        assert "does NOT end at the first candidate with goal_met=true" in text and "{{" not in text
+        assert "A candidate meeting the goal is not a reason to stop" in text
+        assert "less than about 1 point(s)" in text
+    assert "half the SMALLEST points" in blended and "alone" not in blended.split("## After a candidate")[1].split("##")[0]
+    assert "compared on tank_esr alone" in favourite and "half the SMALLEST points" not in favourite
+    print("  ok  the search prompt: keep improving after a pass; blended score or the favourite")
+
+
 def test_each_request_carries_the_latest_round_raw_plus_the_best_candidates_so_far(monkeypatch):
     """The model's memory is rebuilt every round (optimize.search_memory()):
     only the latest round's results go in full, the best few candidates and

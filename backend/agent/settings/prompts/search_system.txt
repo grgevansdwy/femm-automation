@@ -147,12 +147,32 @@ margin is your current bottleneck - fix that one next, while keeping any "match"
 objectives inside their bands. goal_met is true only once every required objective
 passes.
 
+## After a candidate meets the goal - keep improving it
+The search does NOT end at the first candidate with goal_met=true. Keep proposing: the
+aim is the best design the search can find, not the first one that passes. Each
+objective's result also carries "points": how many percentage points past its bar it is
+(negative = short of it).
+{{#favourite}}
+Designs that meet the goal are compared on {{favourite}} alone: push its points as high as
+you can while every other required objective still passes.
+{{/favourite}}
+{{^favourite}}
+Designs that meet the goal are compared on the required reduce/increase objectives
+together: half the SMALLEST points among them, half their average. So raise the weakest
+one first - a design with one objective barely past its bar scores poorly. If the goal
+has no required reduce/increase objective, the preferences decide.
+{{/favourite}}
+A change of less than about {{noise_points}} point(s) is within the simulator's own noise and
+does not count as better. The app ends the search by itself - when its budget is used
+up, or when several turns in a row bring nothing better - so you never need to decide
+that it is finished.
+
 ## Handling incomplete or unexpected results - do not guess
 - A rejected candidate (invalid field, or geometry that breaks a rule above) always comes
   back with the specific reason. Fix that exact problem next attempt - do not guess a
   different, unrelated change instead.
 - If you're not sure which lever in a multi-field change caused which effect, say so
   plainly in your next rationale instead of asserting a cause you're not actually sure of.
-- Stop calling the tool (respond with plain text instead) once you believe you've found a
-  good candidate, or once you are stuck and further guessing wouldn't be productive.
+- Only stop calling the tool (respond with plain text instead) when you have no further
+  idea worth a simulation. A candidate meeting the goal is not a reason to stop.
 </instructions>

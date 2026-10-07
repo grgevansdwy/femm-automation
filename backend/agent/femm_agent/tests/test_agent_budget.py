@@ -330,6 +330,10 @@ def test_budget_arithmetic():
     assert budget.exhausted() == "simulations" and budget.simulations_left() == 0
     budget.rounds_used = 2
     assert budget.exhausted() == "rounds", "rounds are named first when several limits are reached"
+    clock.t = 40.0
+    budget.stop()
+    clock.t = 500.0
+    assert budget.elapsed_s() == 40.0 and budget.as_dict(1)["seconds_used"] == 40.0, "a finished segment stops the clock"
 
 
 # --- "continue": a new segment of the same run ---------------------------------------------------

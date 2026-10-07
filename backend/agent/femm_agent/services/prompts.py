@@ -90,5 +90,7 @@ def system_prompt(baseline, free_fields: dict, spec, baseline_metrics: dict) -> 
         # time, so the count is only given when it is more than one.
         "n_candidates": spec.candidates_per_round if spec.candidates_per_round > 1 else "",
         "keep_best": spec.keep_best_candidates,
+        "favourite": spec.favourite_metric or "",
+        "noise_points": f"{spec.settings.noise_points:g}",
         **_physics_values(start, free_fields, spec.distances),
     })

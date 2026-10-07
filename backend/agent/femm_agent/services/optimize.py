@@ -155,7 +155,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     allowed = allowed_fields(baseline, spec.variable_spec)
     tools = build_tools(free_fields, spec.baseline_config_id)
 
-    user_message = {"role": "user", "content": "Find a candidate that meets the objective. Start proposing."}
+    user_message = {"role": "user", "content": "Find the best candidate you can that meets the objective. Start proposing."}
     system_message = {"role": "system", "content": system_prompt(baseline, free_fields, spec, baseline_metrics)}
 
     # The search's memory, rebuilt into each request instead of accumulating
