@@ -213,7 +213,7 @@ def test_a_stopped_search_is_kept_with_its_rounds_and_its_best_design(monkeypatc
     assert (row["status"], row["stop_reason"], row["best_round"]) == ("cancelled", "user_stopped", 1)
     assert row["best_coilset"]["tank_center_r"] == 71.0 and row["spec"] is not None
     assert _seqs(state.id) == [1, 2] and len(sent) == 2
-    assert state.rounds[1].candidates[0].error == "not simulated: the search was stopped"
+    assert state.rounds[1].candidates[0].error_code == "search_stopped"
     assert row["budget"] == [state.budget.as_dict(1)] and row["budget"][0]["rounds_used"] == 2
     print("  ok  Stop keeps the run: status cancelled, every finished round, the best design so far")
 
@@ -357,7 +357,8 @@ def test_a_failed_solve_puts_the_full_exception_in_the_log_not_just_its_message(
 
     state, _ = _run_logged(monkeypatch, [_propose(71.0), _propose(60.0)], _spec(), jobs=_FailingJobs())
 
-    assert state.rounds[0].candidates[0].error == "femmcli crashed"
+    rejected = state.rounds[0].candidates[0]
+    assert rejected.error_code == "solver_failed" and "femmcli crashed" not in rejected.error
     (warning,) = [e for e in read_log(state.log.path) if e["event"] == "warning"]
     assert warning["where"] == "optimize_loop.launch" and warning["round"] == 1
     assert "Traceback" in warning["exception"] and "femmcli crashed" in warning["exception"]

@@ -28,7 +28,7 @@ from agent.femm_agent.services.runner import AgentRunner  # noqa: E402
 from agent.femm_agent.services.scorer import objective_summary, tool_result  # noqa: E402
 from agent.input_chat.models.spec import AgentSpec  # noqa: E402
 from agent.femm_agent.models.state import AgentRunStatus, RoundStatus  # noqa: E402
-from agent.input_chat.models.variables import allowed_fields, audit_changed_fields  # noqa: E402
+from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, search_field_table  # noqa: E402
 from agent.settings.settings import load_settings  # noqa: E402
 
 
@@ -72,7 +72,7 @@ def main():
 
     best = state.best
     audit = audit_changed_fields(state.baseline_coilset, best.coilset,
-                                 allowed_fields(state.baseline_coilset, spec.variable_spec))
+                                 allowed_fields(state.baseline_coilset, spec.variable_spec, search_field_table(spec.settings)))
     print(f"goal_met={best.goal_met} used {len(state.rounds)}/{spec.max_tool_calls} tool calls")
     for o in tool_result(best, spec)["objectives"]:
         where = " (worst distance)" if o["change_pct_by_distance"] else ""

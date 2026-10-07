@@ -250,9 +250,10 @@ class AgentRunner:
             return
         try:
             from agent.femm_agent.models.schema import build_tools
-            from agent.input_chat.models.variables import free_fields_for
+            from agent.input_chat.models.variables import free_fields_for, search_field_table
             spec = state.spec
-            tools = build_tools(free_fields_for(state.baseline_coilset, spec.variable_spec), spec.baseline_config_id)
+            tools = build_tools(free_fields_for(state.baseline_coilset, spec.variable_spec,
+                                                search_field_table(spec.settings)), spec.baseline_config_id)
             state.log.run_start(
                 segment=state.segment, git_commit=_git_commit(), settings=dataclasses.asdict(spec.settings),
                 spec=dataclasses.asdict(spec), baseline_coilset=dataclasses.asdict(state.baseline_coilset),

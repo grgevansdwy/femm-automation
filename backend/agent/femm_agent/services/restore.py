@@ -17,7 +17,10 @@ from agent.femm_agent.models.state import (
 from agent.femm_agent.services import progress
 from agent.femm_agent.services.scorer import evaluate_async, rank_key, score, tool_result, wait_for_jobs
 from agent.input_chat.models.spec import spec_from_dict
-from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, free_fields_for
+from agent.femm_agent.models.schema import NEVER_EVALUATED
+from agent.input_chat.models.variables import (
+    allowed_fields, audit_changed_fields, free_fields_for, search_field_table,
+)
 
 
 class RestoreError(Exception):
@@ -66,7 +69,8 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
         state.finished_at = datetime.fromisoformat(record["finished_at"])
     state.baseline_metrics = wait_for_jobs(evaluate_async(
         baseline, spec.distances, job_runner, config_id=spec.baseline_config_id, config_name=baseline.config_name))
-    allowed = allowed_fields(baseline, spec.variable_spec)
+    table = search_field_table(spec.settings)  # the run's own copy of the Search fields table
+    allowed = allowed_fields(baseline, spec.variable_spec, table)
     candidate_fields = {f.name for f in dataclasses.fields(CandidateResult)}
 
     for message in sorted(list_messages(ai_run_id, phase="optimize"), key=lambda m: m["round_num"]):
@@ -82,9 +86,12 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
             round_state.candidates.append(candidate)
             if not candidate.valid:
                 # A proposal turned away unseen (over a limit) was never part of the memory.
-                if not (candidate.error or "").startswith("not simulated"):
+                never_evaluated = (candidate.error_code in NEVER_EVALUATED
+                                   or (candidate.error or "").startswith("not simulated"))  # rows from before the codes
+                if not never_evaluated:
                     state.tried.append(Tried(round_state.round_num, candidate.delta, None,
-                                             {"valid": False, "error": candidate.error or ""}, round_state.segment))
+                                             candidate.rejection or {"valid": False, "error": candidate.error or ""},
+                                             round_state.segment))
                 continue
             coilset = CoilSet(**candidate.candidate_coilset)
             scored = score(coilset, wait_for_jobs(evaluate_async(coilset, spec.distances, job_runner)),
@@ -104,5 +111,5 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     if state.rounds:
         state.progress = progress.assess(
             state.tried, [r.round_num for r in state.rounds if not r.no_reply], spec,
-            free_fields_for(baseline, spec.variable_spec), state.segment_start_round)
+            free_fields_for(baseline, spec.variable_spec, table), state.segment_start_round)
     return state

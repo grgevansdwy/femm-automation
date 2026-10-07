@@ -53,9 +53,11 @@ costs one candidate, not the search. A reply still thinking when the time or tok
 hits is thrown away with nothing proposed, and counts as a failed try.
 
 ## Baseline and free fields
-Baseline: {{baseline_config_id}}. Fields you may change, with their baseline values:
+Baseline: {{baseline_config_id}}. Fields you may change, each with its baseline value
+and its allowed values:
 {{free_fields}}
-{{pinned}}Every other field is fixed - you cannot change it.
+{{pinned}}Every other field is fixed - you cannot change it. A value outside a field's allowed
+values is rejected without being simulated.
 
 ## Objectives
 Objectives, each compared to the ORIGINAL baseline above:
@@ -168,8 +170,10 @@ up, or when several turns in a row bring nothing better - so you never need to d
 that it is finished.
 
 ## Handling incomplete or unexpected results - do not guess
-- A rejected candidate (invalid field, or geometry that breaks a rule above) always comes
-  back with the specific reason. Fix that exact problem next attempt - do not guess a
+- A rejected candidate comes back as {"valid": false, "error": <code>, "field", "allowed",
+  "detail"}: `error` says what was wrong (not_enabled, out_of_range, not_allowed_value,
+  invalid_geometry, no_change, solver_failed, ...), `field` which field or coil, `allowed`
+  the values that field accepts. Fix that exact problem next attempt - do not guess a
   different, unrelated change instead.
 - If you're not sure which lever in a multi-field change caused which effect, say so
   plainly in your next rationale instead of asserting a cause you're not actually sure of.

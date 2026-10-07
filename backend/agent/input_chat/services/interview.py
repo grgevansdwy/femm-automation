@@ -24,11 +24,15 @@ from agent.femm_agent.services.scorer import design_values
 from agent.input_chat.models.spec import AgentSpec
 from agent.settings.settings import AgentSettings
 from agent.settings.templating import render
+from agent.femm_agent.models.schema import limit_text
 from agent.input_chat.models.variables import (
-    CONSENT_GROUPS, VariableSpec, coerce_fixed_values, free_fields_for, is_group_present, resolve_excluded,
+    NUMERIC_FIELDS, VariableSpec, check_field_changes, coerce_fixed_values, free_fields_for, limit_problems,
+    resolve_excluded, search_field_table,
 )
 
 _DEFAULT_MAX_DISTANCES = AgentSettings().max_distances
+# The RC separation a search may simulate - the same range agent_cli.py accepts.
+MIN_DISTANCE_MM, MAX_DISTANCE_MM = 0.0, 200.0
 
 FINALIZE_SPEC_TOOL = [{
     "type": "function",
@@ -48,14 +52,6 @@ FINALIZE_SPEC_TOOL = [{
                               "description": f"RC separation distances (mm) to evaluate at. At most "
                                               f"{_DEFAULT_MAX_DISTANCES} - each one is a full extra FEMM solve per "
                                               "candidate, so ask the user to narrow it down if they name more."},
-                "enabled_groups": {
-                    "type": "array", "items": {"type": "string", "enum": list(CONSENT_GROUPS)},
-                    "description": "Structural details the user EXPLICITLY said the search may change - "
-                                    "e.g. 'tank_ferrite' to let it adjust (or add/remove) tank ferrite, "
-                                    "'pcb_thickness' to let board thickness move. Nothing here is free by "
-                                    "default, even if the baseline already has it (e.g. ferrite fitted) - "
-                                    "only include a group the user actually asked to open up.",
-                },
                 "excluded_fields": {
                     "type": "array", "items": {"type": "string"},
                     "description": "Fields to keep at their baseline value even though they'd otherwise "
@@ -145,10 +141,47 @@ FLAG_OFF_TOPIC_TOOL = [{
 }]
 
 
+PROPOSE_FIELDS_TOOL_NAME = "propose_search_fields_change"
+
+PROPOSE_SEARCH_FIELDS_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": PROPOSE_FIELDS_TOOL_NAME,
+        "description": (
+            "Propose a change to the Search fields table in Settings - which design fields a search "
+            "may change, and each one's minimum and maximum. Call this INSTEAD of finalize_spec when "
+            "the user wants the search to change a field that is closed, or when a limit does not fit "
+            "what they asked for. This only SHOWS the proposal to the user with an Apply button: you "
+            "cannot apply it, and nothing changes unless they click Apply."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "array", "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string", "enum": list(NUMERIC_FIELDS)},
+                            "enabled": {"type": "boolean", "description": "true = the search may change this field."},
+                            "min": {"type": ["number", "null"], "description": "Lowest allowed value, in the field's own unit; null = no minimum."},
+                            "max": {"type": ["number", "null"], "description": "Highest allowed value, in the field's own unit; null = no maximum."},
+                        },
+                        "required": ["field"],
+                    },
+                },
+                "reason": {"type": "string", "description": "One short sentence the user reads: why this change is needed."},
+            },
+            "required": ["changes", "reason"],
+        },
+    },
+}]
+
+
 def _interview_tools(max_distances: int) -> list[dict]:
-    """The two tools offered on a normal interview turn: FINALIZE_SPEC_TOOL
+    """The tools offered on a normal interview turn: FINALIZE_SPEC_TOOL
     (distances cap set to `max_distances` - the constant above is only the
-    default) plus FLAG_OFF_TOPIC_TOOL. Giving the model a dedicated way to
+    default), FLAG_OFF_TOPIC_TOOL and PROPOSE_SEARCH_FIELDS_TOOL. Giving the model a dedicated way to
     signal "this isn't relevant" - instead of trusting it to decline
     gracefully in free text - is what makes the redirect message below
     code-controlled rather than whatever the model happens to write; see
@@ -157,41 +190,32 @@ def _interview_tools(max_distances: int) -> list[dict]:
     distances = tool[0]["function"]["parameters"]["properties"]["distances"]
     distances["maxItems"] = max_distances
     distances["description"] = distances["description"].replace(str(_DEFAULT_MAX_DISTANCES), str(max_distances))
-    return tool + FLAG_OFF_TOPIC_TOOL
+    return tool + FLAG_OFF_TOPIC_TOOL + PROPOSE_SEARCH_FIELDS_TOOL
 
 
 def interview_system_prompt(baseline_config_id: str, baseline, settings: AgentSettings | None = None) -> str:
     """Scopes the model to FEMM-simulation objective-gathering only (a
-    prompt-level guardrail, not a hard filter), and tells it exactly which
-    structural details it must actively ask about before ever assuming
-    they're open to change - the rule is strict and uniform: fixed unless
-    the user explicitly says otherwise, whether or not the baseline
-    already has that detail (ferrite fitted does NOT make ferrite free).
+    prompt-level guardrail, not a hard filter), and tells it which fields the
+    search may change and within what limits - the Search fields table in
+    force for this conversation (`settings`). The model reads the table; it
+    cannot change it (propose_search_fields_change only shows a proposal).
     """
-    # Physical presence is purely descriptive here - it tells the model
-    # what the design already has, never what it may change (that's
-    # consent alone, via enabled_groups). pcb_thickness has no on/off flag
-    # (its fields always exist), so it's mentioned separately, not in this
-    # present/absent split.
-    toggled = [g for g, info in CONSENT_GROUPS.items() if info["flag"]]
-    present = [g for g in toggled if is_group_present(baseline, g)]
-    absent = [g for g in toggled if g not in present]
+    settings = settings or AgentSettings()
     sim_lines = "\n".join(f"  {m}: {QUANTITY_GLOSSES[m]}" for m in SIM_RESULT_METRICS)
     design = design_values(baseline)
     derived_lines = "\n".join(f"  {m}: {QUANTITY_GLOSSES[m]}, baseline {design[m]:.4g}" for m in DERIVED_QUANTITIES)
     def _variable_line(name, schema):
-        # Surfaces a discrete field's allowed values (e.g. trace thickness's enum) - without
-        # this, nothing tells the model such a field only takes a few exact values, not a range.
-        enum = schema.get("enum")
-        allowed = f" - must be one of {enum}" if enum else ""
-        return f"  {name}: {QUANTITY_GLOSSES[name]}, baseline {design[name]:g}{allowed}"
+        # Each open field with what it may be set to: a range, or a discrete field's
+        # exact values (e.g. trace thickness) - "must be one of" is the wording the
+        # prompt's discrete-field rule refers to.
+        allowed = f"must be one of {schema['enum']}" if schema.get("enum") else f"allowed: {limit_text(schema)}"
+        return f"  {name}: {QUANTITY_GLOSSES[name]}, baseline {design[name]:g} - {allowed}"
 
-    variable_lines = "\n".join(_variable_line(f, s) for f, s in free_fields_for(baseline).items())
-    settings = settings or AgentSettings()
+    open_fields = free_fields_for(baseline, None, search_field_table(settings))
+    variable_lines = "\n".join(_variable_line(f, s) for f, s in open_fields.items())
     return render(settings.prompt("interview_system"), {
         "baseline_config_id": baseline_config_id,
-        "present": present or "none of the optional structural details",
-        "absent": absent or "none",
+        "closed_fields": ", ".join(n for n in NUMERIC_FIELDS if n not in open_fields) or "none",
         "sim_lines": sim_lines,
         "derived_lines": derived_lines,
         "variable_lines": variable_lines,
@@ -214,6 +238,11 @@ class InterviewState:
     # The settings this conversation runs under (prompt wording, LLM limits) -
     # fixed when the conversation starts, and handed on to the AgentSpec it produces.
     settings: AgentSettings = dataclasses.field(default_factory=AgentSettings)
+    # A change to the Search fields table the model proposed and the user has
+    # not yet applied or dismissed: {"changes": [{field, enabled?, min?, max?}],
+    # "reason": str}. Only shown - applying it is the user's click
+    # (agent.settings.settings.apply_search_field_changes), never this module's.
+    pending_field_change: dict | None = None
 
 
 def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSettings | None = None) -> AgentSpec:
@@ -221,28 +250,33 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
     into a rejected tool result (same "validation error is feedback for the
     model, not a crash" pattern agent/femm_agent/models/schema.py's coerce_delta uses)."""
     settings = settings or AgentSettings()
-    distances = [float(d) for d in args["distances"]]
+    distances = list(dict.fromkeys(float(d) for d in args["distances"]))  # duplicates dropped, order kept
     if not distances:
         raise ValueError("distances must be a non-empty list")
+    out_of_range = [d for d in distances if not MIN_DISTANCE_MM < d <= MAX_DISTANCE_MM]  # also catches NaN
+    if out_of_range:
+        raise ValueError(f"distances must be above {MIN_DISTANCE_MM:g} and at most {MAX_DISTANCE_MM:g} mm, "
+                         f"got {out_of_range}")
     if len(distances) > settings.max_distances:
         raise ValueError(f"distances: at most {settings.max_distances} allowed, got {len(distances)} - "
                           "ask the user which ones matter most")
 
-    enabled_groups = set(args.get("enabled_groups") or [])
-    unknown = enabled_groups - set(CONSENT_GROUPS)
-    if unknown:
-        raise ValueError(f"enabled_groups contains unknown group(s): {sorted(unknown)}")
-
+    # Which fields are open, and their limits, come from the Search fields table
+    # alone - nothing in the model's arguments can open a field or widen a limit.
+    table = search_field_table(settings)
     variable_spec = VariableSpec(
-        enabled_groups=enabled_groups,
         excluded_fields=resolve_excluded(args.get("excluded_fields") or []),  # raises on a typo'd name
-        fixed_values=coerce_fixed_values(dict(args.get("fixed_values") or {})),
+        fixed_values=coerce_fixed_values(dict(args.get("fixed_values") or {}), table),  # raises outside a limit
     )
     # An interview that excludes/pins every free field would leave the
     # optimize phase with nothing to propose.
-    free_fields = free_fields_for(baseline, variable_spec)
+    free_fields = free_fields_for(baseline, variable_spec, table)
     if not free_fields:
         raise ValueError("excluded_fields/fixed_values leave no free fields to search over")
+    problems = limit_problems(baseline, variable_spec, table)
+    if problems:
+        raise ValueError("; ".join(problems) + " - the search cannot start from a baseline outside a limit. "
+                         "Propose a change to that limit, or exclude the field.")
 
     # No fallback to AgentSpec's default objectives here: an interview that
     # never mentioned M or ESR must not quietly get an M23 gate and an ESR
@@ -268,7 +302,7 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
             raise ValueError(f"{o.metric} is pinned by fixed_values, so it can't also be an objective")
         if not is_per_distance(o.metric) and o.metric not in DERIVED_QUANTITIES and o.metric not in free_fields:
             raise ValueError(f"{o.metric} isn't free in this search, so no candidate could ever change it - "
-                             "enable its group / stop excluding it, or drop the objective")
+                             "propose enabling it in Search fields / stop excluding it, or drop the objective")
         if o.target_value is None and not is_per_distance(o.metric) and design[o.metric] == 0:
             raise ValueError(f"{o.metric} is 0 on the baseline, so a % change is undefined - use target_value")
 
@@ -286,6 +320,28 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
         variable_spec=variable_spec,
         objectives=objectives,
     )
+
+
+def plan_problems(spec: AgentSpec, baseline) -> list[str]:
+    """Why an already-built plan can't start under the Search fields table its
+    settings now carry - the same checks _build_spec() makes, re-run when the
+    table is copied into the plan again at Start Search (it may have been
+    edited in Settings since the plan was proposed). Empty list = it can start."""
+    table = search_field_table(spec.settings)
+    vs = spec.variable_spec
+    problems = []
+    try:
+        coerce_fixed_values(dict(vs.fixed_values), table)
+    except ValueError as exc:
+        problems.append(f"Pinned value - {exc}")
+    free_fields = free_fields_for(baseline, vs, table)
+    if not free_fields:
+        problems.append("No field is left open for the search to change")
+    problems += limit_problems(baseline, vs, table)
+    problems += [f"{o.metric} has an objective but is closed in Search fields"
+                 for o in spec.objectives
+                 if not is_per_distance(o.metric) and o.metric not in DERIVED_QUANTITIES and o.metric not in free_fields]
+    return problems
 
 
 def run_interview_turn(state: InterviewState, user_message: str | None = None, should_abort=None,
@@ -357,6 +413,20 @@ def run_interview_turn(state: InterviewState, user_message: str | None = None, s
         return
 
     args = function.get("arguments")
+    if function.get("name") == PROPOSE_FIELDS_TOOL_NAME:
+        # Shown to the user as a card with Apply / Dismiss (agent_panel.py). Nothing
+        # is written here: the table changes only on the user's own click.
+        try:
+            changes = check_field_changes(args.get("changes") if isinstance(args, dict) else None)
+            state.pending_field_change = {"changes": changes, "reason": str(args.get("reason") or "")}
+            result = {"valid": True, "message": "Shown to the user. Nothing has changed - the table changes only "
+                                                "if they click Apply."}
+        except (ValueError, KeyError, TypeError) as exc:
+            result = {"valid": False, "error": str(exc)}
+        state.transcript.append({"role": "tool", "content": json.dumps(result)})
+        _toolless_followup()
+        return
+
     try:
         if not isinstance(args, dict):
             raise ValueError(f"finalize_spec's arguments must be a JSON object, got {type(args).__name__}")

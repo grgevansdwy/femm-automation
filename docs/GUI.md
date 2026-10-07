@@ -105,6 +105,14 @@ turns, search rounds, scoring) belong to `Agent.md`:
   it; once a search has ended, typing exactly "continue" or clicking **Continue** resumes
   the same run with a fresh budget (`continue_search()`), and a status line is drawn in
   the chat where each search segment started.
+  Two more things come from the Search fields table (`Agent.md` §4). When the interview
+  model proposes a change to it, a card under the chat lists the change with **Apply**
+  and **Dismiss**; `apply_field_change()` is the only code here that writes the table, and
+  it then sends one fixed message so the model re-plans. **Start Search** first copies
+  the table as saved into the plan and re-checks it (`recheck_plan()`); if the plan no
+  longer fits, the button is disabled and the reasons are listed, with **Check again**.
+  The baseline's Inputs table has a "Search may set" column: each open field's allowed
+  values, or "fixed".
 - **`agent_candidate_card.py`** — the shared renderer for one round/candidate (geometry +
   result tables + reasoning) and the finished-search summary. Used by *both* the live
   view and history replay so they can never visually drift apart — deliberately its own
@@ -127,7 +135,10 @@ view and the finished summary call `draw()` directly.
 `AgentSettings`: the three system prompts, the LLM connection (URL, model, limits, and the sampling
 values sent with every request: temperature, top-p, seed), and
 the search budget (rounds, total time, simulations, plateau and stall lengths, the noise
-threshold, candidates per round, retries). This is the second — and
+threshold, candidates per round, retries), and the **Search fields** page:
+one row per numeric design field, grouped like the config form, with a checkbox (the
+search may change it), a minimum and a maximum (empty = no limit) and a per-row Reset.
+Text in a limit box that is not a number is kept as typed and blocks Save. This is the second — and
 last — `frontend/` ↔ `agent/` touch point (`agent.settings`). Full detail: `Agent.md`.
 
 ### Startup

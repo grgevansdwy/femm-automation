@@ -76,8 +76,7 @@ Once it has enough, it calls `finalize_spec` with:
 
 ```
 objective_text          -- the user's request, verbatim, for the record
-distances                -- mm, the RC-separation sweep to evaluate at (capped, MAX_DISTANCES)
-enabled_groups            -- which optional structural groups the search may touch (below)
+distances                -- mm, the RC-separation sweep to evaluate at (capped, MAX_DISTANCES; above 0, at most 200 mm, duplicates dropped)
 excluded_fields          -- specific fields to pin even though they'd otherwise be free
 objectives               -- list of {metric, kind, tolerance_pct, target_pct, required}
 favourite_metric         -- optional: the one required reduce/increase objective to push
@@ -160,13 +159,36 @@ instead of a generic restart.
 
 `input_chat/models/variables.py`:
 
-- **`FREE_VARIABLES`** — base winding geometry (radius, turns, layers, spacing, trace
-  width, trace thickness) for all three coils — always free, no consent needed.
-- **`CONSENT_GROUPS`** — ferrite (tank and RC separately), shields (TC and RC),
-  backplane (TC and RC), PCB thickness — **fixed unless the user explicitly asks for
-  them in the interview.** Whether the baseline already has a group active makes no
-  difference: a design that already has ferrite fitted does *not* make ferrite free to
-  touch by itself — the search must not change it unless told to.
+Permission is one table the user owns: **Settings → Search fields**
+(`AgentSettings.search_fields`), one row per numeric `CoilSet` field with an enabled flag,
+an optional minimum and an optional maximum. Only rows that differ from the shipped
+defaults are stored; the table is copied into the run with the rest of the settings when
+Start Search is clicked, and the search reads that copy.
+
+- **Shipped defaults (`DEFAULT_SEARCH_FIELDS`)** — the base winding geometry
+  (`FREE_VARIABLES`: radius, turns, layers, spacing, trace width, trace thickness, for all
+  three coils) is enabled. Ferrite (including `rc_ferrite_y_offset`), shields, backplanes,
+  PCB thickness and the loss angles are disabled. The three layer fields have a maximum
+  of 8, which the user can clear.
+- **A field is offered to the search** when it is enabled, not in the interview's
+  `excluded_fields`, and not pinned by `fixed_values` (`free_fields_for()`). What the
+  baseline has fitted makes no difference.
+- **Code floors, whatever the table says** — a dimension is ≥ 0, a count is ≥ 1, a flag is
+  0 or 1, a copper thickness is one of the allowed weights (a thickness row's min/max
+  filter that list). They apply to proposed and pinned values, not to the baseline.
+- **The interview model cannot change the table.** It may call
+  `propose_search_fields_change`; code validates the proposal and the chat shows it with
+  **Apply** / **Dismiss**. Only the user's click writes
+  (`settings.apply_search_field_changes()`); `finalize_spec` no longer has an
+  `enabled_groups` argument.
+- **A plan that does not fit the table is refused** by `_build_spec()` with the field
+  named: a pinned value outside a limit, an open field whose baseline value is outside
+  its limit, an objective on a closed design variable. The same checks run again at
+  Start Search (`plan_problems()`), since the table may have been edited meanwhile.
+- **Runs stored before the table existed** keep `enabled_groups` in their spec and are
+  audited by the old rule (`stored_allowed_fields()` → `legacy_allowed_fields()`).
+- `FIELD_GROUPS` only names sets of related fields (a group name in `excluded_fields`, the
+  search prompt's ferrite / metal notes). A group grants nothing.
 
 The `finalize_spec` tool, the objective vocabulary (`match`/`reduce`/`increase`, per the
 metric's kind), and the interview's system prompt live in `backend/agent/input_chat/` and
@@ -258,7 +280,25 @@ limits and spend are one entry in `ai_runs.budget_json`.
 `propose_coilset`'s schema (`femm_agent/models/schema.py::build_tools()`) is built fresh
 per run from that run's actual free-field set, with `additionalProperties: false` so the
 server itself rejects any field outside it — a second, structural layer under the
-`_prepare()` check. A required `rationale` argument (1–2 sentences: what the last result
+`_prepare()` check. Each field's entry carries its limits from the run's Search fields
+table (`minimum` / `maximum` / `enum`), and `coerce_delta()` enforces them: the schema is
+advice to the model, the code check is the one that counts.
+
+`_prepare()` turns one tool call into a candidate or a rejection, before any solve is
+queued, in this order: over the per-round limit, tool name, argument shape, each field
+(open in this run, right type, inside its limit), the build, the audit against the
+baseline, something changed, and the geometry (`engine.core.validate_coilset()`, the
+same check `simulate()` runs). A rejection — from `_prepare()` or from a solve that
+failed later — is sent to the model in one fixed format,
+`{"valid": false, "error": <code>, "field", "allowed", "detail"}`
+(`schema.Rejection`). The codes are in `schema.REJECTION_DETAIL`: `over_candidate_limit`,
+`unknown_tool`, `bad_arguments`, `unknown_field`, `not_enabled`, `wrong_type`,
+`out_of_range`, `not_allowed_value`, `no_change`, `invalid_geometry`, `solver_failed`,
+`solver_timeout`, plus `unknown_base` and `simulation_limit`, which are defined but not
+raised yet. `detail` is a fixed sentence per code (for `invalid_geometry`, the validity
+check's own sentence naming the coil); the exception's text and any path go to the run
+log only. The already-tried list shows a rejection as its code, field and allowed
+values. A required `rationale` argument (1–2 sentences: what the last result
 showed and why this change should help) is the only reasoning a human watching the search
 actually reads; it was made required after the model sometimes skipped it when it was
 optional.
@@ -489,13 +529,15 @@ plateau and stall lengths, the noise threshold `noise_points`, candidates per ro
 best-kept count, retry counts, max distances), and the three system prompts, each **one** template
 of plain text with `{{placeholder}}` fills and `{{#name}}...{{/name}}` conditional
 blocks (a batch-size-dependent paragraph, ferrite/metal notes that only appear if those
-fields are open, and so on) — `agent/settings/templating.py`. Only values that differ
+fields are open, and so on) — `agent/settings/templating.py`. It also holds the Search
+fields table of §4 (`search_fields`: which fields a search may change, and their limits). Only values that differ
 from the code defaults (`agent/config.py`) are stored, in the `agent_settings` table. A
 run copies the settings in force when it starts, so editing them mid-run never changes
 that run, and History records which prompt text a given run actually used.
 
-**Deliberately not configurable:** the tool schemas and their validation, the allowed
-copper-thickness enum, the solver's geometry-validity checks, and the structural
+**Deliberately not configurable:** the tool schemas and their validation, the code
+floors under the Search fields table (dimension ≥ 0, count ≥ 1, the allowed
+copper-thickness enum), the solver's geometry-validity checks, and the structural
 field-allowlist audit — the plain-code safety layer from §3's third principle.
 
 ## 11. Where the actual deployment differs from the original design

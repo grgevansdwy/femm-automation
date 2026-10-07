@@ -244,3 +244,57 @@ def test_the_default_followup_prompt_follows_whether_the_search_is_running():
     assert "still running" in text and "inputs of a running search are locked" in text and "{{" not in text
     text = followup_system_prompt(finished)
     assert "has finished" in text and "can't be changed" in text and "still running" not in text
+
+
+# ---- the Search fields table ---------------------------------------------------------------------
+
+def test_search_fields_are_stored_only_where_they_differ_and_bad_rows_never_save():
+    from agent.input_chat.models.variables import DEFAULT_SEARCH_FIELDS, search_field_table
+    from agent.settings.settings import apply_search_field_changes
+
+    assert AgentSettings().search_fields == {} and search_field_table(load_settings()) == DEFAULT_SEARCH_FIELDS
+
+    saved = apply_search_field_changes([{"field": "tank_mu", "enabled": True, "max": 2000},
+                                        {"field": "num_rc_layers", "max": None}])
+    assert saved.search_fields == {"tank_mu": {"enabled": True, "min": None, "max": 2000},
+                                   "num_rc_layers": {"enabled": True, "min": None, "max": None}}
+    assert repository.load_overrides() == {"search_fields": saved.search_fields}
+    assert load_settings().search_fields == saved.search_fields
+
+    # Putting a row back to its default removes it from what is stored.
+    apply_search_field_changes([{"field": "tank_mu", "enabled": False, "max": None}, {"field": "num_rc_layers", "max": 8}])
+    assert repository.load_overrides() == {}
+
+    for bad in ({"tank_mu": {"enabled": "yes"}}, {"tank_mu": {"min": 5, "max": 1}}, {"tank_mu": {"max": "big"}},
+                {"tank_mu": 3}, ["tank_mu"]):
+        problems = dataclasses.replace(AgentSettings(), search_fields=bad).validate()
+        assert problems and problems[0].startswith("Search fields"), (bad, problems)
+        with pytest.raises(ValueError):
+            save_settings(dataclasses.replace(AgentSettings(), search_fields=bad))
+    with pytest.raises(ValueError):
+        apply_search_field_changes([{"field": "no_such_field", "enabled": True}])
+    assert repository.load_overrides() == {}, "a refused change saves nothing"
+
+
+def test_a_saved_row_for_a_field_that_no_longer_exists_is_ignored():
+    from agent.input_chat.models.variables import DEFAULT_SEARCH_FIELDS, search_field_table
+    repository.replace_overrides({"search_fields": {"removed_field": {"enabled": True}, "tank_mu": {"enabled": True}}})
+    settings = load_settings()
+    assert settings.validate() == []
+    table = search_field_table(settings)
+    assert "removed_field" not in table and table["tank_mu"].enabled
+    assert {k: v for k, v in table.items() if k != "tank_mu"} == {k: v for k, v in DEFAULT_SEARCH_FIELDS.items() if k != "tank_mu"}
+
+
+def test_a_run_snapshot_round_trips_its_search_fields():
+    settings = AgentSettings(search_fields={"tank_mu": {"enabled": True, "min": None, "max": 2000}})
+    assert settings_from_dict(json.loads(json.dumps(dataclasses.asdict(settings)))).search_fields == settings.search_fields
+    assert settings_from_dict({"max_tool_calls": 7}).search_fields == {}, "a snapshot from before the table"
+
+
+def test_both_edited_default_prompts_use_only_their_declared_placeholders():
+    for key in ("interview_system", "search_system"):
+        definition = PROMPT_DEFS[key]
+        assert check_placeholders(default_text(key), definition.placeholders, definition.required) == []
+    assert "present" not in PROMPT_DEFS["interview_system"].placeholders
+    assert "closed_fields" in PROMPT_DEFS["interview_system"].placeholders

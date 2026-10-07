@@ -10,6 +10,7 @@ editing them mid-run never changes that run.
 import dataclasses
 
 from agent import config
+from agent.input_chat.models import variables
 from agent.repositories import agent_settings_repository as repository
 from agent.settings.prompt_defs import PROMPT_DEFS
 from agent.settings.templating import check_placeholders
@@ -72,6 +73,9 @@ class AgentSettings:
     round_llm_attempts: int = config.ROUND_LLM_ATTEMPTS
     search_attempts: int = config.SEARCH_ATTEMPTS
     max_distances: int = config.MAX_DISTANCES
+    # --- search fields: the rows of the Search fields table that differ from the shipped
+    # defaults, field -> {"enabled", "min", "max"} (agent/input_chat/models/variables.py)
+    search_fields: dict = dataclasses.field(default_factory=dict)
     # --- prompts: only the ones a person edited, key -> text (see prompt_defs.PROMPT_DEFS)
     prompts: dict = dataclasses.field(default_factory=dict)
 
@@ -106,6 +110,8 @@ class AgentSettings:
                      "search_attempts", "max_distances", "max_simulations", "plateau_rounds", "stall_rounds"):
             v = getattr(self, name)
             need(isinstance(v, int) and not isinstance(v, bool) and v >= 1, name, "must be a whole number, at least 1")
+
+        problems += variables.search_field_problems(self.search_fields)
 
         for key, text in self.prompts.items():
             definition = PROMPT_DEFS.get(key)
@@ -161,6 +167,19 @@ def save_settings(settings: AgentSettings) -> None:
     overrides.update({f"prompt:{key}": text for key, text in settings.prompts.items()
                       if text != PROMPT_DEFS[key].default})
     repository.replace_overrides(overrides)
+
+
+def apply_search_field_changes(changes: list[dict]) -> AgentSettings:
+    """Applies a change to the Search fields table ([{field, enabled?, min?,
+    max?}]) to the saved settings and returns them. Besides the Settings
+    screen this is the only thing that writes the table, and it runs only on a
+    person's click (the Apply button on a proposal in the chat) - never from a
+    model's tool call. Raises ValueError, saving nothing, on a bad change."""
+    settings = load_settings()
+    table = variables.apply_field_changes(variables.search_field_table(settings), changes)
+    settings.search_fields = variables.search_field_overrides(table)
+    save_settings(settings)
+    return settings
 
 
 def settings_from_dict(data: dict | None) -> AgentSettings:

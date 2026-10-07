@@ -135,6 +135,12 @@ class CandidateResult:
     valid: bool
     tool_result: dict | None = None
     error: str | None = None
+    # Why it was rejected, as a code from schema.REJECTION_DETAIL (None for a valid
+    # candidate, and for rows stored before the codes existed).
+    error_code: str | None = None
+    # The whole rejection as the model was sent it (schema.Rejection.as_result()),
+    # kept so a resumed search can rebuild its memory of it word for word.
+    rejection: dict | None = None
     # The full candidate CoilSet, as a plain dict (dataclasses.asdict) - set
     # whenever dataclasses.replace(baseline, **delta) succeeds, regardless
     # of whether the candidate went on to pass FEMM validation, so the GUI

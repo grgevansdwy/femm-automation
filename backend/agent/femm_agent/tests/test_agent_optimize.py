@@ -93,9 +93,10 @@ def test_a_round_queues_every_solve_before_waiting_and_isolates_failures(monkeyp
 
     candidates = state.rounds[0].candidates
     assert [c.valid for c in candidates] == [True, False, False, True, False]
-    assert "not a valid field" in candidates[1].error
-    assert "femmcli crashed" in candidates[2].error, "a failed solve rejects only its own candidate"
-    assert "over the limit of 4" in candidates[4].error
+    assert candidates[1].error_code == "unknown_field"
+    assert candidates[2].error_code == "solver_failed", "a failed solve rejects only its own candidate"
+    assert "femmcli crashed" not in candidates[2].error, "the solver's own text never reaches the model or the GUI"
+    assert candidates[4].error_code == "over_candidate_limit"
     assert candidates[0].tool_result == candidates[3].tool_result
     assert state.best is not None and state.best.coilset.tank_center_r == 70.0
 
@@ -263,15 +264,16 @@ def _prepare_one(function, **kwargs):
 def test_prepare_rejects_arguments_that_are_not_a_json_object():
     for bad in (None, [], ["a", "b"], "oops", 5):
         p = _prepare_one({"name": "propose_coilset", "arguments": bad})
-        assert p.error and "must be a JSON object" in p.error, bad
+        assert p.rejection.code == "bad_arguments" and "must be a JSON object" in p.error, bad
         assert p.jobs is None and p.candidate is None
 
 
 def test_prepare_rejects_a_call_to_any_other_tool():
     p = _prepare_one({"name": "delete_everything", "arguments": {"rationale": "x", "num_loop_turns": 2}})
-    assert "unknown tool 'delete_everything'" in p.error and "propose_coilset" in p.error
+    assert p.rejection.code == "unknown_tool" and "propose_coilset" in p.error
+    assert "delete_everything" not in p.error, "the model's own text is never echoed back"
     p = _prepare_one({"arguments": {"rationale": "x", "num_loop_turns": 2}})  # no name at all
-    assert "unknown tool" in p.error
+    assert p.rejection.code == "unknown_tool"
 
 
 def test_prepare_rejects_a_proposal_that_changes_nothing():
