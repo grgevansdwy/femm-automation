@@ -13,7 +13,7 @@ import json
 from agent.femm_agent.services import optimize
 from agent.input_chat.models.objective import Objective
 from agent.input_chat.models.spec import AgentSpec
-from agent.femm_agent.models.state import AgentRunState, AgentRunStatus
+from agent.femm_agent.models.state import AgentRunState
 from engine.repositories.coilset_repository import get_coilset
 
 _METRICS = {"L_loop": 1.9e-7, "L_tank": 4.6e-6, "L_rc": 1.6e-6, "M12": 6e-7, "M13": 1.3e-7, "M23": 6.9e-7,

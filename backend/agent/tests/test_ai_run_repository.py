@@ -299,8 +299,10 @@ def test_delete_ai_run_removes_the_run_and_its_messages():
 if __name__ == '__main__':
     print("checking the AI-run history store")
     test_create_ai_run_starts_interviewing()
-    test_finalize_spec_moves_to_running()
-    test_update_run_status_only_overwrites_passed_fields()
+    test_finalize_spec_moves_to_plan_ready_not_running()
+    test_transition_only_overwrites_passed_fields()
+    test_every_allowed_status_change_works_and_every_other_one_is_rejected()
+    test_reaper_marks_running_rows_interrupted_and_touches_nothing_else()
     test_get_ai_run_missing_returns_none()
     test_finalize_spec_serializes_a_real_agent_spec_with_sets()
     test_append_message_and_list_messages_replay_order()
