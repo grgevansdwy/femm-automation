@@ -49,7 +49,9 @@ def _cause_text(failure: dict, settings) -> str:
 def _closest_text(state) -> str:
     best = state.best
     if best is None:
-        return "No valid candidate was found."
+        # Every valid design met the goal and then failed its fragility check:
+        # _fragility_text() says so, and none of them is the "closest".
+        return "" if state.fragility else "No valid candidate was found."
     result = tool_result(best, state.spec)
     round_num = next((r.round_num for r in state.rounds for c in r.candidates
                       if c.valid and c.tool_result == result), None)
@@ -87,8 +89,27 @@ def _ended_text(state) -> str:
     return reason or "unknown"
 
 
+def _fragility_text(state) -> str:
+    """What the fragility check found, for a run that ended without a winner:
+    one line when designs met the goal but none survived, one when a passing
+    design could not be checked. Empty when no design ever met the goal - a
+    design that never passed is not called fragile."""
+    failed = [c for c in state.fragility if not c["passed"]]
+    text = ""
+    if failed:
+        text += (f" {len(failed)} design(s) met the goal but failed the fragility check (the goal was no longer "
+                 f"met with every dimension changed by 1-2%; the best one {failed[0]['summary']}), so none is "
+                 "presented as a winner.")
+    if state.unchecked_pass:
+        text += (' A design met the goal but the search ended before it could be put through the fragility '
+                 'check: reply "continue" to check it.')
+    return text
+
+
 def _continue_invite(state) -> str:
     """At a budget limit while still improving: one more budget may get further."""
+    if state.unchecked_pass:
+        return ""  # _fragility_text() already invites a continue
     if state.stop_reason in ("rounds", "time", "simulations") and state.progress is not None \
             and state.progress.verdict == "improving":
         return ' The search was still improving when it ran out: reply "continue" to keep searching with a fresh budget.'
@@ -136,10 +157,12 @@ def outcome_report(state, internal_error: str | None = None, status=None) -> str
             f" Its score is {score:+.1f} points past the bar"
             + (f" on {state.spec.favourite_metric}" if state.spec.favourite_metric else "") + ".")
         ended = _ended_text(state)
-        return f"Goal met: {ended[0].upper() + ended[1:]} ({spent}). {closest}{scored}{_continue_invite(state)}"
+        checked = " It still meets the goal with every dimension changed by -2%, -1%, +1% and +2% (fragility check)."
+        return (f"Goal met: {ended[0].upper() + ended[1:]} ({spent}). {closest}{scored}{checked}"
+                f"{_continue_invite(state)}")
 
     if state.stop_reason == "llm_failed":
-        return "\n".join(_llm_failure_lines(state) + [f"Before failing: {spent}. {closest}"])
+        return "\n".join(_llm_failure_lines(state) + [f"Before failing: {spent}. {closest}{_fragility_text(state)}"])
 
     report = f"Target not achieved: {_ended_text(state)} ({spent}). {closest}"
     verdict = state.progress
@@ -149,4 +172,4 @@ def outcome_report(state, internal_error: str | None = None, status=None) -> str
                        "were near-copies of one.")
         if verdict.untried_fields:
             report += f" Fields the search never changed: {', '.join(verdict.untried_fields)}."
-    return report + _continue_invite(state)
+    return report + _fragility_text(state) + _continue_invite(state)

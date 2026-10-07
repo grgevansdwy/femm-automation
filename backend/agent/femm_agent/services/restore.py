@@ -14,7 +14,7 @@ from datetime import datetime
 from agent.femm_agent.models.state import (
     AgentRunState, AgentRunStatus, CandidateResult, RoundState, RoundStatus, Tried,
 )
-from agent.femm_agent.services import progress
+from agent.femm_agent.services import fragility, progress
 from agent.femm_agent.services.scorer import evaluate_async, rank_key, score, tool_result, wait_for_jobs
 from agent.input_chat.models.spec import spec_from_dict
 from agent.femm_agent.models.schema import NEVER_EVALUATED
@@ -100,9 +100,17 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
             candidate.tool_result = tool_result(scored, spec)
             state.tried.append(Tried(round_state.round_num, candidate.delta, scored, candidate.tool_result,
                                      round_state.segment))
-            if state.best is None or rank_key(scored, spec.favourite_metric) < rank_key(state.best, spec.favourite_metric):
-                state.best = scored
         state.rounds.append(round_state)
+
+    # The fragility checks already made: a design is never checked twice, and
+    # the winner is the best design that survived one.
+    for check in record.get("fragility") or []:
+        fragility.record_check(state, check)
+    survivors = [t.scored for t in state.tried if t.check is not None and t.check["passed"]]
+    if survivors:
+        state.winner = min(survivors, key=lambda s: rank_key(s, spec.favourite_metric))
+    fragility.refresh_best(state)
+    state.unchecked_pass = state.winner is None and bool(fragility.unchecked_passing(state))
 
     state.rounds_persisted = len(state.rounds)
     state.segment = max([r.segment for r in state.rounds] + [len(state.budget_history), 1])

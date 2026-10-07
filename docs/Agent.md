@@ -241,9 +241,41 @@ order; the first that applies is recorded as the run's `stop_reason`:
 
 plus `llm_failed` (a round's AI request failed every try, `search_attempts` times) and
 `internal_error`. The run's **status** follows from it (`state.status_for()`): `goal_met`
-whenever some design meets the goal, whichever rule ended the search; otherwise
+whenever the run has a winner (below), whichever rule ended the search; otherwise
 `budget_exhausted` (rules 2), `stopped_by_model` (6), `stalled` (5), `failed`, or
 `cancelled` (1).
+
+**Meeting the goal is not yet winning: the fragility check**
+(`femm_agent/services/fragility.py`). Fabrication and the solver's mesh both shift a
+result by a point or two, so when a stop rule fires (any but a stop by the user), code
+re-simulates the best passing design as four copies with every continuous dimension
+(every `float` field except permeability, loss angle and copper thickness; counts and
+flags are never touched) multiplied together by 0.98, 0.99, 1.01 and 1.02. All four must
+meet every required objective at every distance. The design that survives is the
+**winner** (`state.winner`), and only a winner makes a run `goal_met`.
+
+- A design that fails is never the winner; the next-ranked passing design is checked,
+  up to 5 failures in one go. A design is never checked twice, and a design ranked below
+  a winner that already survived is not checked at all.
+- If designs passed but none survived, and the rule that fired was not a budget limit,
+  the search carries on instead of stopping: the model is told which designs failed and
+  why, they are listed in its memory as "not winners", they stop counting as passes for
+  the progress verdict, and the no-improvement count starts again.
+- The check's solves count against the budget. So that one check can still be afforded,
+  the search stops short of the limits by a reserve: 4 x distances simulations always
+  (at most half the budget), and 240 s of the time limit once a design has passed (at
+  most a quarter of it). The limits shown and stored are the user's own.
+- If a passing design still cannot be checked (the budget ran out, or the user stopped
+  the search), the run ends without a winner and the report says so and invites
+  "continue", which starts with that check.
+- A copy models fabrication error, not a proposal: the Search fields limits do not
+  apply to it. A copy with invalid geometry, or whose solve fails, is a failed check.
+- The check needs no model: a search that loses the AI server after a pass still runs
+  it (`AgentRunner._run`) and can end `goal_met`.
+- Ending without a winner reads "Target not achieved" with the rule that ended the
+  search; one line is added when designs met the goal but none survived. A design that
+  never passed is never called fragile. Every check is stored in `ai_runs.fragility_json`
+  and shown on the design's card.
 
 The search prompt tells the model the same thing (`## After a candidate meets the goal`):
 keep proposing after a pass, how passing designs are compared (the score below, or the
@@ -294,7 +326,8 @@ failed later — is sent to the model in one fixed format,
 (`schema.Rejection`). The codes are in `schema.REJECTION_DETAIL`: `over_candidate_limit`,
 `unknown_tool`, `bad_arguments`, `unknown_field`, `not_enabled`, `wrong_type`,
 `out_of_range`, `not_allowed_value`, `no_change`, `invalid_geometry`, `solver_failed`,
-`solver_timeout`, plus `unknown_base` and `simulation_limit`, which are defined but not
+`solver_timeout`; `simulation_limit`, `time_limit` and `search_stopped` for a proposal a
+limit turned away unseen (not remembered as tried); and `unknown_base`, defined but not
 raised yet. `detail` is a fixed sentence per code (for `invalid_geometry`, the validity
 check's own sentence naming the coil); the exception's text and any path go to the run
 log only. The already-tried list shows a rejection as its code, field and allowed

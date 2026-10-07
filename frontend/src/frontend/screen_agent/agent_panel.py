@@ -604,7 +604,7 @@ def _running_status_text(run_state) -> str:
     if current.status.value == "proposing" and current.ai_try > 1:
         doing += f" (retry {current.ai_try} of {run_state.spec.settings.round_llm_attempts} after a failed AI request)"
     best = run_state.best
-    best_text = "" if best is None else (" - goal met, looking for better" if best.goal_met else " - goal not met yet")
+    best_text = "" if best is None else (" - a design meets the goal, looking for better" if best.goal_met else " - goal not met yet")
     budget = run_state.budget
     where = f"round {current.round_num}"
     if budget is not None:
@@ -1274,7 +1274,7 @@ def _draw_summary(state: AgentPanelState, size: imgui.ImVec2) -> None:
     """The finished search in one box, replacing both the live geometry and
     the round-by-round feed - the same view agent_history.py replays for a
     saved run (agent_candidate_card.draw_search_summary())."""
-    from agent.femm_agent.services.scorer import tool_result
+    from agent.femm_agent.services import fragility
     from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, search_field_table
 
     run_state = state.run_state
@@ -1298,7 +1298,7 @@ def _draw_summary(state: AgentPanelState, size: imgui.ImVec2) -> None:
         "agent_summary", run_state.status.value,
         [(r.round_num, [dataclasses.asdict(c) for c in r.candidates]) for r in run_state.rounds],
         _total_timing_text(run_state), baseline_buffer,
-        dataclasses.asdict(best.coilset), tool_result(best, run_state.spec), spec_summary,
+        dataclasses.asdict(best.coilset), fragility.best_result(run_state), spec_summary,
         distances, state.summary_distance, audit,
         baseline_coilset=run_state.baseline_coilset, best_coilset=best.coilset,
         report=run_state.outcome_report,

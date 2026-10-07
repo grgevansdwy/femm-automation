@@ -321,9 +321,10 @@ def test_a_search_leaves_a_log_of_every_request_from_start_to_end(monkeypatch):
     assert report.rebuild_request(events, 2) == served[2]
 
     assert (end["status"], end["stop_reason"], end["rounds"], end["segment"]) == ("goal_met", "plateau", 4, 1)
-    assert end["budget"]["simulations_used"] == 2, "the budget counts the two candidates, not the baseline"
-    # One distance: the baseline and two candidates, none cached by this fake.
-    assert (end["simulations"], end["cache_hits"], end["llm_failures"]) == (3, 0, 1)
+    assert end["budget"]["simulations_used"] == 6, \
+        "the budget counts the two candidates and the winner's four fragility-check copies, not the baseline"
+    # One distance: the baseline, two candidates and four check copies, none cached by this fake.
+    assert (end["simulations"], end["cache_hits"], end["llm_failures"]) == (7, 0, 1)
     print("  ok  a search logs run_start, every AI request (failed tries too) and run_end")
 
 

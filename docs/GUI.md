@@ -114,7 +114,9 @@ turns, search rounds, scoring) belong to `Agent.md`:
   The baseline's Inputs table has a "Search may set" column: each open field's allowed
   values, or "fixed".
 - **`agent_candidate_card.py`** — the shared renderer for one round/candidate (geometry +
-  result tables + reasoning) and the finished-search summary. Used by *both* the live
+  result tables + reasoning) and the finished-search summary. A design that has had its
+  fragility check (`Agent.md` §5) shows the outcome under "Goal met"; the summary says
+  when the proposed design meets the goal but has not been checked. Used by *both* the live
   view and history replay so they can never visually drift apart — deliberately its own
   file (not part of `agent_panel.py`) so `agent_history.py` can import it without a
   circular import.

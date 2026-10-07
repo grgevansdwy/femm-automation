@@ -154,6 +154,13 @@ The search does NOT end at the first candidate with goal_met=true. Keep proposin
 aim is the best design the search can find, not the first one that passes. Each
 objective's result also carries "points": how many percentage points past its bar it is
 (negative = short of it).
+
+A design only wins if it survives the fragility check: before the search ends, the best
+design with goal_met=true is simulated again four times, with every dimension changed
+together by -2%, -1%, +1% and +2%, and all four must still meet the goal. A design that
+sits right on a bar will fail it, so aim to clear every required bar by a few points.
+You do not run this check and cannot skip it. If designs fail it, you are told which, and
+they stop counting as passes.
 {{#favourite}}
 Designs that meet the goal are compared on {{favourite}} alone: push its points as high as
 you can while every other required objective still passes.

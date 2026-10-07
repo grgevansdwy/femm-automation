@@ -8,6 +8,10 @@ The search does not stop at the first design that meets the goal: it keeps
 looking for a better one and is ended by code, never by the model's say-so
 (the model can only stop by not proposing). The stop rules, their order, and
 the budget are in optimize_loop() and state.Budget.
+
+Meeting the goal is not yet winning: when the search is about to stop, the
+best passing design is put through the fragility check (services/fragility.py),
+and only a design that survives it is the winner (state.winner).
 """
 
 import dataclasses
@@ -19,7 +23,7 @@ from agent.femm_agent.services.prompts import system_prompt
 from agent.femm_agent.models.schema import (
     NEVER_EVALUATED, PROPOSE_TOOL_NAME, RATIONALE_KEY, Rejection, build_tools, coerce_delta,
 )
-from agent.femm_agent.services import progress
+from agent.femm_agent.services import fragility, progress
 from agent.femm_agent.services.scorer import (
     SimulationLimit, SolveFailed, evaluate_async, misses_summary, objective_summary, rank_key, score, tool_result,
     wait_for_jobs,
@@ -136,6 +140,14 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     The time limit is also checked before an AI request and before solves are
     queued: neither starts after it.
 
+    Whichever rule fires (except a stop by the user), passing designs that have
+    not been checked go through the fragility check first (fragility.run_episode).
+    If one survives, the search ends with it as the winner. If designs passed but
+    none survived and the rule was not a budget limit, the search carries on
+    instead of stopping: the model is told which designs failed, they no longer
+    count as passes, and the no-improvement count starts again. The budget keeps
+    a reserve for the check (Budget.reserved_simulations / reserved_s).
+
     `on_round_done(state)`, if given, is called each time a round finishes (however it
     ended) - AgentRunner uses it to save the rounds so far."""
     spec = state.spec
@@ -147,6 +159,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         state.budget = Budget.for_spec(spec)
     budget = state.budget
     budget.start()
+    budget.reserved_simulations = fragility.simulation_reserve(spec, budget.max_simulations)
 
     # The baseline's own solves are free: no budget. (Cache hits after the first time.)
     baseline_metrics = wait_for_jobs(evaluate_async(
@@ -188,7 +201,10 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     def judge(round_state):
         """Code's verdict after this round, kept on the state and the round."""
         counted = [r.round_num for r in state.rounds if not r.no_reply]
-        state.progress = progress.assess(tried, counted, spec, free_fields, state.segment_start_round)
+        state.progress = progress.assess(tried, counted, spec, free_fields,
+                                         max(state.segment_start_round, state.progress_reset_round))
+        # Once a design is owed a check, the search stops early enough to make it.
+        budget.reserved_s = fragility.time_reserve(budget.time_limit_s) if fragility.unchecked_passing(state) else 0.0
         round_state.verdict = state.progress.verdict
         round_state.rounds_since_improvement = state.progress.rounds_since_improvement
 
@@ -217,13 +233,39 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         return (verdict is not None and not verdict.passed and not state.stalled_notice_sent
                 and verdict.rounds_since_improvement >= settings.stall_rounds)
 
+    def conclude(reason: str) -> list | None:
+        """A stop rule fired. Runs the fragility check on what is owed one and
+        returns None when the search really ends (state.stop_reason is set), or
+        the checks that failed when it should carry on instead."""
+        state.stop_reason = reason
+        if reason == "user_stopped":
+            # No solve is started for a search the user stopped: nothing is checked.
+            state.unchecked_pass = bool(fragility.unchecked_passing(state))
+            fragility.refresh_best(state)
+            return None
+        episode = fragility.run_episode(state, job_runner)
+        carry_on = (state.winner is None and episode.failed and not episode.out_of_budget and not state.cancelled
+                    and reason not in ("rounds", "time", "simulations") and budget.exhausted() is None)
+        if not carry_on:
+            return None
+        state.stop_reason = None
+        state.progress_reset_round = len(state.rounds)
+        state.stalled_notice_sent = False
+        return episode.failed
+
+    # A "continue" after a search that ended with a passing design it could
+    # not check starts with that check.
+    if fragility.unchecked_passing(state):
+        fragility.run_episode(state, job_runner)
+
     while True:
         # Checkpoints for a user stop (see AgentRunState.cancelled) and the
         # budget: here, after the LLM call returns, before a round's solves
         # are queued, and before each candidate's result is collected - an
         # in-flight FEMM solve can't be interrupted, only waited out.
-        state.stop_reason = "user_stopped" if state.cancelled else budget.exhausted()
-        if state.stop_reason is not None:
+        reason = "user_stopped" if state.cancelled else budget.exhausted()
+        if reason is not None:
+            conclude(reason)
             return
 
         # memory must be role "user" not "system" - the office server's chat
@@ -247,10 +289,10 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         if msg is None:
             # Abandoned: the user stopped the search, or its time limit ran out.
             round_state.no_reply = True
-            state.stop_reason = "user_stopped" if state.cancelled else "time"
             round_state.reasoning_text = ("No proposal - the search was stopped." if state.cancelled
                                           else "No proposal - the search's time limit was reached.")
             finish_round(round_state)
+            conclude("user_stopped" if state.cancelled else "time")
             return
 
         # Resent next round without "reasoning_content": the chain-of-thought
@@ -280,9 +322,15 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         judge(round_state)
         finish_round(round_state)
 
-        state.stop_reason = stop_rule() or ("model_stopped" if no_tool_call_streak >= 2 else None)
-        if state.stop_reason is not None:
-            return
+        reason = stop_rule() or ("model_stopped" if no_tool_call_streak >= 2 else None)
+        if reason is not None:
+            failed_checks = conclude(reason)
+            if failed_checks is None:
+                return
+            # Designs passed, none survived the check, and the budget is not spent: carry on.
+            notes.append(fragility.resume_note(failed_checks))
+            no_tool_call_streak = 0
+            judge(round_state)  # the failed designs no longer count as passes
         if stalled_notice_due():
             notes.append(progress.stalled_notice(state.progress))
             state.stalled_notice_sent = True
@@ -373,9 +421,9 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
                     rationale=p.rationale,
                 ))
                 state.tried.append(Tried(round_state.round_num, p.delta, scored, result, state.segment))
-                # Best across the whole run - every attempt and segment.
-                if state.best is None or rank_key(scored, spec.favourite_metric) < rank_key(state.best, spec.favourite_metric):
-                    state.best = scored
+                # Best across the whole run - every attempt and segment - among
+                # designs that have not failed a fragility check.
+                fragility.refresh_best(state)
             except Exception as exc:
                 if any(id(job) in dropped for job in p.jobs.values()):
                     p.rejection = Rejection("time_limit")
@@ -488,17 +536,26 @@ def search_memory(tried: list[Tried], latest_round: int | None, keep_best: int, 
     roughly flat instead of growing by every result ever sent. "" before
     anything has been tried. `latest_round` None = no round is being sent
     raw (the search just resumed), so every candidate is listed here."""
-    valid = sorted((t for t in tried if t.scored is not None), key=lambda t: rank_key(t.scored, favourite))
+    valid = sorted((t for t in tried if t.scored is not None and not t.check_failed),
+                   key=lambda t: rank_key(t.scored, favourite))
     top = valid[:keep_best]
-    others = [t for t in tried if t not in top and t.round_num != latest_round]
-    if not top and not others:
+    # Met the goal but did not survive the fragility check: never a winner. Always
+    # listed, whichever round they came from, so the model stops building on them.
+    fragile = [t for t in tried if t.check_failed]
+    others = [t for t in tried if t not in top and t not in fragile and t.round_num != latest_round]
+    if not top and not others and not fragile:
         return ""
 
     lines = []
     if top:
         lines.append(f"Best {len(top)} candidate(s) so far, best first (each = baseline + the listed changes):")
         lines += [f"  #{i} round {t.round_num}: {t.delta} -> goal_met={t.result['goal_met']}: {objective_summary(t.result)}"
+                  + (" [survived the fragility check]" if t.check is not None else "")
                   for i, t in enumerate(top, start=1)]
+    if fragile:
+        lines.append("Met the goal but failed the fragility check (the goal must still be met with every dimension "
+                     "changed together by -2% to +2%) - not winners:")
+        lines += [f"  round {t.round_num}: {t.delta} -> {t.check['summary']}" for t in fragile]
     if others:
         lines.append("Other candidates already tried - don't propose these again:")
         lines += [f"  round {t.round_num}: {t.delta} -> " +
