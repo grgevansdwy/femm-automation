@@ -70,10 +70,11 @@ class AgentPanelState:
         # falls back to spec.distances[0] whenever this isn't one of them,
         # e.g. still None on the very first draw).
         self.summary_distance: float | None = None
-        # Where in the chat transcript the search was started - the chat
-        # feed draws the live search-status line there, so follow-up
-        # questions appear below it.
-        self.search_marker_index: int | None = None
+        # Where in the chat transcript each search segment was started (Start
+        # Search, then each "continue") - the chat feed draws a search-status
+        # line there, so follow-up questions appear below it. The last one is
+        # the live segment's.
+        self.search_markers: list[int] = []
         # A baseline picked while the chat has content, waiting on the
         # "this clears the chat" confirmation (see request_baseline()).
         self.pending_baseline_id: str | None = None
@@ -153,16 +154,16 @@ class AgentPanelState:
         """Picking a baseline immediately opens an empty chat, ready to
         type into - no separate "Start" click, no opening LLM call (see
         InterviewRunner.start())."""
-        from agent.repositories.ai_run_repository import delete_ai_run
         from engine.repositories.coilset_repository import get_coilset
 
-        if self.run_state is None and self.interview_runner.ai_run_id is not None:
-            # Switching baseline mid-planning abandons that conversation - an
-            # unfinished task, so it's discarded just like Restart does.
-            delete_ai_run(self.interview_runner.ai_run_id)
+        if self.run_state is None and self.interview_state is not None:
+            # Switching baseline mid-planning closes that conversation, just
+            # like Restart does: it is kept in History as cancelled (if the
+            # user ever sent a message - otherwise there is nothing to keep).
+            self.interview_runner.cancel_conversation()
         self.selected_config_id = config_id
         self.run_state = None
-        self.search_marker_index = None
+        self.search_markers = []
         self.summary_distance = None
         self.plan_confirmed = False
         self.error = ""
@@ -225,35 +226,54 @@ class AgentPanelState:
         if self.planning_blocked:
             return  # the Start Search button is disabled too - this covers any other caller
         self.plan_confirmed = True
-        self.search_marker_index = len(self.interview_state.transcript)
+        self.search_markers = [len(self.interview_state.transcript)]
 
     def restart(self) -> None:
         """Ends the current conversation and opens a fresh one on the same
-        baseline. What happens to the old one depends on whether its search
-        finished:
+        baseline. The old one is always kept in History:
 
-        - finished: it stays in History exactly as it is.
-        - unfinished (still planning, or searching): it's discarded - the
-          search is cancelled (agent/femm_agent/services/runner.py's AgentRunner.cancel()) and
-          its ai_run, conversation included, is deleted. Individual FEMM
-          solves that already completed stay in the run cache.
+        - finished: exactly as it is.
+        - still searching: the search is stopped (AgentRunner.stop()) and
+          saved with every finished round - as cancelled, or as goal met if
+          a design already met the goal.
+        - still planning: saved as cancelled, with its plan if it had one.
 
-        Either way a reply still in flight is thrown away when it lands."""
+        A chat reply still in flight is thrown away when it lands."""
         if self.interview_state is None:
             return
         from agent.input_chat.services.runner import InterviewRunner
-        from agent.repositories.ai_run_repository import delete_ai_run
 
-        finished = self.phase == "finished"
+        phase = self.phase
         self.interview_runner.discard()
-        if not finished:
-            if self.run_state is not None:
-                self.agent_runner.cancel(self.run_state.id)
-            if self.interview_runner.ai_run_id is not None:
-                delete_ai_run(self.interview_runner.ai_run_id)
+        if phase == "running":
+            self.agent_runner.stop(self.run_state.id)
+        elif phase == "interview":
+            self.interview_runner.cancel_conversation()
         self.interview_runner = InterviewRunner()
         self.chat_input = ""
         self.select_config(self.selected_config_id)
+
+    def stop_search(self) -> None:
+        """ "Stop and keep the best": ends the running search at its next
+        checkpoint. The chat stays open on it, with its best design and
+        report, and it can be continued."""
+        if self.phase == "running":
+            self.agent_runner.stop(self.run_state.id)
+
+    def continue_search(self) -> bool:
+        """Searches on from where the finished search stopped: same goal, same
+        memory, a fresh budget, rounds appended to the same run
+        (AgentRunner.continue_run()). False if there is nothing to continue."""
+        if self.phase != "finished" or self.interview_runner.busy:
+            return False
+        try:
+            self.agent_runner.continue_run(self.run_state.id)
+        except ValueError as exc:
+            self.error = str(exc)
+            return False
+        self.error = ""
+        self.search_markers.append(len(self.interview_state.transcript))
+        return True
 
     def send_chat(self) -> None:
         text = self.chat_input.strip()
@@ -262,6 +282,12 @@ class AgentPanelState:
         if self.planning_blocked:
             return  # keeps the typed text - the chat's notice says why
         self.chat_input = ""
+        if self.phase == "finished" and text.lower() == "continue":
+            # Recognised by code, not by a model: the whole message is the
+            # word "continue". Recorded in the chat, then the search resumes.
+            self.interview_runner.record_user_message(self.interview_state, text)
+            self.continue_search()
+            return
         if self.run_state is not None:
             # The search has started: questions only, nothing about the plan
             # can change - see agent/femm_agent/services/followup.py.
@@ -416,8 +442,8 @@ def _draw_chat_feed(state: AgentPanelState, size: imgui.ImVec2) -> None:
 
     transcript = state.interview_state.transcript
     for i, msg in enumerate(transcript):
-        if i == state.search_marker_index:
-            _draw_search_marker(state, width)
+        if i in state.search_markers:
+            _draw_search_marker(state, width, i)
         if msg.get("role") == "tool":
             continue
         # A tool_calls message's outcome lives in the very next transcript
@@ -435,8 +461,9 @@ def _draw_chat_feed(state: AgentPanelState, size: imgui.ImVec2) -> None:
         if text:
             _draw_message_bubble(text, is_user=(msg.get("role") == "user"), width=width)
 
-    if state.search_marker_index is not None and state.search_marker_index >= len(transcript):
-        _draw_search_marker(state, width)
+    for marker in state.search_markers:
+        if marker >= len(transcript):
+            _draw_search_marker(state, width, marker)
 
     if state.interview_runner.busy:
         started = state.interview_runner.turn_started_at
@@ -467,11 +494,22 @@ def _draw_chat_feed(state: AgentPanelState, size: imgui.ImVec2) -> None:
 
 _FINISHED_TEXT = {
     "goal_met": "goal met",
-    "budget_exhausted": "ran out of rounds without meeting the goal",
+    "budget_exhausted": "target not achieved within the budget",
     "stopped_by_model": "the AI stopped without meeting the goal",
+    "stalled": "stopped early, no longer getting closer",
     "failed": "failed",
+    "interrupted": "interrupted",
+    "cancelled": "stopped by you",
+}
+# ai_runs.stop_reason -> the rule that ended the search, in a few words.
+STOP_REASON_TEXT = {
+    "nothing_left": "nothing left to improve", "plateau": "no better design for a while",
+    "stalled": "no longer getting closer", "rounds": "round limit", "time": "time limit",
+    "simulations": "simulation limit", "model_stopped": "the AI stopped proposing",
+    "user_stopped": "stopped by you", "llm_failed": "AI requests failed", "internal_error": "internal error",
 }
 _RESTART_POPUP_ID = "confirm_restart_agent"
+_STOP_POPUP_ID = "confirm_stop_agent"
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -492,31 +530,47 @@ def _running_status_text(run_state) -> str:
     if current.status.value == "proposing" and current.ai_try > 1:
         doing += f" (retry {current.ai_try} of {run_state.spec.settings.round_llm_attempts} after a failed AI request)"
     best = run_state.best
-    best_text = "" if best is None else (" - goal met so far" if best.goal_met else " - goal not met yet")
-    where = (f"restarted from zero, round {current.attempt_round} of {run_state.spec.max_tool_calls}"
-             if current.search_attempt > 1 else f"round {current.round_num} of {run_state.spec.max_tool_calls}")
+    best_text = "" if best is None else (" - goal met, looking for better" if best.goal_met else " - goal not met yet")
+    budget = run_state.budget
+    where = f"round {current.round_num}"
+    if budget is not None:
+        # The budget is this segment's: rounds, minutes and simulations all count toward it.
+        where = (f"round {budget.rounds_used} of {budget.max_rounds}, {budget.elapsed_s() / 60:.0f} of "
+                 f"{budget.time_limit_s / 60:.0f} min, {budget.simulations_used} of {budget.max_simulations} simulations")
+    if current.search_attempt > 1:
+        where += ", resumed after failed AI requests"
     return f"Search running: {where}, {doing} ({elapsed}){best_text}"
 
 
 def _finished_status_text(run_state) -> str:
     outcome = _FINISHED_TEXT.get(run_state.status.value, run_state.status.value)
-    return f"Search finished: {outcome} after {len(run_state.rounds)} round(s)."
+    rule = STOP_REASON_TEXT.get(run_state.stop_reason)
+    return f"Search finished: {outcome} after {len(run_state.rounds)} round(s)" + (f" ({rule})." if rule else ".")
 
 
-def _draw_search_marker(state: AgentPanelState, width: float) -> None:
-    """The point in the chat where the search was started. While it runs
-    the live status is pinned above the input instead (always visible, even
-    scrolled up); once it ends this line says how it ended."""
+def _draw_search_marker(state: AgentPanelState, width: float, marker: int) -> None:
+    """The point in the chat where a search segment was started (Start
+    Search, or a "continue"). For the latest one: while it runs the live
+    status is pinned above the input instead (always visible, even scrolled
+    up); once it ends this line says how it ended and offers Continue."""
     imgui.separator()
     imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + width)
-    if state.phase == "finished":
+    started_text = "Search started." if marker == state.search_markers[0] else "Search continued with a fresh budget."
+    if marker != state.search_markers[-1]:
+        imgui.text_colored(_ACCENT_COLOR, started_text)
+    elif state.phase == "finished":
         imgui.text_colored(_ACCENT_COLOR, _finished_status_text(state.run_state))
         if state.run_state.outcome_report:
             agent_candidate_card.draw_outcome_report(state.run_state.outcome_report)
-        imgui.text_colored(_PLACEHOLDER_COLOR, "Ask anything about this run. To change something, click Restart "
+        imgui.text_colored(_PLACEHOLDER_COLOR, 'Ask anything about this run. To search further toward the same goal, '
+                                               'reply "continue" or click Continue. To change the goal, click Restart '
                                                "and start a new task - this run stays in History.")
+        if imgui.button(f"Continue##continue_{marker}"):
+            state.continue_search()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Keep searching: same goal, everything tried so far kept in memory, a fresh budget.")
     else:
-        imgui.text_colored(_ACCENT_COLOR, "Search started.")
+        imgui.text_colored(_ACCENT_COLOR, started_text)
         imgui.text_colored(_PLACEHOLDER_COLOR, "You can keep asking questions while it runs; the baseline and "
                                                "plan are locked.")
     imgui.pop_text_wrap_pos()
@@ -525,9 +579,10 @@ def _draw_search_marker(state: AgentPanelState, width: float) -> None:
 
 
 def _draw_chat_header(state: AgentPanelState) -> None:
-    """Phase label on the left, Restart on the right. Restarting a finished
-    run loses nothing (it stays in History), so it happens straight away;
-    an unfinished one is deleted, so that asks first."""
+    """Phase label on the left, Restart on the right (and, while a search
+    runs, "Stop and keep the best" beside it). Restarting a finished run
+    changes nothing about it, so it happens straight away; an unfinished one
+    is closed as cancelled, so that asks first."""
     labels = {"interview": "Planning", "running": "Searching - questions only",
               "finished": "Finished - questions only"}
     button_w = 90.0
@@ -542,7 +597,27 @@ def _draw_chat_header(state: AgentPanelState) -> None:
             imgui.open_popup(_RESTART_POPUP_ID)
     if imgui.is_item_hovered():
         imgui.set_tooltip("Start a new conversation on this baseline." if state.phase == "finished"
-                          else "Discard this conversation and start over.")
+                          else "Close this conversation and start over. It stays in History.")
+    if state.phase == "running":
+        stop_label = "Stop and keep the best"
+        stop_w = imgui.calc_text_size(stop_label).x + 20.0
+        imgui.same_line(max(right_x - stop_w - 8.0, 0.0))
+        if imgui.button(stop_label, imgui.ImVec2(stop_w, 0)):
+            imgui.open_popup(_STOP_POPUP_ID)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("End the search now and keep its best design. You can continue it later.")
+    stop_open, _ = imgui.begin_popup_modal(_STOP_POPUP_ID, flags=imgui.WindowFlags_.always_auto_resize.value)
+    if stop_open:
+        imgui.text("Stop the search and keep the best design so far?")
+        imgui.text_disabled("It stops after the step in progress. Reply \"continue\" afterwards to search on.")
+        imgui.separator()
+        if imgui.button("Cancel##stop"):
+            imgui.close_current_popup()
+        imgui.same_line()
+        if imgui.button("Stop search"):
+            state.stop_search()
+            imgui.close_current_popup()
+        imgui.end_popup()
 
     # begin_popup_modal() returns a tuple - unpack it (see configs_panel.py).
     is_open, _ = imgui.begin_popup_modal(_RESTART_POPUP_ID, flags=imgui.WindowFlags_.always_auto_resize.value)
@@ -551,12 +626,12 @@ def _draw_chat_header(state: AgentPanelState) -> None:
             # The search finished while the popup was open - nothing to discard any more.
             imgui.text("The search just finished - it will stay in History.")
         elif state.phase == "running":
-            imgui.text("Stop the running search and discard it?")
-            imgui.text_disabled("The search and this conversation are deleted and won't appear in History.")
-            imgui.text_disabled("FEMM solves that already finished stay cached.")
+            imgui.text("Stop the running search and start a new conversation?")
+            imgui.text_disabled("The search is kept in History with every finished round and its best design.")
+            imgui.text_disabled("To stop it but stay here, use \"Stop and keep the best\" instead.")
         else:
-            imgui.text("Discard this conversation?")
-            imgui.text_disabled("It won't be saved to History.")
+            imgui.text("Close this conversation and start a new one?")
+            imgui.text_disabled("It is kept in History as cancelled.")
         imgui.separator()
         if imgui.button("Cancel"):
             imgui.close_current_popup()
@@ -566,7 +641,7 @@ def _draw_chat_header(state: AgentPanelState) -> None:
         discarding = state.phase != "finished"
         if discarding:
             imgui.push_style_color(imgui.Col_.button.value, _ERROR_COLOR)
-        if imgui.button("Discard and restart" if discarding else "Restart"):
+        if imgui.button("Stop and restart" if state.phase == "running" else "Restart"):
             state.restart()
             imgui.close_current_popup()
         if discarding:
@@ -749,7 +824,7 @@ def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
         # A manual hint overlay, not input_text_with_hint() - that widget
         # has no multi-line form.
         hint = {"running": "Ask about the search while it runs...",
-                "finished": "Ask anything about this run..."}.get(state.phase, "Describe your objective and requirements...")
+                "finished": 'Ask about this run, or type "continue" to search on...'}.get(state.phase, "Describe your objective and requirements...")
         draw_list.add_text(imgui.ImVec2(box_pos.x + 14, box_pos.y + 10), imgui.get_color_u32(_INPUT_HINT_COLOR),
                            f"{hint} (Enter to send, Ctrl+Enter for a new line)")
 

@@ -1,5 +1,7 @@
-"""AI-run history browser - lists persisted ai_runs (agent/repositories/
-ai_run_repository.py) and, on selection, replays the run: the interview as
+"""AI-run history browser - lists every persisted ai_run (agent/repositories/
+ai_run_repository.py), whatever its status - a chat still being planned, a
+cancelled one and an interrupted search included - and, on selection,
+replays the run: the interview as
 a short collapsible transcript, then - for a finished run with a winner -
 the same Search Summary the live panel shows when a search ends
 (agent_candidate_card.draw_search_summary()), with each optimize-phase round
@@ -18,16 +20,27 @@ _REJECTED_COLOR = imgui.ImVec4(0.9, 0.5, 0.35, 1.0)
 _ASSISTANT_COLOR = imgui.ImVec4(0.7, 0.7, 0.7, 1.0)
 _DEFAULT_COLOR = imgui.ImVec4(1.0, 1.0, 1.0, 1.0)
 _ID_COLOR = imgui.ImVec4(0.55, 0.55, 0.6, 1.0)
+_OPEN_COLOR = imgui.ImVec4(0.55, 0.7, 0.95, 1.0)
+_MUTED_COLOR = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
+_DELETE_POPUP_ID = "confirm_delete_ai_run"
+
+# Every ai_runs status has its own label: what happened must stay readable.
+STATUS_LABELS = {
+    "interviewing": ("Planning", _OPEN_COLOR),
+    "plan_ready": ("Plan ready, not started", _OPEN_COLOR),
+    "running": ("Searching", _OPEN_COLOR),
+    "goal_met": ("Goal met", _GOAL_MET_COLOR),
+    "budget_exhausted": ("Target not achieved (budget)", _REJECTED_COLOR),
+    "stopped_by_model": ("Target not achieved (AI stopped)", _REJECTED_COLOR),
+    "stalled": ("Target not achieved (stalled)", _REJECTED_COLOR),
+    "failed": ("Failed", _REJECTED_COLOR),
+    "interrupted": ("Interrupted", _MUTED_COLOR),
+    "cancelled": ("Cancelled", _MUTED_COLOR),
+}
 
 
 def _status_label(status: str) -> tuple[str, imgui.ImVec4]:
-    """The one thing a user scans the list for: did the search hit the goal.
-    A "running" row never reaches here - AgentHistoryState.refresh() drops
-    those, since a search still in progress has nothing to replay yet
-    (live progress is agent_panel.py's job). The finer terminal statuses
-    (budget_exhausted/stopped_by_model/failed) all mean "no" at a glance -
-    collapsed into one "Rejected" label; the detail pane's rounds show why."""
-    return ("Goal met", _GOAL_MET_COLOR) if status == "goal_met" else ("Rejected", _REJECTED_COLOR)
+    return STATUS_LABELS.get(status, (status, _MUTED_COLOR))
 
 
 def _format_dt(iso: str) -> str:
@@ -54,10 +67,19 @@ class AgentHistoryState:
 
     def refresh(self) -> None:
         from agent.repositories.ai_run_repository import list_ai_runs
-        # "interviewing" rows never started a search, and "running" ones
-        # aren't finished - neither has anything to replay (a run still in
-        # progress belongs in agent_panel.py's live view, not here).
-        self.runs = [run for run in list_ai_runs() if run["status"] not in ("interviewing", "running")]
+        self.runs = list_ai_runs()
+
+    def delete(self, run_id: str) -> None:
+        """The explicit user action that removes a run and its messages. A
+        search still running is never deleted from here (stop it first)."""
+        from agent.repositories.ai_run_repository import delete_ai_run, get_ai_run
+        record = get_ai_run(run_id)
+        if record is None or record["status"] == "running":
+            return
+        delete_ai_run(run_id)
+        if self.selected_id == run_id:
+            self.selected_id = None
+        self.refresh()
 
     def visible_runs(self) -> list[dict]:
         """self.runs filtered by search_text (matches the run id or the
@@ -91,7 +113,7 @@ def _draw_list(state: AgentHistoryState, size: imgui.ImVec2) -> None:
     row_width = imgui.get_content_region_avail().x
     runs = state.visible_runs()
     if not runs:
-        imgui.text_disabled("No runs match." if state.search_text.strip() else "No finished runs yet.")
+        imgui.text_disabled("No runs match." if state.search_text.strip() else "No runs yet.")
     for run in runs:
         selected = run["id"] == state.selected_id
         label, color = _status_label(run["status"])
@@ -208,6 +230,9 @@ def _draw_detail(state: AgentHistoryState, size: imgui.ImVec2) -> None:
 
     imgui.text_colored(_ID_COLOR, f"ID: {record['id']}")
     imgui.text_disabled(_format_dt(record["created_at"]))
+    label, color = _status_label(record["status"])
+    imgui.text_colored(color, f"Status: {label}" + (f" - ended by: {record['stop_reason']}" if record.get("stop_reason") else ""))
+    _draw_delete(state, record)
 
     # The conversation stays a short text transcript; the search rounds get
     # the same geometry + table cards the live Search Progress feed shows.
@@ -229,7 +254,7 @@ def _draw_detail(state: AgentHistoryState, size: imgui.ImVec2) -> None:
     # live panel showed when it ended; the per-round cards stay available,
     # collapsed, underneath. Runs without one (failed/cut off) keep the
     # plain round list - those rounds are what explain why.
-    has_summary = (record["status"] not in ("running", "interviewing")
+    has_summary = (record["status"] not in ("running", "interviewing", "plan_ready")
                    and record["best_coilset"] and record["best_tool_result"] and optimize)
     if has_summary:
         imgui.spacing()
@@ -261,11 +286,31 @@ def _draw_detail(state: AgentHistoryState, size: imgui.ImVec2) -> None:
             imgui.tree_pop()
 
     if not has_summary:
-        label, color = _status_label(record["status"])
-        imgui.text_colored(color, f"Final status: {label}")
         if record["error"]:
             agent_candidate_card.draw_outcome_report(record["error"])
     imgui.end_child()
+
+
+def _draw_delete(state: AgentHistoryState, record: dict) -> None:
+    """Delete, behind a confirmation - the only way a run leaves History."""
+    imgui.begin_disabled(record["status"] == "running")
+    if imgui.small_button(f"Delete##del_{record['id']}"):
+        imgui.open_popup(_DELETE_POPUP_ID)
+    imgui.end_disabled()
+    is_open, _ = imgui.begin_popup_modal(_DELETE_POPUP_ID, flags=imgui.WindowFlags_.always_auto_resize.value)
+    if is_open:
+        imgui.text("Delete this run and its whole conversation?")
+        imgui.text_disabled("This can't be undone. FEMM solves stay in the run cache.")
+        imgui.separator()
+        if imgui.button("Cancel##del"):
+            imgui.close_current_popup()
+        imgui.same_line()
+        imgui.push_style_color(imgui.Col_.button.value, _REJECTED_COLOR)
+        if imgui.button("Delete##confirm_del"):
+            state.delete(record["id"])
+            imgui.close_current_popup()
+        imgui.pop_style_color()
+        imgui.end_popup()
 
 
 def draw(state: AgentHistoryState, size: imgui.ImVec2) -> None:

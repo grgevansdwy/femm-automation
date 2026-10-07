@@ -33,7 +33,6 @@ class InterviewRunner:
         # turn still in flight when that happens finishes on its own thread,
         # but writes nothing more - the chat was closed.
         self.discarded: bool = False
-        self._baseline_config_id: str | None = None
         self._log = None  # the run's RunLog (agent/services/run_log.py), once the run has an id
 
     def _phase_log(self, phase: str):
@@ -53,7 +52,7 @@ class InterviewRunner:
         chat input's own placeholder prompts for an objective directly."""
         from agent.settings.settings import load_settings
         self.ai_run_id = None
-        self._baseline_config_id = baseline_config_id
+        self.discarded = False
         self._log = None
         self._persisted_count = 0
         self._persisted_spec = None
@@ -81,6 +80,14 @@ class InterviewRunner:
         self._run_turn_async(state, lambda: run_followup_turn(state, user_message, run_state,
                                                               should_abort=lambda: self.discarded,
                                                               log=self._phase_log("followup")))
+
+    def record_user_message(self, state: InterviewState, user_message: str) -> None:
+        """Adds a user message that code acts on itself (no AI turn) to the
+        chat and saves it - "continue" after a search, so the conversation
+        shows why a new search segment starts there."""
+        self._ensure_run(state.baseline_config_id)
+        state.transcript.append({"role": "user", "content": user_message})
+        self._persist_new_messages(state)
 
     def discard(self) -> None:
         self.discarded = True

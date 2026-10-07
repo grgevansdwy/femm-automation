@@ -18,8 +18,9 @@ You describe a goal in your own words ("keep mutual inductance within 5% across 
 distances, cut tank ESR by at least 20%"). A chat turns that into a precise, checkable
 objective. Then a language model proposes coil-design changes, one to several per round;
 plain code validates each one, runs it through the real physics engine, scores it, and
-feeds the result back — up to 50 rounds, or until a design passes every required
-objective.
+feeds the result back. The search does not stop at the first design that passes: it
+keeps looking for a better one until code ends it — a budget limit (25 rounds, 90 minutes
+or 300 simulations by default), or no real improvement for a few rounds.
 
 ## 2. Goals this serves
 
@@ -79,6 +80,8 @@ distances                -- mm, the RC-separation sweep to evaluate at (capped, 
 enabled_groups            -- which optional structural groups the search may touch (below)
 excluded_fields          -- specific fields to pin even though they'd otherwise be free
 objectives               -- list of {metric, kind, tolerance_pct, target_pct, required}
+favourite_metric         -- optional: the one required reduce/increase objective to push
+                            as far as possible (asked only when there are two or more)
 ```
 
 `_build_spec()` (plain code, not the model) validates this into a real
@@ -87,6 +90,9 @@ metrics, at least one field left free to search over — and rejects a bad spec 
 model as an error to fix, never silently accepting something broken. These constraints
 are also stated proactively in the prompt itself (`## Constraints your finished plan must
 satisfy`), so the common ones get avoided rather than discovered by failing.
+`favourite_metric` must name a required `reduce`/`increase` objective of the same plan.
+Whatever shape the tool arguments have (a list where an object belongs, no arguments at
+all), the result is a rejection the user is asked about — never a turn that dies silently.
 
 **A rejection triggers exactly one extra, toolless call before control returns to the
 user.** The raw validation error is not shown to the user directly — `run_interview_turn()`
@@ -174,29 +180,75 @@ it also run headless from the CLI with no interview at all (§10).
 
 ```
 baseline_metrics = solve the baseline at every spec.distance   -- everything compares to this
-loop, up to spec.max_tool_calls rounds:
+loop:
+  0. stop before the round if the user stopped the search or a budget limit is reached
   1. build the round's message: system prompt + goal + short memory (§6) + last round's
      full raw results
-  2. ask the model (retried on transport failure, §8) — it may reply with up to
-     spec.candidates_per_round `propose_coilset` calls, or with plain text
-  3. plain text twice in a row = the model considers itself done -> STOPPED_BY_MODEL
-     (once = could just be it thinking out loud -> nudged to continue)
-  4. PREPARE each tool call (instant, no FEMM): reject a call that isn't `propose_coilset`,
+  2. ask the model (retried on transport failure, §8), with at most the time the search
+     has left — it may reply with up to spec.candidates_per_round `propose_coilset`
+     calls, or with plain text (once = could just be it thinking out loud -> nudged)
+  3. PREPARE each tool call (instant, no FEMM): reject a call that isn't `propose_coilset`,
      whose arguments aren't a JSON object, or that changes nothing from the baseline; fix
      argument types (coerce_delta); reject anything outside the allowed field set; build
      "baseline + this delta". A malformed call is only ever rejected on its own (its reason
      goes back to the model) - it never raises, so it can't cost the round's other
      candidates or the run. (An empty delta is allowed when the user pinned values: the
      pinned start point is then a different design from the baseline.)
-  5. LAUNCH every valid candidate's solves at once, across every distance -- this is
-     what lets several candidates solve in parallel (Engine.md §6); an identical
-     candidate proposed twice in one round is solved only once
-  6. COLLECT + score each candidate in its own try/except -- one bad candidate never
+  4. LAUNCH every valid candidate's solves at once, across every distance, in proposal
+     order while the simulation budget allows -- this is what lets several candidates
+     solve in parallel (Engine.md §6); an identical candidate proposed twice in one
+     round is solved only once
+  5. COLLECT + score each candidate in its own try/except -- one bad candidate never
      costs the others their results
-  7. feed every result back to the model as that call's tool result
-  8. stop if any candidate passes every REQUIRED objective -> GOAL_MET
-stop if the round budget runs out -> BUDGET_EXHAUSTED
+  6. feed every result back to the model as that call's tool result
+  7. judge progress (code, below) and apply the stop rules
 ```
+
+**The search keeps going after a design passes**, and code decides when it ends — the
+model can only stop by not proposing. Stop rules, checked after every round in this
+order; the first that applies is recorded as the run's `stop_reason`:
+
+| # | Rule | `stop_reason` |
+|---|---|---|
+| 1 | The user stopped it (Stop and keep the best, or Restart) | `user_stopped` |
+| 2 | A budget limit is reached | `rounds`, `time`, `simulations` |
+| 3 | A design passes and the goal has only `match` objectives (nothing to push further) | `nothing_left` |
+| 4 | After a pass: `plateau_rounds` (2) rounds in a row without a better design | `plateau` |
+| 5 | Before any pass: `stall_rounds` (4) rounds without getting closer — code tells the model once, listing the fields it hasn't tried; still nothing 2 rounds later | `stalled` |
+| 6 | Two text-only replies in a row | `model_stopped` |
+
+plus `llm_failed` (a round's AI request failed every try, `search_attempts` times) and
+`internal_error`. The run's **status** follows from it (`state.status_for()`): `goal_met`
+whenever some design meets the goal, whichever rule ended the search; otherwise
+`budget_exhausted` (rules 2), `stopped_by_model` (6), `stalled` (5), `failed`, or
+`cancelled` (1).
+
+**Budget** (`femm_agent/models/state.py::Budget`) — rounds, wall clock, and fresh
+simulations, counted for the whole search across resumes. A text-only reply uses a round.
+One simulation = one fresh solve of one candidate at one distance
+(`scorer.evaluate_async()` charges it); cache hits and the baseline's own solves are
+free. A candidate is all or nothing: if it needs more fresh solves than are left, it and
+every later proposal of that round are turned away and the search stops. No AI request
+and no solve starts after the time limit: each request gets
+`min(llm_time_limit_s, time left)`, a request cut short by that limit ends the search
+(it is not a failed try), and solves still queued when the limit passes are dropped —
+the worst overshoot is one solve already running.
+
+**Progress** (`femm_agent/services/progress.py`) is judged by code from stored results.
+One number is tracked: before any pass, how far the closest design still is (the most
+points any required objective is short); after one, the best score (below). A round
+improves when that number beats the last reference by more than `noise_points` (1.0 —
+about the solver's own mesh noise). The verdict is `improving` while fewer than 2 rounds
+have passed without an improvement, otherwise `plateau` (after a pass) or `stalled`
+(before). Code also counts repeated and near-copy proposals (same fields, every value
+within 2%) and lists allowed fields never changed. Neither code nor the model ever
+declares a target impossible.
+
+**Continue.** At a limit with the verdict still `improving`, the report invites the user
+to reply "continue". `AgentRunner.continue_run()` starts a new *segment* of the same run:
+a fresh budget (the run's own settings), the same memory, rounds appended after the
+existing ones, candidates still compared with the original baseline. Each segment's
+limits and spend are one entry in `ai_runs.budget_json`.
 
 `propose_coilset`'s schema (`femm_agent/models/schema.py::build_tools()`) is built fresh
 per run from that run's actual free-field set, with `additionalProperties: false` so the
@@ -206,14 +258,44 @@ showed and why this change should help) is the only reasoning a human watching t
 actually reads; it was made required after the model sometimes skipped it when it was
 optional.
 
+**Run lifecycle.** `ai_runs.status` changes only through
+`agent/repositories/ai_run_repository.py::transition()`, which rejects any move not in
+this table:
+
+| From | To | Trigger |
+|---|---|---|
+| (none) | `interviewing` | the user's first message (opening the panel saves nothing) |
+| `interviewing` | `plan_ready` | `finalize_spec` accepted by code |
+| `plan_ready` | `plan_ready` | a revised plan |
+| `plan_ready` | `running` | Start Search |
+| `interviewing`, `plan_ready` | `cancelled` | Restart, or another baseline picked |
+| `running` | `goal_met`, `budget_exhausted`, `stopped_by_model`, `stalled`, `failed`, `cancelled` | the search ends (rules above) |
+| `running` | `interrupted` | the app starts and finds the row still `running` (`reap_running()`) |
+| any ending | `running` | "continue" |
+| any ending | `plan_ready` | a revised plan after a search (not built yet) |
+
+A stopped or cancelled run is kept with its plan and every finished round; deleting is a
+separate, explicit user action. The app assumes **one instance per database**: the
+startup reaper would mark another instance's live search interrupted.
+
 **Saving a run.** Interview messages are saved as each turn lands; search rounds are saved
 as each one finishes (`AgentRunner._save_rounds`, called through `optimize_loop`'s
 `on_round_done` hook wherever a round ends), so a crash mid-search loses at most the round
-in flight. `AgentRunState.rounds_persisted` keeps each round to one write, a database error
-in the hook is swallowed (the end-of-run `_persist()` writes whatever was missed, then the
-final status and best candidate), and a Restart landing mid-write makes the writer delete
-the run again rather than leave orphan rows. History still hides `running` runs, so the
-rounds of a run that crashed are stored but not shown.
+in flight. `AgentRunState.rounds_persisted` keeps each round to one write; a database error
+in the hook is logged as a `warning` and the end-of-run `_persist()` writes whatever was
+missed, then the final status, `stop_reason`, the budget entries and the best candidate.
+Each round's payload also carries its segment and code's verdict after it. The baseline
+is copied into the run at Start Search (`baseline_coilset_json`), since a config can be
+edited later. `femm_agent/services/restore.py::restore_run()` rebuilds a stored run's
+live state (rounds, memory, best design, verdict) by re-requesting each candidate's
+solves — cache hits — and re-scoring them.
+
+**Schema version.** `PRAGMA user_version` is 1. An older database is migrated the first
+time it is opened (`_ensure_schema()`; the app also calls `migrate_if_needed()` at
+startup): the file is copied to `backend/data/backups/`, then `ai_runs` is rebuilt in one
+transaction with every row carried over unchanged. A failure rolls back and stops the app
+with a message naming the backup. `python -m agent.cleanup_runs` (dry run by default) is
+the one-time, human-gated cleanup of rows left by the old lifecycle.
 
 ### Scoring
 
@@ -235,16 +317,20 @@ increase:         (change_pct - tolerance_pct) / max(tolerance_pct, MIN_SCALE_PC
 ≥ 0 passes; more negative is worse, and — because every margin is divided by its own
 tolerance — margins from *different* objectives are directly comparable (missing a 5%
 band by 0.5pp is worse than missing a 50%-reduction target by 0.5pp). The model is told
-to fix its most negative margin first. `rank_key()` (used to pick the best candidate so
-far) is two-tiered: candidates holding every required `match` gate rank first, ordered by
-their weakest `reduce`/`increase` margin, then preferences; candidates that broke a gate
-rank by how far outside the band they landed, so there's always a "best attempt" even
-when nothing fully passed.
+to fix its most negative margin first.
 
-`points_past_bar()` and `blended_score()` (same file) measure a passing design for the
-report and the benchmark only — percentage points past each required `reduce`/`increase`
-target at the worst distance, and 50% the smallest of those + 50% their average. They do
-not affect ranking or when the search stops.
+A design that meets the goal is measured in plain **points past the bar**
+(`objective.points()`: the margin before it is divided by the tolerance, so a 0% target
+can't swamp an average). Its **score** over the required `reduce`/`increase` objectives is
+`0.5 × the smallest + 0.5 × the average` (`blended_score()`) — or, when the interview
+recorded a `favourite_metric`, that objective's points alone.
+
+`rank_key()` (used to pick the best candidate so far) has three tiers: designs that meet
+the goal, highest score first, preferences breaking ties (a goal with only `match`
+requirements has no score, so preferences alone decide); then designs holding every
+required `match` gate, ordered by their weakest `reduce`/`increase` margin, then
+preferences; then designs that broke a gate, by how far outside the band they landed — so
+there's always a "best attempt" even when nothing fully passed.
 
 ## 6. What the model remembers
 
@@ -267,6 +353,12 @@ So the model learns from *outcomes*, not from its own past reasoning about them,
 prompt stays roughly flat in size as a search goes on (only the short "already tried"
 lines keep growing, ~100 chars per candidate). A full example request is in
 `docs/archive/agent_prompt_example.md`.
+
+The tried list lives on the run state (`AgentRunState.tried`), not in the loop, so it
+survives a resume after a failed round and a "continue": the first request afterwards has
+no raw latest round, and every candidate tried so far is in the one-line memory instead.
+When the search stalls before any pass, code adds one message after that round's results:
+"No improvement in N rounds. Fields not tried yet: ...".
 
 ## 7. Batch proposals: why several candidates per round
 
@@ -336,7 +428,7 @@ never reads it. One JSON-lines file per run, `backend/data/agent_logs/<ai_run_id
 | `run_start` | git commit, the full settings snapshot, the spec, the baseline coilset, the search tool schema |
 | `llm_call` | phase (`interview`/`search`/`followup`), round / search attempt / try, server, model, sampling, limits, SHA-256 of the system prompt and of the tool schema, the **full messages sent**, the **full reply** (reasoning included) or the error (kind, detail, and what had arrived), sizes, token counts, timings |
 | `warning` | where, a message, and the full exception text — the only place a raw exception is written (a round that couldn't be saved, a solve that failed, an internal error) |
-| `run_end` | status, rounds, fresh simulations and cache hits (both include the baseline's own solves), failed AI tries, seconds |
+| `run_end` | one per search segment: status, `stop_reason`, segment, rounds, fresh simulations and cache hits (both include the baseline's own solves), the segment's budget entry (limits and spend, baseline free), failed AI tries, seconds |
 
 A log write that fails never fails the request: it is reported once on stderr and the run
 carries on. `python -m agent.report` (from `backend/`) summarises runs from the database
@@ -347,23 +439,24 @@ from the log, ready to re-send.
 `LLMError.kind` — `no_response` (time limit hit, server sent nothing — busy or still
 reading the prompt), `too_slow` (tokens were still arriving), `length_limit` (hit the
 token cap), `unreachable`, `http_error`, `bad_reply` (unparseable stream/tool arguments),
-`aborted` (the user hit Restart).
+`aborted` (the user stopped the search or restarted).
 
 **Retry policy (search only):** a round's request is retried once after a 5 s pause
-(`round_llm_attempts`, default 2 tries total). If both fail, the whole search restarts
-**from zero memory**, up to `search_attempts` (default 2) times total — the model gets
-nothing from the earlier attempt, but its rounds stay visible (labeled "restart N") and
-saved, and the best candidate found is kept across every attempt. If a round still fails
-both tries after the last restart, the search fails. The interview and follow-up chats
-are not retried — they show the reason and the user can just send again.
+(`round_llm_attempts`, default 2 tries total). If both fail, the round has failed and the
+search **resumes with its memory kept** — everything tried so far is still sent, the
+budget keeps counting — until `search_attempts` (default 2) rounds have failed that way;
+then the search ends with `llm_failed`. A design that already met the goal is still the
+result. The interview and follow-up chats are not retried — they show the reason and the
+user can just send again.
 
-**End-of-run report** (`femm_agent/services/outcome.py::outcome_report()`) — for every
-ending except a met goal, a plain-language explanation: which rounds/tries failed and
-why (for `FAILED`), that every round was used (`BUDGET_EXHAUSTED`), that the model
-stopped on its own (`STOPPED_BY_MODEL`), or that it's an internal bug rather than a
-server problem. Every report ends with the closest candidate found and exactly what it
-still missed. Stored in `ai_runs.error`, shown in the chat, the search summary, and
-History, and handed to the follow-up chat (§9).
+**End-of-run report** (`femm_agent/services/outcome.py::outcome_report()`) — written by
+code for every ending. With a passing design: which rule ended the search and the
+design's score. Without one: "Target not achieved", the limit or rule that ended it, and
+the closest candidate with exactly what it still missed; for `stalled`, also the repeat
+and near-copy counts and the fields never changed; for `llm_failed`, which rounds and
+tries failed and why. At a budget limit with the verdict still `improving`, it invites
+"continue". It never says a target is impossible. Stored in `ai_runs.error`, shown in the
+chat, the search summary, and History, and handed to the follow-up chat (§9).
 
 ## 9. The follow-up chat
 
@@ -374,13 +467,21 @@ context than the search loop's own message history, which is trimmed to its late
 plus the best few candidates. **It cannot change anything, structurally, not just by
 prompt instruction:** it's called with no tools at all, so it has no `finalize_spec` to
 re-plan with and no `propose_coilset` to try a design with — the prompt just tells it to
-point the user at Restart instead.
+point the user at Restart instead. Its snapshot includes the budget used, code's progress
+verdict and the end-of-run report, so "why did it stop?" is answered from what code
+recorded, with no extra model call when a search ends.
+
+**"continue" is not a model decision.** When a finished search's chat receives a message
+that is exactly the word "continue" (any case), the panel records it and calls
+`AgentRunner.continue_run()` (§5); the Continue button calls the same function. Any other
+message goes to the follow-up model.
 
 ## 10. Settings — what's editable without touching code
 
 `agent/settings/settings.py::AgentSettings` — the LLM connection (URL, model, time
-limit, token cap, and the sampling values `temperature` / `top_p` / `seed` of §8), the search budget (max rounds, candidates per round, best-kept
-count, retry counts, max distances), and the three system prompts, each **one** template
+limit, token cap, and the sampling values `temperature` / `top_p` / `seed` of §8), the search budget (max rounds, total time and simulation limits,
+plateau and stall lengths, the noise threshold `noise_points`, candidates per round,
+best-kept count, retry counts, max distances), and the three system prompts, each **one** template
 of plain text with `{{placeholder}}` fills and `{{#name}}...{{/name}}` conditional
 blocks (a batch-size-dependent paragraph, ferrite/metal notes that only appear if those
 fields are open, and so on) — `agent/settings/templating.py`. Only values that differ
@@ -461,7 +562,10 @@ relying on any of these:
 | `agent/input_chat/models/variables.py` | Which `CoilSet` fields the model may touch (§4) |
 | `agent/input_chat/services/interview.py` | Chat → `AgentSpec` |
 | `agent/femm_agent/models/schema.py` | Tool JSON-schema + delta validation |
-| `agent/femm_agent/models/state.py` | `AgentRunState`/`RoundState` — the search's live, polled state |
+| `agent/femm_agent/models/state.py` | `AgentRunState`/`RoundState` — the search's live, polled state; `Budget`; `status_for()` |
+| `agent/femm_agent/services/progress.py` | Code's verdict on a search: improving / stalled / plateau (§5) |
+| `agent/femm_agent/services/restore.py` | Rebuilds a stored run's live state from the database (§5) |
+| `agent/cleanup_runs.py` | One-time, human-gated cleanup of rows from the old run lifecycle (§5) |
 | `agent/femm_agent/services/optimize.py` | The search loop body (§5) |
 | `agent/femm_agent/services/scorer.py` | Pass/fail + ranking (§5) |
 | `agent/femm_agent/services/prompts.py` | Fills the search system prompt each run |
@@ -471,7 +575,7 @@ relying on any of these:
 | `agent/services/run_log.py` | `RunLog` — the per-run JSON-lines log of every AI request and warning (§8) |
 | `agent/input_chat/services/runner.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |
 | `agent/femm_agent/services/runner.py` | `AgentRunner` — background-thread wrapper around the search loop, for the GUI; runs on its own thread, never the solve pool (Engine.md §6) |
-| `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table |
+| `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table; `transition()`, the schema version and its migration (§5) |
 | `agent/*/tests/` | Each phase's own tests; `agent/tests/` is cross-phase (LLM client, run store, live reasoning) |
 
 **Import rule:** `agent/`'s core imports `engine/`, never `frontend/` (the sole

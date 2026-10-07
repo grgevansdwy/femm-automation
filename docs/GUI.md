@@ -98,6 +98,13 @@ turns, search rounds, scoring) belong to `Agent.md`:
   Search and shows a fixed notice with the solver's error and a **Retry solve** button
   (`retry_baseline()` re-queues only the failed solves). No LLM turn is involved. It stops
   applying once the search has started, so follow-up questions stay available.
+  Run lifecycle on this screen: nothing is saved until the user's first message; **Restart**
+  always keeps the old conversation in History (a planning chat as cancelled, a running
+  search stopped with its finished rounds); **Stop and keep the best** (shown while a
+  search runs, with a confirmation) ends the search at its next checkpoint and stays on
+  it; once a search has ended, typing exactly "continue" or clicking **Continue** resumes
+  the same run with a fresh budget (`continue_search()`), and a status line is drawn in
+  the chat where each search segment started.
 - **`agent_candidate_card.py`** — the shared renderer for one round/candidate (geometry +
   result tables + reasoning) and the finished-search summary. Used by *both* the live
   view and history replay so they can never visually drift apart — deliberately its own
@@ -105,7 +112,11 @@ turns, search rounds, scoring) belong to `Agent.md`:
   circular import.
 - **`agent_history.py`** — reads saved runs straight from the agent's repository and
   replays them through `agent_candidate_card.py`'s same rendering functions, from plain
-  dicts, never a live run object.
+  dicts, never a live run object. It lists every run whatever its status (planning, plan
+  ready, searching, each ending, interrupted, cancelled), each with its own label and, for
+  an ended search, the rule that ended it. **Delete** (with a confirmation) is the only way
+  a run leaves History; a search still running can't be deleted. Reopening a past run in
+  the chat is not built.
 
 `visualization/coil_diagram.py` is reused here too (not agent-specific) — both the live
 view and the finished summary call `draw()` directly.
@@ -115,8 +126,17 @@ view and the finished summary call `draw()` directly.
 `screen_settings/settings_panel.py`, opened from the AI Agent view, edits the agent's
 `AgentSettings`: the three system prompts, the LLM connection (URL, model, limits, and the sampling
 values sent with every request: temperature, top-p, seed), and
-the search budget (rounds, candidates per round, retries). This is the second — and
+the search budget (rounds, total time, simulations, plateau and stall lengths, the noise
+threshold, candidates per round, retries). This is the second — and
 last — `frontend/` ↔ `agent/` touch point (`agent.settings`). Full detail: `Agent.md`.
+
+### Startup
+
+`main.py` brings the agent's tables to the current schema before anything reads them
+(`migrate_if_needed()`: a backup copy of the database goes to `backend/data/backups/`
+first; on failure the app prints a message naming that copy and exits), then marks every
+search the last session left `running` as `interrupted` (`reap_running()`). One app
+instance per database is assumed.
 
 ## 6. Verification performed
 

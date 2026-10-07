@@ -47,8 +47,12 @@ REPORT_PATH = _BACKEND.parent / "docs" / "summarize_result.md"
 NOTES_MARKER = "<!-- hand-written from here down; kept when the tables above are regenerated -->"
 
 REPEATS = 5
-MAX_ROUNDS = 25          # SPEC.md's decided round budget, so later milestones compare like for like
-TIME_LIMIT_S = 90 * 60   # per search; the loop has no wall-clock limit of its own yet, so it's enforced here
+# SPEC.md's decided budget, set here rather than read from Settings so every
+# result set compares like for like. The search enforces both itself
+# (state.Budget); the baseline set, measured before it could, had the time
+# limit enforced by this script and reports it as status "time_limit".
+MAX_ROUNDS = 25
+TIME_LIMIT_S = 90 * 60
 
 
 def _hold(*metrics, tol=5.0):
@@ -113,7 +117,7 @@ def _seconds(start, end) -> float:
 
 
 def run_one(goal: Goal, repeat: int, results_dir: Path) -> dict:
-    settings = dataclasses.replace(load_settings(), max_tool_calls=MAX_ROUNDS)
+    settings = dataclasses.replace(load_settings(), max_tool_calls=MAX_ROUNDS, search_time_limit_s=float(TIME_LIMIT_S))
     spec = dataclasses.replace(
         AgentSpec.from_settings(settings, baseline_config_id=goal.baseline),
         distances=list(goal.distances), objectives=list(goal.objectives), objective_text=goal.text)
@@ -121,21 +125,13 @@ def run_one(goal: Goal, repeat: int, results_dir: Path) -> dict:
     run_log.LOG_DIR = results_dir / "logs"
     runner = AgentRunner(job_runner_module.JobRunner())
     started = time.monotonic()
-    timed_out = False
     state = runner.submit(spec)
     seen_rounds = 0
-    while state.status == AgentRunStatus.RUNNING and state.finished_at is None:
-        if time.monotonic() - started > TIME_LIMIT_S:
-            timed_out = True
-            runner.cancel(state.id)
-            break
+    while state.status == AgentRunStatus.RUNNING:  # every search ends by its own budget or stop rules
         if len(state.rounds) != seen_rounds:
             seen_rounds = len(state.rounds)
             print(f"    round {seen_rounds} ({(time.monotonic() - started) / 60:.0f} min)", flush=True)
         time.sleep(1.0)
-    deadline = time.monotonic() + 60
-    while state.finished_at is None and time.monotonic() < deadline:
-        time.sleep(0.5)  # a cancelled search stops at its next checkpoint
 
     candidates = [c for r in state.rounds for c in r.candidates]
     valid = [c for c in candidates if c.valid]
@@ -143,14 +139,15 @@ def run_one(goal: Goal, repeat: int, results_dir: Path) -> dict:
                        if any(c.valid and c.tool_result["goal_met"] for c in r.candidates)), None)
     return {
         "goal": goal.key, "repeat": repeat, "run_id": state.id,
-        "status": "time_limit" if timed_out else state.status.value,
+        "status": state.status.value, "stop_reason": state.stop_reason,
+        "budget": state.budget_history[-1] if state.budget_history else None,
         "goal_met": bool(state.best is not None and state.best.goal_met),
         "minutes": round((time.monotonic() - started) / 60, 1),
         "rounds": len(state.rounds),
         "first_pass_round": first_pass,
         "candidates": len(candidates),
         "rejected": len(candidates) - len(valid),
-        "simulations": len(valid) * len(goal.distances),
+        "simulations": state.budget.simulations_used,  # fresh solves; cache hits and the baseline are free
         "llm_seconds": round(sum(_seconds(r.proposing_started_at, r.evaluating_started_at) for r in state.rounds)),
         "femm_seconds": round(sum(_seconds(r.evaluating_started_at, r.done_at) for r in state.rounds)),
         "reply_tokens": sum(r.llm_stats.get("tokens") or 0 for r in state.rounds),
@@ -277,7 +274,7 @@ def report(label: str) -> str:
             continue
         points = points_past_bar(r["best"]) if r["best"] else []
         lines.append(
-            f"| {r['goal']} | {r['repeat']} | {r['status']} | {r['rounds']} | {r['first_pass_round'] or '-'} | "
+            f"| {r['goal']} | {r['repeat']} | {r['status']}{' (' + r['stop_reason'] + ')' if r.get('stop_reason') else ''} | {r['rounds']} | {r['first_pass_round'] or '-'} | "
             f"{r['candidates']} | {r['rejected']} | {r['minutes']} | {r['llm_failures']} | "
             f"{r['mean_fields_changed'] if r['mean_fields_changed'] is not None else '-'} | "
             f"{f'{min(points):+.2f}' if points else '-'} |")

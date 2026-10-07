@@ -206,11 +206,21 @@ def _run_row_to_record(row) -> dict:
         'best_round': row['best_round'],
         'best_coilset': json.loads(row['best_coilset_json']) if row['best_coilset_json'] else None,
         'best_tool_result': json.loads(row['best_tool_result_json']) if row['best_tool_result_json'] else None,
-        'stop_reason': row['stop_reason'],
-        'budget': json.loads(row['budget_json']) if row['budget_json'] else None,
-        'fragility': json.loads(row['fragility_json']) if row['fragility_json'] else None,
-        'baseline_coilset': json.loads(row['baseline_coilset_json']) if row['baseline_coilset_json'] else None,
+        # The version-1 columns. agent/report.py also reads databases that have
+        # not been migrated yet (read-only, e.g. a benchmark's copy): None there.
+        'stop_reason': _column(row, 'stop_reason'),
+        'budget': _loads(_column(row, 'budget_json')),
+        'fragility': _loads(_column(row, 'fragility_json')),
+        'baseline_coilset': _loads(_column(row, 'baseline_coilset_json')),
     }
+
+
+def _column(row, name):
+    return row[name] if name in row.keys() else None
+
+
+def _loads(text):
+    return json.loads(text) if text else None
 
 
 def _message_row_to_record(row) -> dict:

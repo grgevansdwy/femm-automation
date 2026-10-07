@@ -93,17 +93,20 @@ def summarize_run(run: dict, rounds: list[dict], events: list[dict]) -> dict:
     best = run.get("best_tool_result")
 
     calls = [e for e in events if e.get("event") == "llm_call"]
-    end = next((e for e in reversed(events) if e.get("event") == "run_end"), None)
+    # One run_end per search segment (the first search, then each "continue").
+    ends = [e for e in events if e.get("event") == "run_end"]
+    end = ends[-1] if ends else None
     prompt_tokens = [e["prompt_tokens"] for e in calls if e.get("prompt_tokens") is not None]
     minutes = _minutes(run.get("started_at") or run.get("created_at"), run.get("finished_at"))
     if minutes is None and end is not None:
         minutes = end.get("seconds", 0) / 60
     return {
         "id": run["id"], "created_at": run["created_at"], "status": run["status"],
-        "stop_reason": end.get("stop_reason") if end else None,
+        "stop_reason": run.get("stop_reason") or (end.get("stop_reason") if end else None),
+        "segments": len(run.get("budget") or []) or len(ends) or None,
         "rounds": len(rounds), "candidates": len(candidates), "rejected": len(candidates) - len(valid),
-        "simulations": end.get("simulations") if end else None,
-        "cache_hits": end.get("cache_hits") if end else None,
+        "simulations": sum(e.get("simulations") or 0 for e in ends) if ends else None,
+        "cache_hits": sum(e.get("cache_hits") or 0 for e in ends) if ends else None,
         "minutes": minutes,
         "ai_share": llm_s / (llm_s + femm_s) if llm_s + femm_s else None,
         "prompt_tokens": sum(prompt_tokens) if prompt_tokens else None,
