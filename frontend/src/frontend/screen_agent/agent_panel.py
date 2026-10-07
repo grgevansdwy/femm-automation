@@ -602,6 +602,8 @@ def _plan_context_lines(spec) -> list[str]:
         lines.append("Set to: " + ", ".join(f"{k} = {v:g}" for k, v in vs.fixed_values.items()))
     if vs.excluded_fields:
         lines.append(f"Kept fixed: {sorted(vs.excluded_fields)}")
+    if spec.favourite_metric:
+        lines.append(f"Pushed as far as possible: {spec.favourite_metric}")
     return lines
 
 

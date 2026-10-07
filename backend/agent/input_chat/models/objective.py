@@ -129,22 +129,28 @@ class Objective:
         return f">= {self.tolerance_pct:g}% {'lower' if self.kind == 'reduce' else 'higher'}"
 
 
-def margin(objective: Objective, change_pct: float, value: float | None = None) -> float:
-    """How far a result is inside (>= 0, passes) or outside (< 0, fails)
-    the objective, as a fraction of its tolerance - so missing a 5% band by
-    0.5pp (-0.10) reads as worse than missing a 50% reduction target by
-    0.5pp (-0.01). `change_pct` is the % change vs baseline; `value` is the
-    raw value, needed only for an absolute target_value."""
+def points(objective: Objective, change_pct: float, value: float | None = None) -> float:
+    """How far a result is past its bar (>= 0, passes) or short of it (< 0),
+    in plain percentage points - not divided by the tolerance, so a 0% target
+    (normalised as 1%, see margin()) can't swamp an average of several
+    objectives. `change_pct` is the % change vs baseline; `value` is the raw
+    value, needed only for an absolute target_value (the points are then the
+    % deviation from that value)."""
     if objective.target_value is not None:
         deviation_pct = (value - objective.target_value) / abs(objective.target_value) * 100.0
         if objective.kind == "match":
-            raw = objective.tolerance_pct - abs(deviation_pct)
-        else:
-            raw = -deviation_pct if objective.kind == "reduce" else deviation_pct
-    elif objective.kind == "match":
-        raw = objective.tolerance_pct - abs(change_pct - objective.target_pct)
-    elif objective.kind == "reduce":
-        raw = -change_pct - objective.tolerance_pct
-    else:  # increase
-        raw = change_pct - objective.tolerance_pct
-    return raw / max(objective.tolerance_pct, MIN_SCALE_PCT)
+            return objective.tolerance_pct - abs(deviation_pct)
+        return -deviation_pct if objective.kind == "reduce" else deviation_pct
+    if objective.kind == "match":
+        return objective.tolerance_pct - abs(change_pct - objective.target_pct)
+    if objective.kind == "reduce":
+        return -change_pct - objective.tolerance_pct
+    return change_pct - objective.tolerance_pct  # increase
+
+
+def margin(objective: Objective, change_pct: float, value: float | None = None) -> float:
+    """points() as a fraction of the objective's tolerance - so missing a 5%
+    band by 0.5pp (-0.10) reads as worse than missing a 50% reduction target
+    by 0.5pp (-0.01). Decides pass/fail and orders designs that haven't met
+    the goal yet; designs that have are compared in points (scorer.rank_key)."""
+    return points(objective, change_pct, value) / max(objective.tolerance_pct, MIN_SCALE_PCT)

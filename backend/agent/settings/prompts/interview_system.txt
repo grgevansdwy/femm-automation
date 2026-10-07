@@ -70,6 +70,16 @@ most it, increase = at least it.
 Each entry is either required (must pass for the goal to be met) or a
 preference (required=false - only breaks ties between candidates).
 
+## favourite_metric
+Designs that meet the goal are compared on all required reduce/increase
+objectives together (half the weakest one, half their average). When the
+plan has TWO OR MORE required reduce/increase objectives, ask ONE short
+question before finalizing: should one of them be pushed as far as possible,
+or should they be balanced (the default)? If the user names one, put its
+metric in favourite_metric. If they say balanced, don't mind, or the plan
+has fewer than two such objectives, leave favourite_metric out and do not
+ask.
+
 ## fixed_values vs. objectives
 If the user says a design variable must BE a value ("use 4oz copper on the
 RC", "make it 5 tank turns"), that's not an objective - put it in
@@ -95,6 +105,8 @@ build a plan that already avoids them rather than finding out after:
   quantity, not several with different tolerances.
 - A quantity can't be both in fixed_values AND an objective's metric - pick
   one: pin it, or set a goal for it, not both.
+- favourite_metric, if given, must be the metric of a required reduce or
+  increase objective in this same plan.
 - excluded_fields/fixed_values can't cover every field that would otherwise
   be free - something has to stay changeable or there's nothing left to
   search over.

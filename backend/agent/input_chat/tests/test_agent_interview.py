@@ -147,3 +147,39 @@ def test_flag_off_topics_tool_result_carries_no_explanation_text(monkeypatch):
     assert tool_result_msg["role"] == "tool"
     assert json.loads(tool_result_msg["content"]) == {"valid": False, "off_topic": True}
     print("  ok  the tool result interview.py appends carries no explanation text, just the flag")
+
+
+_TWO_CUTS = [{"metric": "tank_esr", "kind": "reduce", "tolerance_pct": 10.0},
+             {"metric": "rc_esr", "kind": "reduce", "tolerance_pct": 10.0},
+             {"metric": "M23", "kind": "match", "tolerance_pct": 5.0}]
+
+
+def test_a_favourite_must_be_a_required_reduce_or_increase_objective(monkeypatch):
+    state, _ = _run(monkeypatch, [_finalize(_TWO_CUTS, favourite_metric="tank_esr")])
+    assert state.finalized and state.spec.favourite_metric == "tank_esr"
+
+    state, _ = _run(monkeypatch, [_finalize(_TWO_CUTS)])
+    assert state.finalized and state.spec.favourite_metric is None, "no favourite = the blended score"
+
+    for bad in ("M23", "loop_esr"):  # a match objective; not in the plan at all
+        state, calls = _run(monkeypatch, [_finalize(_TWO_CUTS, favourite_metric=bad), _text("Which one?")])
+        assert not state.finalized and len(calls) == 2
+        assert "favourite_metric" in json.loads(state.transcript[-2]["content"])["error"]
+    print("  ok  favourite_metric is checked by code: only a required reduce/increase objective of this plan")
+
+
+def test_malformed_tool_arguments_end_in_a_question_not_a_dead_turn(monkeypatch):
+    broken = [
+        _finalize(_TWO_CUTS, fixed_values=[1, 2]),  # a list where an object belongs: TypeError inside _build_spec
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "finalize_spec",
+                                                                                      "arguments": "not json"}}]},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},  # no function at all
+        _finalize([{"metric": "tank_esr", "kind": "reduce", "tolerance_pct": "lots"}]),
+    ]
+    for msg in broken:
+        state, calls = _run(monkeypatch, [msg, _text("Could you say that again?")])
+        assert not state.finalized and state.error is None
+        assert len(calls) == 2 and calls[1][1] is None, "one tool-less follow-up turns the rejection into a question"
+        assert json.loads(state.transcript[-2]["content"])["valid"] is False
+        assert state.transcript[-1]["content"] == "Could you say that again?"
+    print("  ok  whatever shape finalize_spec's arguments have, the user gets a reply")

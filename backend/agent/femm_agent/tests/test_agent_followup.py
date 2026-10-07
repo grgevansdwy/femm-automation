@@ -30,7 +30,7 @@ def _run_state(status=AgentRunStatus.GOAL_MET):
         coilset=best_coilset,
         metrics={10.0: {**_METRICS, "tank_esr": 0.341}},
         objective_results=[ObjectiveResult(objective=objective, change_pct=-20.1, value=0.341, baseline_value=0.427,
-                                           margin=0.005, passed=True, change_pct_by_distance={10.0: -20.1},
+                                           margin=0.005, passed=True, points=0.1, change_pct_by_distance={10.0: -20.1},
                                            worst_distance=10.0)],
         goal_met=True, changed_fields={"tank_center_r": (72.688, 70.5)},
     )

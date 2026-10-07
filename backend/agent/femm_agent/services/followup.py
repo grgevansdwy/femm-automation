@@ -65,6 +65,8 @@ def run_context(run_state) -> str:
               f"Distances: {spec.distances} mm", "Objectives:"]
     for o in spec.objectives:
         lines.append(f"  - {o.metric}: {'Required' if o.required else 'Preferred'}, {o.describe()}")
+    if spec.favourite_metric:
+        lines.append(f"Designs that meet the goal are compared on {spec.favourite_metric} alone (the user's favourite).")
     vs = spec.variable_spec
     if vs.enabled_groups:
         lines.append(f"Newly enabled groups: {sorted(vs.enabled_groups)}")

@@ -16,7 +16,9 @@ import pytest
 from agent.input_chat.services.interview import _build_spec, _interview_tools
 from agent.input_chat.models.objective import Objective, margin
 from agent.femm_agent.services.prompts import system_prompt
-from agent.femm_agent.services.scorer import coil_diameters, evaluate, rank_key, tool_result
+from agent.femm_agent.services.scorer import (
+    blended_score, coil_diameters, evaluate, points_past_bar, preference_score, rank_key, shortfall, tool_result,
+)
 from agent.input_chat.models.spec import AgentSpec
 from agent.input_chat.models.variables import VariableSpec, allowed_fields, audit_changed_fields, free_fields_for
 from engine.repositories.coilset_repository import get_coilset
@@ -197,9 +199,60 @@ def test_default_objectives_rank_exactly_like_the_old_scorer():
         assert s.goal_met == legacy_goal
         scored.append(s)
 
-    assert sorted(scored, key=rank_key) == sorted(scored, key=_legacy_rank_key)
-    assert any(s.goal_met for s in scored) and not all(s.goal_met for s in scored), "fixture should mix both"
-    print("  ok  default objectives: same goal_met and same ranking as the old scorer on 300 candidates")
+    # Designs that meet the goal are now ordered by their score in points (see
+    # the blended-score tests below), ahead of every design that doesn't; the
+    # old ordering still holds among the rest.
+    ranked = sorted(scored, key=rank_key)
+    passing = [s for s in scored if s.goal_met]
+    assert ranked[:len(passing)] == sorted(passing, key=rank_key) and all(s.goal_met for s in ranked[:len(passing)])
+    missing = [s for s in scored if not s.goal_met]
+    assert ranked[len(passing):] == sorted(missing, key=_legacy_rank_key)
+    assert passing and missing, "fixture should mix both"
+    print("  ok  default objectives: same goal_met as the old scorer, and the same ranking below the passing designs")
+
+
+def test_passing_designs_rank_by_blended_score_or_by_the_named_favourite():
+    spec = AgentSpec(distances=DISTANCES, objectives=[
+        Objective("loop_esr", "reduce", 10.0), Objective("tank_esr", "reduce", 10.0),
+        Objective("L_rc", "reduce", 0.0, required=False),
+    ])
+    even = _score(spec, {"loop_esr": -16.0, "tank_esr": -16.0})        # points 6, 6   -> 6.0
+    lopsided = _score(spec, {"loop_esr": -10.5, "tank_esr": -30.0})    # points 0.5, 20 -> 0.5*0.5 + 0.5*10.25 = 5.375
+    on_the_bar = _score(spec, {"loop_esr": -10.1, "tank_esr": -10.1})  # points 0.1, 0.1 -> 0.1
+    short = _score(spec, {"loop_esr": -9.0, "tank_esr": -40.0})        # misses loop_esr
+    assert [s.goal_met for s in (even, lopsided, on_the_bar, short)] == [True, True, True, False]
+
+    assert sorted([short, on_the_bar, lopsided, even], key=rank_key) == [even, lopsided, on_the_bar, short]
+    by_tank = sorted([short, on_the_bar, lopsided, even], key=lambda s: rank_key(s, "tank_esr"))
+    assert by_tank == [lopsided, even, on_the_bar, short], "favourite: compared on tank_esr alone"
+
+    assert [round(blended_score(tool_result(s, spec)), 3) for s in (even, lopsided, on_the_bar)] == [6.0, 5.375, 0.1]
+    assert round(blended_score(tool_result(lopsided, spec), "tank_esr"), 2) == 20.0
+    assert [round(p, 2) for p in points_past_bar(tool_result(short, spec))] == [-1.0, 30.0]
+    assert round(shortfall(tool_result(short, spec)), 2) == 1.0 and shortfall(tool_result(even, spec)) == 0.0
+
+    # Same score: the preference breaks the tie.
+    smaller_l = _score(spec, {"loop_esr": -16.0, "tank_esr": -16.0, "L_rc": -3.0})
+    assert sorted([even, smaller_l], key=rank_key) == [smaller_l, even]
+    assert round(preference_score(tool_result(smaller_l, spec)), 2) == 3.0
+    print("  ok  passing designs: blended score by default, the favourite alone when named, preferences break ties")
+
+
+def test_a_match_only_goal_has_no_score_and_old_stored_results_still_score():
+    spec = AgentSpec(distances=DISTANCES, objectives=[Objective("L_rc", "match", 2.0),
+                                                      Objective("L_loop", "reduce", 0.0, required=False)])
+    a, b = _score(spec, {"L_rc": 1.9, "L_loop": -4.0}), _score(spec, {"L_rc": 0.0, "L_loop": -1.0})
+    assert blended_score(tool_result(a, spec)) is None
+    assert sorted([b, a], key=rank_key) == [a, b], "all passing designs tie; the preference decides"
+
+    # A tool_result stored before the "points" key existed (the baseline benchmark's files).
+    old = {"objectives": [
+        {"metric": "tank_esr", "kind": "reduce", "tolerance_pct": 10.0, "required": True, "worst_change_pct": -12.5},
+        {"metric": "rc_esr", "kind": "reduce", "tolerance_pct": 10.0, "required": True, "worst_change_pct": -20.5},
+        {"metric": "M23", "kind": "match", "tolerance_pct": 5.0, "required": True, "worst_change_pct": 1.0},
+    ]}
+    assert points_past_bar(old) == [2.5, 10.5] and blended_score(old) == 0.5 * 2.5 + 0.5 * 6.5
+    print("  ok  match-only goals have no score; results stored before M2 score the same as benchmark.py did")
 
 
 def test_holding_a_match_ranks_above_breaking_it_and_match_headroom_is_not_rewarded():

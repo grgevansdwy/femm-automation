@@ -13,7 +13,17 @@ import os
 # round trip.
 API_BASE_URL = os.environ.get("LLM_API_BASE", "http://192.168.1.74:8854")
 MODEL = os.environ.get("AGENT_MODEL", "Qwen3.8-Flash-Next-UD-Q4_K_XL")  # must support tool calling
-MAX_TOOL_CALLS = 50  # hard budget on how many rounds (LLM replies) we'll ask for
+MAX_TOOL_CALLS = 25  # rounds (LLM replies) per search, counted across resumes; a text-only reply uses one too
+# The other two limits on one search (agent/femm_agent/models/state.py's Budget). Whichever
+# is reached first ends it; "continue" starts a new segment with a fresh budget.
+SEARCH_TIME_LIMIT_S = 5400.0  # wall clock for the whole search: AI requests and solves
+MAX_SIMULATIONS = 300  # fresh solves (one candidate at one distance); cache hits and the baseline are free
+# Stop rules judged by code (agent/femm_agent/services/progress.py). A round "improves" when the
+# tracked number beats the last reference by more than NOISE_POINTS percentage points -
+# about what the solver's mesh shifts a result by.
+PLATEAU_ROUNDS = 2  # after a pass: rounds without improvement before the search stops
+STALL_ROUNDS = 4    # before a pass: rounds without improvement before the model is told it is stalled
+NOISE_POINTS = 1.0
 # Most candidates the model may propose in one reply, all solved concurrently.
 # The prompt asks it to use all of them unless fewer would genuinely be more
 # useful. The LLM call dominates a round (~77 s median vs ~8 s of FEMM per
@@ -43,8 +53,8 @@ TEMPERATURE = 1.0
 TOP_P = 0.95
 SEED = -1
 # Retry policy for a search (agent/femm_agent/services/runner.py, agent/femm_agent/services/optimize.py): a round's AI
-# request is tried this many times; if every try fails, the whole search
-# starts over from zero memory, up to SEARCH_ATTEMPTS times in total.
+# request is tried this many times; if every try fails, the search resumes with
+# its memory kept, up to SEARCH_ATTEMPTS such failures in total.
 ROUND_LLM_ATTEMPTS = 2
 SEARCH_ATTEMPTS = 2
 

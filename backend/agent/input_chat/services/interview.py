@@ -110,6 +110,13 @@ FINALIZE_SPEC_TOOL = [{
                         "required": ["metric", "kind", "tolerance_pct"],
                     },
                 },
+                "favourite_metric": {
+                    "type": "string",
+                    "description": "Only when the user said ONE required reduce/increase objective should be "
+                                    "pushed as far as possible: that objective's metric. Designs that meet the "
+                                    "goal are then compared on it alone. Omit it otherwise - they are compared "
+                                    "on all required reduce/increase objectives together.",
+                },
             },
             "required": ["objective_text", "distances", "objectives"],
         },
@@ -265,8 +272,15 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
         if o.target_value is None and not is_per_distance(o.metric) and design[o.metric] == 0:
             raise ValueError(f"{o.metric} is 0 on the baseline, so a % change is undefined - use target_value")
 
+    favourite = args.get("favourite_metric") or None
+    pushable = [o.metric for o in objectives if o.required and o.kind != "match"]
+    if favourite is not None and favourite not in pushable:
+        raise ValueError(f"favourite_metric {favourite!r} must be one of the required reduce/increase "
+                         f"objectives ({pushable or 'this plan has none'}) - or leave it out")
+
     return dataclasses.replace(
         AgentSpec.from_settings(settings, baseline_config_id=baseline_config_id),
+        favourite_metric=favourite,
         distances=distances,
         objective_text=args.get("objective_text", ""),
         variable_spec=variable_spec,
@@ -327,7 +341,10 @@ def run_interview_turn(state: InterviewState, user_message: str | None = None, s
         return  # a clarifying question (or other plain text) - caller reads state.transcript[-1]["content"]
 
     call = tool_calls[0]
-    if call["function"]["name"] == "flag_off_topic":
+    function = call.get("function") if isinstance(call, dict) else None
+    if not isinstance(function, dict):
+        function = {}
+    if function.get("name") == "flag_off_topic":
         # The fixed redirect bubble (agent_panel.py's _message_display_text)
         # never shows the model's own words for THIS message, so an
         # off-topic message can't make it engage with the content directly.
@@ -339,13 +356,20 @@ def run_interview_turn(state: InterviewState, user_message: str | None = None, s
         _toolless_followup()
         return
 
-    args = call["function"]["arguments"]
+    args = function.get("arguments")
     try:
+        if not isinstance(args, dict):
+            raise ValueError(f"finalize_spec's arguments must be a JSON object, got {type(args).__name__}")
         state.spec = _build_spec(args, state.baseline_config_id, baseline, state.settings)
         state.finalized = True
         result = {"valid": True, "message": "Spec finalized."}
-    except (ValueError, KeyError) as exc:
-        result = {"valid": False, "error": str(exc)}
+    except Exception as exc:
+        # Whatever shape the model's arguments have (a string where a list
+        # belongs raises TypeError, a missing key KeyError, ...), it is a
+        # rejected plan the user gets asked about - never a dead turn.
+        result = {"valid": False, "error": f"{type(exc).__name__}: {exc}" if not isinstance(exc, ValueError) else str(exc)}
+        if log is not None and not isinstance(exc, ValueError):
+            log.warning("run_interview_turn", "finalize_spec arguments could not be read", exc)
     state.transcript.append({"role": "tool", "content": json.dumps(result)})
 
     if result["valid"]:

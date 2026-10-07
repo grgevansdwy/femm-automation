@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 
-from agent.input_chat.models.objective import Objective, is_per_distance, margin
+from agent.input_chat.models.objective import Objective, is_per_distance, margin, points
 
 
 @dataclasses.dataclass
@@ -20,6 +20,7 @@ class ObjectiveResult:
     baseline_value: float
     margin: float                   # as a fraction of tolerance (see objective.margin())
     passed: bool                    # margin >= 0 (at every distance, if per-distance)
+    points: float                   # percentage points past the bar (objective.points()); margin is this / tolerance
     change_pct_by_distance: dict | None = None  # distance -> % change, per-distance quantities only
     worst_distance: float | None = None
 
@@ -152,7 +153,7 @@ def _check_once(obj: Objective, value, baseline_value) -> ObjectiveResult:
     change = pct(value, baseline_value)
     m = margin(obj, change, value)
     return ObjectiveResult(objective=obj, change_pct=change, value=value, baseline_value=baseline_value,
-                           margin=m, passed=bool(m >= 0))  # bool(): a numpy metric would give numpy.bool_, which isn't JSON-serializable
+                           margin=m, passed=bool(m >= 0), points=float(points(obj, change, value)))  # bool(): a numpy metric would give numpy.bool_, which isn't JSON-serializable
 
 
 def _check_per_distance(obj: Objective, metrics: dict, baseline_metrics: dict, distances) -> ObjectiveResult:
@@ -162,31 +163,53 @@ def _check_per_distance(obj: Objective, metrics: dict, baseline_metrics: dict, d
                                change_pct_by_distance={d: r.change_pct for d, r in at.items()})
 
 
-def rank_key(s: Scored):
-    """Sort key, lower is better. Two tiers, generalizing the old "M gate,
-    then ESR" ranking to any objective list:
+def rank_key(s: Scored, favourite: str | None = None):
+    """Sort key, lower is better. Three tiers:
 
-    - A required `match` is a constraint to hold, not something to push
-      further - once inside its band, being even closer to target earns
-      nothing. Candidates holding every required match rank first (tier 0),
-      ordered by their reduce/increase margins, worst first (a candidate is
-      only as good as its weakest improvement), then by preferences.
-    - Candidates breaking a required match (tier 1) rank by how far outside
-      the band(s) they landed, so there's still a "best attempt" to report.
+    - Tier 0, designs that meet the goal: highest score first. The score is
+      in percentage points past the bar over the required reduce/increase
+      objectives: the `favourite` objective's points when the user named one
+      (AgentSpec.favourite_metric), else 50% the smallest + 50% the average
+      (a design with one objective sitting on its bar is the likeliest to be
+      a mesh artefact, so the smallest counts for half). Preferences break
+      ties. A goal with only `match` requirements has no score: every
+      passing design ties and preferences decide.
+    - Tier 1, every required `match` held but a target missed: ordered by
+      the reduce/increase margins, worst first (a candidate is only as good
+      as its weakest improvement), then by preferences. A required `match`
+      is a constraint to hold, not something to push further - once inside
+      its band, being even closer to target earns nothing.
+    - Tier 2, a required match broken: by how far outside the band(s) it
+      landed, so there's still a "best attempt" to report.
 
     There are no built-in tie-breakers: anything that should break ties is
-    a preference in spec.objectives. With AgentSpec's default objectives
-    this orders candidates the way the old scorer did: tier 0 = M23 held,
-    sorted by the least-improved coil's ESR."""
+    a preference in spec.objectives."""
     required = [r for r in s.objective_results if r.objective.required]
     gates = [r for r in required if r.objective.kind == "match"]
     targets = [r for r in required if r.objective.kind != "match"]
     prefs = [r for r in s.objective_results if not r.objective.required]
 
+    pref_badness = tuple(sorted((_pref_badness(r) for r in prefs), reverse=True))
+    if s.goal_met:
+        score = _score_of([(r.objective.metric, r.points) for r in targets], favourite)
+        return (0, (-(score or 0.0),), pref_badness)
     target_badness = tuple(sorted((-r.margin for r in targets), reverse=True))
     if all(r.passed for r in gates):
-        return (0, target_badness, tuple(sorted((_pref_badness(r) for r in prefs), reverse=True)))
-    return (1, tuple(sorted((-r.margin for r in gates), reverse=True)), target_badness)
+        return (1, target_badness, pref_badness)
+    return (2, tuple(sorted((-r.margin for r in gates), reverse=True)), target_badness)
+
+
+def _blend(values) -> float | None:
+    values = list(values)
+    return 0.5 * min(values) + 0.5 * (sum(values) / len(values)) if values else None
+
+
+def _score_of(metric_points: list, favourite: str | None) -> float | None:
+    """`metric_points`: (metric, points) for each required reduce/increase objective."""
+    for metric, value in metric_points:
+        if metric == favourite:
+            return value
+    return _blend(value for _, value in metric_points)
 
 
 def _pref_badness(r: ObjectiveResult) -> float:
@@ -208,7 +231,7 @@ def objective_result_dict(r: ObjectiveResult) -> dict:
         "change_pct_by_distance": {str(d): round(c, 2) for d, c in (r.change_pct_by_distance or {}).items()},
         "worst_change_pct": round(r.change_pct, 2),
         "value": _sig(r.value), "baseline_value": _sig(r.baseline_value),
-        "passed": r.passed, "margin": round(r.margin, 3),
+        "passed": r.passed, "margin": round(r.margin, 3), "points": round(r.points, 2),
     }
 
 
@@ -247,21 +270,46 @@ def _shown(o: dict) -> str:
     return f"{o['value']:g}" if o.get("target_value") is not None else f"{o['worst_change_pct']:+.1f}%"
 
 
+def _points(o: dict) -> float:
+    """One tool_result() objective's percentage points past its bar. Results
+    stored before the "points" key existed are recomputed from what they do carry."""
+    if o.get("points") is not None:
+        return o["points"]
+    if o.get("target_value") is not None:
+        deviation = (o["value"] - o["target_value"]) / abs(o["target_value"]) * 100.0
+        if o["kind"] == "match":
+            return o["tolerance_pct"] - abs(deviation)
+        return -deviation if o["kind"] == "reduce" else deviation
+    change = o["worst_change_pct"]
+    if o["kind"] == "match":
+        return o["tolerance_pct"] - abs(change - (o.get("target_pct") or 0.0))
+    return (-change if o["kind"] == "reduce" else change) - o["tolerance_pct"]
+
+
 def points_past_bar(result: dict) -> list[float]:
     """For each required reduce/increase objective of a tool_result(): how many
     percentage points past its bar the design got at its worst distance
     (negative = short of it)."""
-    points = []
-    for o in result["objectives"]:
-        if o["required"] and o["kind"] != "match":
-            change = o["worst_change_pct"]
-            points.append((-change if o["kind"] == "reduce" else change) - o["tolerance_pct"])
-    return points
+    return [_points(o) for o in result["objectives"] if o["required"] and o["kind"] != "match"]
 
 
-def blended_score(result: dict) -> float | None:
-    """SPEC.md's score for a passing design: 50% the smallest points-past-the-bar,
-    50% the average. None when the goal has no required reduce/increase objective."""
-    points = points_past_bar(result)
-    return 0.5 * min(points) + 0.5 * (sum(points) / len(points)) if points else None
+def blended_score(result: dict, favourite: str | None = None) -> float | None:
+    """The score rank_key() orders passing designs by, from a tool_result():
+    the favourite objective's points when one is named, else 50% the smallest
+    points-past-the-bar + 50% the average. None when the goal has no required
+    reduce/increase objective."""
+    return _score_of([(o["metric"], _points(o)) for o in result["objectives"]
+                      if o["required"] and o["kind"] != "match"], favourite)
 
+
+def preference_score(result: dict) -> float | None:
+    """The same 50/50 blend over the reduce/increase preferences - what the
+    search tracks after a pass when the goal has nothing required to push
+    further (progress.py). None when there is no such preference."""
+    return _blend(_points(o) for o in result["objectives"] if not o["required"] and o["kind"] != "match")
+
+
+def shortfall(result: dict) -> float:
+    """How far a design is from meeting the goal: the most points any required
+    objective is short of its bar (0 = it passes)."""
+    return max([0.0] + [-_points(o) for o in result["objectives"] if o["required"]])

@@ -110,7 +110,7 @@ def summarize_run(run: dict, rounds: list[dict], events: list[dict]) -> dict:
         "reply_tokens": (sum(e.get("reply_tokens") or 0 for e in calls) if calls else
                          sum(((r["payload"] or {}).get("llm_stats") or {}).get("tokens") or 0 for r in rounds) or None),
         "first_pass_round": first_pass,
-        "best_score": blended_score(best) if best and best.get("goal_met") else None,
+        "best_score": blended_score(best, (run.get("spec") or {}).get("favourite_metric")) if best and best.get("goal_met") else None,
         "repeated": len(deltas) - len(set(deltas)),
         "llm_calls": len(calls) or None,
         "llm_errors": sum(1 for e in calls if "error" in e) if calls else None,

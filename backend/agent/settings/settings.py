@@ -21,7 +21,10 @@ FIELD_LABELS = {
     "temperature": "Sampling temperature", "top_p": "Sampling top-p", "seed": "Sampling seed",
     "max_tool_calls": "Max rounds per search", "candidates_per_round": "Candidates per round",
     "keep_best_candidates": "Best candidates remembered", "round_llm_attempts": "Tries per round's AI request",
-    "search_attempts": "Search attempts (restart from scratch)", "max_distances": "Max distances per search",
+    "search_attempts": "Failed rounds before a search gives up", "max_distances": "Max distances per search",
+    "search_time_limit_s": "Time limit per search (s)", "max_simulations": "Max simulations per search",
+    "plateau_rounds": "Rounds without improvement after a pass", "stall_rounds": "Rounds without improvement before a pass",
+    "noise_points": "Smallest real improvement (points)",
 }
 
 # One line of help per field, shown under it in the Settings screen.
@@ -33,11 +36,16 @@ FIELD_HELP = {
     "temperature": "Sent with every AI request. Higher = more varied replies; 0 = always the likeliest token.",
     "top_p": "Sent with every AI request. Only the most likely tokens adding up to this probability are considered.",
     "seed": "Sent with every AI request. -1 = a new random seed each time, so repeated searches differ.",
-    "max_tool_calls": "How many rounds (AI replies) a search may use before giving up.",
+    "max_tool_calls": "How many rounds (AI replies) a search may use. Counted across resumes; a text-only reply uses one.",
+    "search_time_limit_s": "Wall-clock limit for a whole search. No AI request or simulation starts after it.",
+    "max_simulations": "Fresh simulations a search may run (one design at one distance = 1). Cached results and the baseline are free.",
+    "plateau_rounds": "Once a design meets the goal, the search stops after this many rounds in a row without a better one.",
+    "stall_rounds": "Before any design meets the goal: after this many rounds without getting closer the AI is told it is stalled; 2 rounds later the search stops.",
+    "noise_points": "A round counts as an improvement only if it is better by more than this many percentage points (about the solver's own noise).",
     "candidates_per_round": "Most designs the AI may propose in one reply; they are simulated at the same time. 1 = one at a time.",
     "keep_best_candidates": "How many of the best designs so far are re-sent to the AI each round, one line each.",
     "round_llm_attempts": "How many times a round's AI request is tried before that round counts as failed.",
-    "search_attempts": "How many times a search may restart from zero memory after a round fails every try.",
+    "search_attempts": "A round whose AI request fails every try is a failed round; the search resumes with its memory kept until this many have failed.",
     "max_distances": "Most distances one search may simulate. Each is a full extra FEMM solve per candidate.",
 }
 
@@ -54,6 +62,11 @@ class AgentSettings:
     seed: int = config.SEED
     # --- search budget
     max_tool_calls: int = config.MAX_TOOL_CALLS
+    search_time_limit_s: float = config.SEARCH_TIME_LIMIT_S
+    max_simulations: int = config.MAX_SIMULATIONS
+    plateau_rounds: int = config.PLATEAU_ROUNDS
+    stall_rounds: int = config.STALL_ROUNDS
+    noise_points: float = config.NOISE_POINTS
     candidates_per_round: int = config.CANDIDATES_PER_ROUND
     keep_best_candidates: int = config.KEEP_BEST_CANDIDATES
     round_llm_attempts: int = config.ROUND_LLM_ATTEMPTS
@@ -87,8 +100,10 @@ class AgentSettings:
         need(number(self.top_p) and 0 < self.top_p <= 1, "top_p", "must be above 0 and at most 1")
         need(isinstance(self.seed, int) and not isinstance(self.seed, bool) and self.seed >= -1,
              "seed", "must be a whole number, -1 (random) or higher")
+        need(number(self.search_time_limit_s) and self.search_time_limit_s >= 60, "search_time_limit_s", "must be at least 60")
+        need(number(self.noise_points) and self.noise_points >= 0, "noise_points", "can't be negative")
         for name in ("max_tool_calls", "candidates_per_round", "keep_best_candidates", "round_llm_attempts",
-                     "search_attempts", "max_distances"):
+                     "search_attempts", "max_distances", "max_simulations", "plateau_rounds", "stall_rounds"):
             v = getattr(self, name)
             need(isinstance(v, int) and not isinstance(v, bool) and v >= 1, name, "must be a whole number, at least 1")
 

@@ -25,12 +25,14 @@ SECTIONS = ("System prompts", "LLM connection", "Search budget")
 _SECTION_FIELDS = {
     "LLM connection": ("api_base_url", "model", "llm_time_limit_s", "llm_max_tokens",
                        "temperature", "top_p", "seed"),
-    "Search budget": ("max_tool_calls", "candidates_per_round", "keep_best_candidates", "round_llm_attempts",
+    "Search budget": ("max_tool_calls", "search_time_limit_s", "max_simulations", "plateau_rounds", "stall_rounds",
+                      "noise_points", "candidates_per_round", "keep_best_candidates", "round_llm_attempts",
                       "search_attempts", "max_distances"),
 }
 _INT_FIELDS = ("seed", "llm_max_tokens", "max_tool_calls", "candidates_per_round", "keep_best_candidates",
-               "round_llm_attempts", "search_attempts", "max_distances")
-_FLOAT_FIELDS = ("llm_time_limit_s", "temperature", "top_p")
+               "round_llm_attempts", "search_attempts", "max_distances", "max_simulations", "plateau_rounds",
+               "stall_rounds")
+_FLOAT_FIELDS = ("llm_time_limit_s", "temperature", "top_p", "search_time_limit_s", "noise_points")
 
 
 class SettingsPanelState:
