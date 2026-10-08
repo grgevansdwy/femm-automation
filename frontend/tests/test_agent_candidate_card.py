@@ -62,3 +62,11 @@ def test_a_candidates_fragility_check_is_shown_in_words():
     assert fragility_text(fragile) == "Fragility check: failed at -2%: tank_esr -9.1% - not a winner"
     text, colour = _step_outcome({"valid": True, "tool_result": fragile}, {})
     assert text == "Met the goal, failed the fragility check"
+
+
+def test_a_design_is_named_by_its_label_and_the_design_it_was_built_on():
+    from frontend.screen_agent.agent_candidate_card import design_name
+    assert design_name({"label": "C7", "base_label": "C3"}) == "C7, built on C3"
+    assert design_name({"label": "C1", "base_label": None}) == "C1"
+    assert design_name({"valid": False, "base_label": "C3"}) == "built on C3", "a rejected proposal has no label"
+    assert design_name({"delta": {}}) == "", "runs saved before designs had labels"

@@ -43,8 +43,8 @@ def _baseline(record):
 
 def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     """The AgentRunState of a stored run: its plan, every saved round, the
-    tried list (the model's memory), the best design and the progress
-    verdict. The budget is not restored - what each segment spent is in the
+    tried list (the model's memory, design labels included), the best design
+    and the progress verdict. The budget is not restored - what each segment spent is in the
     row's `budget`; a continuation starts a new one. Raises RestoreError
     when the run can't be rebuilt (no plan, baseline gone)."""
     from engine.models.coilset import CoilSet
@@ -72,6 +72,7 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     table = search_field_table(spec.settings)  # the run's own copy of the Search fields table
     allowed = allowed_fields(baseline, spec.variable_spec, table)
     candidate_fields = {f.name for f in dataclasses.fields(CandidateResult)}
+    labelled = 0  # simulated designs restored so far
 
     for message in sorted(list_messages(ai_run_id, phase="optimize"), key=lambda m: m["round_num"]):
         payload = message["payload"] or {}
@@ -91,15 +92,20 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
                 if not never_evaluated:
                     state.tried.append(Tried(round_state.round_num, candidate.delta, None,
                                              candidate.rejection or {"valid": False, "error": candidate.error or ""},
-                                             round_state.segment))
+                                             round_state.segment, base_label=candidate.base_label, step=candidate.step))
                 continue
             coilset = CoilSet(**candidate.candidate_coilset)
             scored = score(coilset, wait_for_jobs(evaluate_async(coilset, spec.distances, job_runner)),
                            baseline, state.baseline_metrics, spec)
             scored.changed_fields = audit_changed_fields(baseline, coilset, allowed)["changed_fields"]
             candidate.tool_result = tool_result(scored, spec)
+            # A run saved before designs had labels gets them here, in stored order -
+            # the same numbers the search itself would have given.
+            labelled += 1
+            candidate.label = candidate.label or f"C{labelled}"
             state.tried.append(Tried(round_state.round_num, candidate.delta, scored, candidate.tool_result,
-                                     round_state.segment))
+                                     round_state.segment, label=candidate.label, base_label=candidate.base_label,
+                                     step=candidate.step))
         state.rounds.append(round_state)
 
     # The fragility checks already made: a design is never checked twice, and

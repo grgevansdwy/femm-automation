@@ -1,6 +1,6 @@
 ---
 owns: backend/agent/**
-last-verified: 2026-10-07
+last-verified: 2026-10-08
 ---
 
 # Agent: the AI search agent
@@ -212,7 +212,11 @@ loop:
   3. PREPARE each tool call (instant, no FEMM): reject a call that isn't `propose_coilset`,
      whose arguments aren't a JSON object, or that changes nothing from the baseline; fix
      argument types (coerce_delta); reject anything outside the allowed field set; build
-     "baseline + this delta". A malformed call is only ever rejected on its own (its reason
+     "baseline + pins + the base design's changes + this call's values" (`base` is the
+     label of an earlier simulated design, omitted = the baseline; an unknown label, or a
+     step that leaves its base unchanged, is rejected). The allowed-field audit always
+     compares the built design with the ORIGINAL baseline, so nothing enters through a
+     base. A malformed call is only ever rejected on its own (its reason
      goes back to the model) - it never raises, so it can't cost the round's other
      candidates or the run. (An empty delta is allowed when the user pinned values: the
      pinned start point is then a different design from the baseline.)
@@ -222,7 +226,8 @@ loop:
      round is solved only once
   5. COLLECT + score each candidate in its own try/except -- one bad candidate never
      costs the others their results
-  6. feed every result back to the model as that call's tool result
+  6. give each simulated design the next label (C1, C2, ... - run-wide, rejected
+     proposals get none) and feed every result back as that call's tool result
   7. judge progress (code, below) and apply the stop rules
 ```
 
@@ -325,16 +330,18 @@ failed later — is sent to the model in one fixed format,
 `{"valid": false, "error": <code>, "field", "allowed", "detail"}`
 (`schema.Rejection`). The codes are in `schema.REJECTION_DETAIL`: `over_candidate_limit`,
 `unknown_tool`, `bad_arguments`, `unknown_field`, `not_enabled`, `wrong_type`,
-`out_of_range`, `not_allowed_value`, `no_change`, `invalid_geometry`, `solver_failed`,
-`solver_timeout`; `simulation_limit`, `time_limit` and `search_stopped` for a proposal a
-limit turned away unseen (not remembered as tried); and `unknown_base`, defined but not
-raised yet. `detail` is a fixed sentence per code (for `invalid_geometry`, the validity
+`out_of_range`, `not_allowed_value`, `unknown_base`, `no_change`, `invalid_geometry`, `solver_failed`, `solver_timeout`; and
+`simulation_limit`, `time_limit` and `search_stopped` for a proposal a limit turned away
+unseen (not remembered as tried). `detail` is a fixed sentence per code (for `invalid_geometry`, the validity
 check's own sentence naming the coil); the exception's text and any path go to the run
 log only. The already-tried list shows a rejection as its code, field and allowed
 values. A required `rationale` argument (1–2 sentences: what the last result
 showed and why this change should help) is the only reasoning a human watching the search
 actually reads; it was made required after the model sometimes skipped it when it was
-optional.
+optional. The optional `base` argument is a plain string, not an enum: the schema is built
+once per run and labels are added every round, so `_prepare()` is what checks it. A stored
+candidate keeps `delta` (every value changed from the baseline), `step` (only what that
+call gave), `label` and `base_label`.
 
 **Run lifecycle.** `ai_runs.status` changes only through
 `agent/repositories/ai_run_repository.py::transition()`, which rejects any move not in
@@ -366,7 +373,9 @@ Each round's payload also carries its segment and code's verdict after it. The b
 is copied into the run at Start Search (`baseline_coilset_json`), since a config can be
 edited later. `femm_agent/services/restore.py::restore_run()` rebuilds a stored run's
 live state (rounds, memory, best design, verdict) by re-requesting each candidate's
-solves — cache hits — and re-scoring them.
+solves — cache hits — and re-scoring them. Design labels come back with it, so a
+continued search can build on any earlier design; a run stored before labels existed is
+labelled in stored order.
 
 **Schema version.** `PRAGMA user_version` is 1. An older database is migrated the first
 time it is opened (`_ensure_schema()`; the app also calls `migrate_if_needed()` at
@@ -423,9 +432,21 @@ own accumulated chain-of-thought, ~63 KB of full results) and the request timed 
    line each.
 3. Every other candidate already tried, on a shorter line listing only what it missed —
    so the model doesn't propose it again.
-4. The latest round, raw — its tool calls and every full result — but **no chain of
+4. The lever notebook (`femm_agent/services/notebook.py`), written by code from the stored
+   results: a `single` line where a design differs in one value from its starting design
+   (or, failing that, from the earliest tried design it is one value away from), a
+   `combined` line for a step of 2–3 values from its starting design, nothing for larger
+   steps. Each line names both designs and the move in every objective's worst-distance
+   result, in points. Newest `NOTEBOOK_MAX_LINES` (40) only; identical steps merge.
+5. Only when the search is not improving: the free fields with no notebook line. It never
+   comments on how many values a proposal changed. "Not improving" is code's progress
+   verdict (`progress.py`, §5) being `stalled` or `plateau`. The one-off stalled notice
+   (§5) keeps its own list: the fields no proposal has changed at all.
+6. The latest round, raw — its tool calls and every full result — but **no chain of
    thought** (the model's own reasoning was ~28% of that 129 KB and isn't something a
    later round can act on directly).
+
+Lines 2–4 name each simulated design by its label, e.g. `C7 (round 3, from C3)`.
 
 So the model learns from *outcomes*, not from its own past reasoning about them, and the
 prompt stays roughly flat in size as a search goes on (only the short "already tried"
@@ -455,8 +476,9 @@ proposed in the same round can't learn from each other (design #2 is chosen befo
 #1's result exists), so the prompt asks each batch to be deliberately different, not near
 copies:
 
-- **Probe** — from the best candidate so far, change *one* lever per candidate, to learn
-  which lever moves which objective (a mini sensitivity study).
+- **Probe** — set `base` to the best design's label and change *one* lever per candidate,
+  to learn which lever moves which objective (a mini sensitivity study; each such step
+  becomes a `single` line in the notebook, §6).
 - **Bracket** — try the same lever in both directions.
 - **Exploit** — once a lever clearly helps, try 2–3 step sizes of it.
 
@@ -648,6 +670,7 @@ relying on any of these:
 | `agent/cleanup_runs.py` | One-time, human-gated cleanup of rows from the old run lifecycle (§5) |
 | `agent/femm_agent/services/optimize.py` | The search loop body (§5) |
 | `agent/femm_agent/services/scorer.py` | Pass/fail + ranking (§5) |
+| `agent/femm_agent/services/notebook.py` | The lever notebook and the untried-fields list (§6) |
 | `agent/femm_agent/services/prompts.py` | Fills the search system prompt each run |
 | `agent/femm_agent/services/outcome.py` | End-of-run report (§8) |
 | `agent/femm_agent/services/followup.py` | Read-only Q&A about a running/finished search (§9) |

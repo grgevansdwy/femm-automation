@@ -469,6 +469,27 @@ def test_restore_rebuilds_rounds_memory_and_best_design_without_a_fresh_solve(mo
     assert restored.budget_history == row["budget"] and restored.rounds_persisted == len(restored.rounds)
     assert restored.spec.objectives == state.spec.objectives and restored.spec.settings == state.spec.settings
     assert optimize.search_memory(restored.tried, None, 10) == optimize.search_memory(state.tried, None, 10)
+    assert [(t.label, t.base_label, t.step) for t in restored.tried] == [(t.label, t.base_label, t.step) for t in state.tried]
+    assert [t.label for t in restored.tried] == ["C1", None, "C2", "C3"], "design labels survive save and restore"
+    assert [c.label for r in restored.rounds for c in r.candidates] == ["C1", None, "C2", "C3"]
+
+
+def test_restore_labels_a_run_stored_before_designs_had_labels(monkeypatch):
+    from agent.repositories import ai_run_repository
+    jobs = _Jobs()
+    state, _, _ = _search(monkeypatch, [_propose(71.0), _propose("not a number"), _propose(60.0)],
+                          _spec(max_tool_calls=3), jobs=jobs)
+    stored = list_messages(state.id, phase="optimize")
+    for message in stored:
+        for candidate in message["payload"]["candidates"]:
+            for key in ("label", "base_label", "step"):
+                del candidate[key]
+    monkeypatch.setattr(ai_run_repository, "list_messages", lambda *args, **kwargs: stored)
+
+    restored = restore_run(state.id, jobs)
+
+    assert [t.label for t in restored.tried] == ["C1", None, "C2"], "labelled in stored order"
+    assert [c.label for r in restored.rounds for c in r.candidates] == ["C1", None, "C2"]
 
 
 def test_restore_says_why_a_run_cannot_be_rebuilt():
