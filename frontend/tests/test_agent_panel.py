@@ -476,3 +476,95 @@ def test_a_failed_baseline_does_not_block_once_the_search_has_started():
     state.baseline_runs[5.0] = _FakeJob("failed", error="late failure")
     assert state.baseline_error is not None
     assert not state.planning_blocked, "follow-up questions stay available during and after a search"
+
+
+# ---- the Search fields table: a proposal is applied only by the user's click ---------------------
+
+def _planning_state(monkeypatch):
+    """A state mid-interview on a solvable baseline, with the LLM turn replaced
+    by a recorder - Apply must send exactly one fixed message, nothing else."""
+    state = AgentPanelState(_FakeSolver(fail=False))
+    state.select_config("base_coil")
+    sent = []
+    monkeypatch.setattr(state.interview_runner, "send", lambda interview_state, text: sent.append(text))
+    return state, sent
+
+
+def test_a_proposed_search_fields_change_does_nothing_until_apply(monkeypatch):
+    from agent.repositories import agent_settings_repository
+    from frontend.screen_agent.agent_panel import FIELD_CHANGE_APPLIED_MESSAGE
+
+    state, sent = _planning_state(monkeypatch)
+    assert "tank_mu" not in state.field_limits() and state.field_limits()["num_tank_layers"] == "1 to 8"
+    state.interview_state.pending_field_change = {
+        "changes": [{"field": "tank_mu", "enabled": True, "max": 2000}], "reason": "you asked to tune ferrite"}
+
+    for _ in range(3):
+        state.poll()
+    assert agent_settings_repository.load_overrides() == {}, "showing a proposal writes nothing"
+    assert "tank_mu" not in state.field_limits()
+
+    state.apply_field_change()
+    assert agent_settings_repository.load_overrides() == {
+        "search_fields": {"tank_mu": {"enabled": True, "min": None, "max": 2000}}}
+    assert state.pending_field_change is None
+    assert state.field_limits()["tank_mu"] == "0 to 2000", "this conversation now plans with the new table"
+    assert sent == [FIELD_CHANGE_APPLIED_MESSAGE], "the model is told with one fixed, code-written message"
+
+    state.apply_field_change()  # nothing pending any more
+    assert sent == [FIELD_CHANGE_APPLIED_MESSAGE]
+
+
+def test_dismissing_a_proposal_changes_nothing(monkeypatch):
+    from agent.repositories import agent_settings_repository
+
+    state, sent = _planning_state(monkeypatch)
+    state.interview_state.pending_field_change = {"changes": [{"field": "tank_mu", "enabled": True}], "reason": ""}
+    state.dismiss_field_change()
+    assert state.pending_field_change is None and sent == []
+    assert agent_settings_repository.load_overrides() == {}
+
+
+def test_a_stale_or_broken_proposal_cannot_be_applied(monkeypatch):
+    from agent.repositories import agent_settings_repository
+
+    state, sent = _planning_state(monkeypatch)
+    state.interview_state.pending_field_change = {"changes": [{"field": "no_such_field", "enabled": True}], "reason": ""}
+    state.apply_field_change()
+    assert "Couldn't apply" in state.error and sent == []
+    assert agent_settings_repository.load_overrides() == {}
+
+
+def test_start_search_copies_the_saved_table_into_the_plan_and_blocks_a_plan_it_breaks():
+    """The table is copied into the run when it starts. If it was edited in
+    Settings after the plan was proposed and the plan no longer fits (here the
+    baseline is now outside a limit), Start Search does not start."""
+    from agent.repositories.ai_run_repository import get_ai_run
+    from agent.settings.settings import AgentSettings, save_settings
+
+    import dataclasses
+    from agent.repositories.ai_run_repository import create_ai_run, finalize_spec
+
+    state = _finalized_state(_FakeSolver(fail=False))
+    # The chat's row, as the interview leaves it once a plan is proposed.
+    state.interview_runner.ai_run_id = create_ai_run("base_coil")["id"]
+    finalize_spec(state.interview_runner.ai_run_id, dataclasses.asdict(state.interview_state.spec))
+    state.poll()
+    baseline_r = state.baseline_coilset.tank_center_r
+    save_settings(AgentSettings(search_fields={"tank_center_r": {"enabled": True, "min": None, "max": baseline_r - 1}}))
+
+    state.confirm_plan()
+    assert not state.plan_confirmed
+    assert len(state.plan_problems) == 1 and "tank_center_r" in state.plan_problems[0]
+    for _ in range(3):
+        state.poll()
+    assert state.run_state is None
+
+    save_settings(AgentSettings(search_fields={"tank_center_r": {"enabled": True, "min": None, "max": baseline_r + 50}}))
+    assert state.recheck_plan() == []
+    state.confirm_plan()
+    assert state.plan_confirmed
+    wanted = {"tank_center_r": {"enabled": True, "min": None, "max": baseline_r + 50}}
+    assert state.interview_state.spec.settings.search_fields == wanted
+    stored = get_ai_run(state.interview_runner.ai_run_id)["spec"]["settings"]["search_fields"]
+    assert stored == wanted, "the stored plan records the table the run uses"

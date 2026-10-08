@@ -122,6 +122,16 @@ def evaluate_async(coilset, distances, job_runner, config_id=None, config_name=N
     return jobs
 
 
+class SolveFailed(RuntimeError):
+    """A solve job ended failed. `timed_out` tells the solver's time limit
+    (engine.services.xfemm_backend.SolverTimeout) apart from any other failure -
+    a job carries only repr(exc), so it is read from the name that starts it."""
+
+    @property
+    def timed_out(self) -> bool:
+        return str(self).startswith("SolverTimeout")
+
+
 def wait_for_jobs(jobs: dict, poll_interval=0.05, on_wait=None) -> dict:
     """Blocks the CALLING thread until every job in `jobs` is done or
     failed, returning distance -> result dict. Call this from the agent's
@@ -141,7 +151,7 @@ def wait_for_jobs(jobs: dict, poll_interval=0.05, on_wait=None) -> dict:
                 on_wait()
             time.sleep(poll_interval)
         if job.status == "failed":
-            raise RuntimeError(job.error or f"solve failed at distance {d}")
+            raise SolveFailed(job.error or f"solve failed at distance {d}")
         results[d] = job.result
     return results
 

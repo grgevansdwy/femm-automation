@@ -211,6 +211,28 @@ def extract_result(results, coilset, distance=DEFAULT_RC_TEST_DISTANCE):
     )
 
 
+def validate_coilset(coilset):
+    """Whether `coilset`'s three coils can physically exist - instant, no FEMM.
+    Returns [(coil, reason)] for each of "loop" / "tank" / "rc" that fails
+    (femm_service.check_valid_coil's own reason text), empty when valid.
+    simulate() runs this first; the agent runs the same check before queueing
+    a solve, so an invalid candidate never reaches the solver."""
+    coils = (
+        ("loop", coilset.loop_r, coilset.loop_trace_width, coilset.num_loop_turns,
+         coilset.loop_turn_spacing, coilset.loop_trace_spacing, coilset.num_parallel_loop_traces),
+        ("tank", coilset.tank_center_r, coilset.tank_trace_width, coilset.num_tank_turns,
+         coilset.tank_turn_spacing, coilset.tank_trace_spacing, coilset.num_parallel_tank_traces),
+        ("rc", coilset.rc_radius, coilset.rc_trace_width, coilset.num_rc_turns,
+         coilset.rc_turn_spacing, coilset.rc_trace_spacing, coilset.num_parallel_rc_traces),
+    )
+    problems = []
+    for coil, *args in coils:
+        reason, valid = nff.check_valid_coil(*args)
+        if not valid:
+            problems.append((coil, reason))
+    return problems
+
+
 def simulate(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
     """Draws `coilset` in FEMM at RC separation `distance` (mm) - ferrite,
     shields and backplane all present, RC drawn directly at that distance -
@@ -218,15 +240,9 @@ def simulate(coilset, distance=DEFAULT_RC_TEST_DISTANCE):
     xfemm's femmcli in its own temp directory (engine/services/xfemm_backend.py) -
     safe to call concurrently, unlike the previous single-Wine-process backend.
     """
-    failure_reason, coilset_valid = nff.check_valid_coilset(
-        coilset.loop_r, coilset.num_loop_turns, coilset.num_parallel_loop_traces,
-        coilset.loop_trace_spacing, coilset.loop_turn_spacing, coilset.loop_trace_width,
-        coilset.tank_center_r, coilset.num_tank_turns, coilset.num_parallel_tank_traces,
-        coilset.tank_trace_spacing, coilset.tank_turn_spacing, coilset.tank_trace_width,
-        coilset.rc_radius, coilset.num_rc_turns, coilset.num_parallel_rc_traces,
-        coilset.rc_trace_spacing, coilset.rc_turn_spacing, coilset.rc_trace_width)
-    if not coilset_valid:
-        raise Exception(f"{failure_reason}")
+    problems = validate_coilset(coilset)
+    if problems:
+        raise Exception("".join(reason for _, reason in problems))
 
     script = build_script(coilset, distance)
     results = xfemm_backend.run_femmcli(script.render())

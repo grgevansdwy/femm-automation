@@ -210,20 +210,21 @@ def test_model_stopped_two_text_only_replies_in_a_row(monkeypatch):
 
 def test_simulations_proposals_launch_in_order_while_the_count_allows(monkeypatch):
     jobs = _Jobs()
-    # Two distances: every design costs 2 simulations. Limit 5: the third design of round 2 does not fit.
-    spec = _spec(cut_pct=50.0, distances=(5.0, 10.0), per_round=3, max_simulations=5)
+    # Two distances: every design costs 2 simulations. Limit 7, of which 3 are held back for a
+    # fragility check (services/fragility.py), leaves the search 4: the third design of round 2 does not fit.
+    spec = _spec(cut_pct=50.0, distances=(5.0, 10.0), per_round=3, max_simulations=7)
     state, row, requests = _search(monkeypatch, [_propose(71.0), _propose(71.0, 70.0, 69.0, 68.0)], spec, jobs=jobs)
 
     assert _ending(state, row) == ("budget_exhausted", "simulations", 2) and len(requests) == 2
     assert [s[0] for s in jobs.candidate_submits()] == [71.0, 71.0, 70.0, 70.0], "69 and 68 were never queued"
     round_2 = state.rounds[1].candidates
     assert [c.valid for c in round_2] == [True, True, False, False]
-    assert round_2[2].error.startswith("not simulated: the search's simulation limit was reached")
-    assert "over the limit of 3 candidates" in round_2[3].error
+    assert round_2[2].error_code == "simulation_limit" and round_2[2].error.startswith("Not simulated")
+    assert round_2[3].error_code == "over_candidate_limit"
     assert (state.budget.simulations_used, state.budget.cache_hits) == (4, 2), \
         "71 again in round 2 was a cache hit: free. The baseline's two solves are not counted either."
     assert len(jobs.submits) == 6
-    assert "its limit of 5 simulations" in state.outcome_report
+    assert "its limit of 7 simulations" in state.outcome_report
     assert [t.delta["tank_center_r"] for t in state.tried] == [71.0, 71.0, 70.0], "a proposal turned away is not remembered as tried"
 
 
@@ -255,8 +256,7 @@ def test_time_no_solve_is_queued_once_the_limit_has_passed(monkeypatch):
     assert _ending(state, row) == ("budget_exhausted", "time", 2)
     assert all(queued_at < 5400.0 for _, _, queued_at in jobs.submits)
     assert [s[0] for s in jobs.candidate_submits()] == [71.0]
-    assert [c.error for c in state.rounds[1].candidates] == \
-        ["not simulated: the search's time limit was reached - this proposal was not tried"] * 2
+    assert [c.error_code for c in state.rounds[1].candidates] == ["time_limit"] * 2
     assert state.budget.simulations_used == 1
 
 
@@ -312,7 +312,7 @@ def test_time_solves_still_queued_when_the_limit_passes_are_dropped_not_started(
     assert len(jobs.cancelled) == 2, "the two solves that had not started were dropped"
     candidates = state.rounds[0].candidates
     assert [c.valid for c in candidates] == [True, False, False], "the one already running was waited out and kept"
-    assert all(c.error.startswith("not simulated: the search's time limit") for c in candidates[1:])
+    assert all(c.error_code == "time_limit" for c in candidates[1:])
     assert state.budget.simulations_used == 1, "a dropped solve never ran, so it is not charged"
 
 

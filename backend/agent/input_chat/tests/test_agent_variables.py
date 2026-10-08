@@ -1,146 +1,157 @@
 # =============================================================================
 # test_agent_variables.py
 #
-# Checks agent/input_chat/models/variables.py's free_fields_for(): which CoilSet fields the
-# LLM may propose changing, given a baseline and an interview's constraints.
-# Needs no FEMM, no LLM:
-#     python3 -m agent.input_chat.tests.test_agent_variables  (run from backend/)
+# Checks agent/input_chat/models/variables.py: the Search fields table (which
+# CoilSet fields the LLM may propose changing, and each one's limits), and
+# what an interview's constraints take away from it. Needs no FEMM, no LLM.
 #
 # Builds its own baseline CoilSets via dataclasses.replace() off the
-# 'base_coil' fixture (backend/conftest.py's autouse isolate_db seeds it) -
-# same pattern as test_coilset_repository.py - rather than depending on
-# Gen2_coil/Gen3 (real, but not present in the isolated test DB).
+# 'base_coil' fixture (backend/conftest.py's autouse isolate_db seeds it).
 # =============================================================================
 import dataclasses
 
-from agent.input_chat.models.variables import CONSENT_GROUPS, FREE_VARIABLES, VariableSpec, free_fields_for, is_group_present
-from engine.repositories.coilset_repository import get_coilset
+import pytest
 
-_ALL_FEATURES_OFF = dict(
-    tank_ferrite_present=0, rc_ferrite_present=0,
-    backplane=0, rc_backplane=0, tc_shield=0, rc_shield=0,
+from agent.input_chat.models import variables
+from agent.input_chat.models.variables import (
+    DEFAULT_SEARCH_FIELDS, FIELD_GROUPS, FREE_VARIABLES, FieldRule, VariableSpec, allowed_fields,
+    apply_field_changes, check_field_changes, coerce_fixed_values, free_fields_for, legacy_allowed_fields,
+    limit_problems, search_field_overrides, search_field_table,
 )
+from agent.settings.settings import AgentSettings
+from engine.models.coilset import CoilSet
+from engine.repositories.coilset_repository import get_coilset
 
 
 def _baseline(**overrides):
-    template = get_coilset('base_coil')
-    return dataclasses.replace(template, **{**_ALL_FEATURES_OFF, **overrides})
+    return dataclasses.replace(get_coilset('base_coil'), **overrides)
 
 
-def test_everything_off_yields_only_free_variables():
-    """Matches Gen2_coil's real profile: no ferrite, no shield, no
-    backplane - none of those 22 fields should be offered, but
-    rc_ferrite_y_offset (read unconditionally by engine/core.py) still is."""
+def _table(**rows):
+    return search_field_table(AgentSettings(search_fields=rows))
+
+
+def test_shipped_defaults_open_the_winding_geometry_and_nothing_else():
+    enabled = {name for name, rule in DEFAULT_SEARCH_FIELDS.items() if rule.enabled}
+    assert enabled == set(FREE_VARIABLES)
+    assert "rc_ferrite_y_offset" not in enabled, "it sits in the Ferrite group, which ships disabled"
+    closed = {f for info in FIELD_GROUPS.values() for f in [info["flag"], *info["fields"]] if f}
+    assert not closed & enabled, "ferrite, shields, backplanes, PCB thickness and loss angles ship disabled"
+    numeric = {f.name for f in dataclasses.fields(CoilSet) if f.type in (int, float)}
+    assert set(DEFAULT_SEARCH_FIELDS) == numeric, "one row per numeric CoilSet field"
+
+
+def test_what_the_baseline_has_fitted_opens_nothing():
+    baseline = _baseline(tank_ferrite_present=1, rc_shield=1, backplane=1)
+    assert set(free_fields_for(baseline)) == set(FREE_VARIABLES)
+
+
+def test_layers_ship_with_a_maximum_of_8_which_the_user_can_clear():
     baseline = _baseline()
-    fields = free_fields_for(baseline)
-    assert set(fields) == set(FREE_VARIABLES)
-    assert "rc_ferrite_y_offset" in fields
-    assert "tank_ferrite_present" not in fields
-    assert "tank_mu" not in fields
-    assert "tc_shield_radius" not in fields
-    assert "backplane_y_distance" not in fields
-    print("  ok  an everything-off baseline offers only FREE_VARIABLES (+ rc_ferrite_y_offset)")
+    for name in ("num_loop_layers", "num_tank_layers", "num_rc_layers"):
+        assert free_fields_for(baseline)[name]["maximum"] == 8
+    cleared = _table(num_tank_layers={"enabled": True, "min": None, "max": None})
+    assert "maximum" not in free_fields_for(baseline, None, cleared)["num_tank_layers"]
+    assert free_fields_for(baseline, None, cleared)["num_loop_layers"]["maximum"] == 8, "only the cleared row changes"
 
 
-def test_a_group_already_present_on_the_baseline_still_needs_explicit_consent():
-    """The rule is strict and uniform: presence on the baseline never grants
-    freedom by itself - only spec.enabled_groups does. A baseline with
-    ferrite/shield already fitted (Gen3/base_coil's real profile) still
-    offers NONE of those fields until the user explicitly consents."""
-    baseline = _baseline(tank_ferrite_present=1, rc_ferrite_present=1, tc_shield=1, rc_shield=1)
-    fields = free_fields_for(baseline)  # no VariableSpec - nothing consented
-    assert set(fields) == set(FREE_VARIABLES), "presence alone must not free anything"
-    for name in ["tank_ferrite_present", "tank_ferrite_y_offset", "rc_ferrite_present",
-                 "tc_shield", "tc_shield_radius", "rc_shield", "rc_shield_radius"]:
-        assert name not in fields, f"{name} must stay fixed - active on the baseline is not consent"
-
-    # Consenting to a group frees it, whether or not the baseline already has it.
-    fields = free_fields_for(baseline, VariableSpec(enabled_groups={"tank_ferrite", "rc_shield"}))
-    for name in ["tank_ferrite_present", "tank_ferrite_y_offset", "tank_ferrite_thickness",
-                 "tank_mu", "tank_ferrite_outer_r", "tc_loss_angle"]:
-        assert name in fields, f"{name} should be free - the user consented to tank_ferrite"
-    for name in ["rc_shield", "rc_shield_y_distance", "rc_shield_radius", "rc_shield_thickness"]:
-        assert name in fields, f"{name} should be free - the user consented to rc_shield"
-    # rc_ferrite and tc_shield are still present but NOT consented to - still fixed.
-    assert "rc_ferrite_present" not in fields
-    assert "tc_shield" not in fields
-    print("  ok  a group being present on the baseline never substitutes for explicit consent")
-
-
-def test_is_group_present_is_purely_informational():
-    """is_group_present() reports physical presence only - it plays no part
-    in free_fields_for()'s gating (checked above); it's read by
-    interview_system_prompt() to describe the baseline."""
-    baseline = _baseline(tank_ferrite_present=1)
-    assert is_group_present(baseline, "tank_ferrite") is True
-    assert is_group_present(baseline, "rc_ferrite") is False
-    # A flagless group (pcb_thickness) always exists - no absent state.
-    assert is_group_present(baseline, "pcb_thickness") is True
-
-
-def test_explicit_consent_adds_exactly_that_group():
-    baseline = _baseline()  # everything off
-    spec = VariableSpec(enabled_groups={"tank_ferrite"})
-    fields = free_fields_for(baseline, spec)
-
-    expected_new = {"tank_ferrite_present", "tank_ferrite_y_offset", "tank_ferrite_thickness",
-                     "tank_mu", "tank_ferrite_outer_r", "tc_loss_angle"}
-    assert expected_new <= set(fields)
-    assert set(fields) == set(FREE_VARIABLES) | expected_new
-    print("  ok  explicitly consenting to one group adds exactly its fields, nothing else")
-
-
-def test_pcb_thickness_is_a_consent_group_like_any_other():
-    """PCB thickness used to be a separate include_pcb_thickness bool
-    (CONVENTIONAL_OPT_IN_FIELDS) - now it's CONSENT_GROUPS["pcb_thickness"],
-    gated the exact same way as ferrite/shield/backplane."""
+def test_a_disabled_field_is_not_offered_and_an_enabled_one_carries_its_limits():
     baseline = _baseline()
-    pcb_fields = {"tank_PCB_thickness", "loop_PCB_thickness", "rc_PCB_thickness"}
-    assert set(CONSENT_GROUPS["pcb_thickness"]["fields"]) == pcb_fields
-    assert CONSENT_GROUPS["pcb_thickness"]["flag"] is None, "no on/off toggle - the fields always exist"
-
-    default_fields = free_fields_for(baseline)
-    assert not (pcb_fields & set(default_fields)), "PCB thickness should be fixed by default"
-
-    opted_in = free_fields_for(baseline, VariableSpec(enabled_groups={"pcb_thickness"}))
-    assert pcb_fields <= set(opted_in)
-    print("  ok  PCB thickness is fixed unless explicitly consented to, same as any other group")
+    table = _table(tank_trace_width={"enabled": False, "min": None, "max": None},
+                   tank_mu={"enabled": True, "min": 100, "max": 2000},
+                   tank_ferrite_present={"enabled": True, "min": None, "max": None})
+    free = free_fields_for(baseline, None, table)
+    assert "tank_trace_width" not in free
+    assert free["tank_mu"]["minimum"] == 100 and free["tank_mu"]["maximum"] == 2000
+    assert free["tank_ferrite_present"]["enum"] == [0, 1]
 
 
-def test_excluded_fields_are_removed_even_if_otherwise_free():
+def test_code_floors_hold_whatever_the_table_says():
     baseline = _baseline()
-    spec = VariableSpec(excluded_fields={"loop_r", "num_tank_turns"})
-    fields = free_fields_for(baseline, spec)
-    assert "loop_r" not in fields
-    assert "num_tank_turns" not in fields
-    assert "rc_radius" in fields, "unrelated winding fields should be unaffected"
-    print("  ok  explicitly excluded fields are removed from the free set")
+    table = _table(num_tank_turns={"enabled": True, "min": -5, "max": None},
+                   tank_center_r={"enabled": True, "min": -1, "max": None})
+    free = free_fields_for(baseline, None, table)
+    assert free["num_tank_turns"]["minimum"] == 1, "a count is at least 1"
+    assert free["tank_center_r"]["minimum"] == 0, "a dimension is at least 0"
 
 
-def test_flag_field_schema_is_a_0_1_enum():
+def test_thickness_limits_filter_the_allowed_copper_weights():
     baseline = _baseline()
-    fields = free_fields_for(baseline, VariableSpec(enabled_groups={"backplane"}))
-    assert fields["backplane"]["enum"] == [0, 1]
-    print("  ok  a group's presence flag is offered as a 0/1 enum, not a free integer")
+    free = free_fields_for(baseline, None, _table(rc_trace_thickness={"enabled": True, "min": 0.05, "max": None}))
+    assert free["rc_trace_thickness"]["enum"] == [0.07, 0.14]
+    none_left = _table(rc_trace_thickness={"enabled": True, "min": 1, "max": None})
+    assert "rc_trace_thickness" not in free_fields_for(baseline, None, none_left)
 
 
-def test_unknown_group_in_enabled_groups_is_silently_ignored():
-    """free_fields_for() only trusts real CONSENT_GROUPS keys - matches the
-    old FEATURE_FLAGS behavior (validation of the raw name, e.g. a typo'd
-    finalize_spec arg, is interview._build_spec()'s job, not this one's)."""
+def test_excluded_and_pinned_fields_drop_out_of_the_free_set():
     baseline = _baseline()
-    fields = free_fields_for(baseline, VariableSpec(enabled_groups={"not_a_real_group"}))
-    assert set(fields) == set(FREE_VARIABLES)
+    spec = VariableSpec(excluded_fields={"loop_r"}, fixed_values={"num_tank_turns": 3})
+    free = free_fields_for(baseline, spec)
+    assert "loop_r" not in free and "num_tank_turns" not in free
+    assert "num_tank_turns" in allowed_fields(baseline, spec) and "loop_r" not in allowed_fields(baseline, spec)
 
 
-if __name__ == '__main__':
-    print("checking agent/input_chat/models/variables.py's free_fields_for()")
-    test_everything_off_yields_only_free_variables()
-    test_a_group_already_present_on_the_baseline_still_needs_explicit_consent()
-    test_is_group_present_is_purely_informational()
-    test_explicit_consent_adds_exactly_that_group()
-    test_pcb_thickness_is_a_consent_group_like_any_other()
-    test_excluded_fields_are_removed_even_if_otherwise_free()
-    test_flag_field_schema_is_a_0_1_enum()
-    test_unknown_group_in_enabled_groups_is_silently_ignored()
-    print("all agent/input_chat/models/variables.py checks passed")
+def test_a_saved_row_for_an_unknown_field_or_a_broken_row_is_ignored():
+    table = _table(no_such_field={"enabled": True}, loop_r="yes", tank_center_r={"enabled": True, "min": 9, "max": 3})
+    assert table == DEFAULT_SEARCH_FIELDS
+    assert "no_such_field" not in table
+
+
+def test_only_rows_that_differ_from_the_defaults_are_stored():
+    table = apply_field_changes(dict(DEFAULT_SEARCH_FIELDS), [{"field": "tank_mu", "enabled": True, "max": 2000}])
+    assert search_field_overrides(table) == {"tank_mu": {"enabled": True, "min": None, "max": 2000}}
+    back = apply_field_changes(table, [{"field": "tank_mu", "enabled": False, "max": None}])
+    assert search_field_overrides(back) == {}
+
+
+def test_a_change_keeps_what_it_does_not_mention_and_null_clears_a_limit():
+    table = apply_field_changes(dict(DEFAULT_SEARCH_FIELDS), [{"field": "num_rc_layers", "min": 2}])
+    assert table["num_rc_layers"] == FieldRule(enabled=True, min=2, max=8)
+    assert apply_field_changes(table, [{"field": "num_rc_layers", "max": None}])["num_rc_layers"].max is None
+
+
+@pytest.mark.parametrize("changes", [
+    None, [], "tank_mu", [{"field": "not_a_field", "enabled": True}], [{"field": "config_name", "enabled": True}],
+    [{"field": "tank_mu"}], [{"field": "tank_mu", "enabled": "yes"}], [{"field": "tank_mu", "min": "low"}],
+    [{"field": "tank_mu", "min": 5, "max": 1}], [{"field": "tc_shield", "max": 3}], ["tank_mu"],
+])
+def test_a_malformed_change_is_refused(changes):
+    with pytest.raises(ValueError):
+        check_field_changes(changes)
+
+
+def test_a_change_whose_minimum_ends_up_above_the_existing_maximum_is_refused():
+    with pytest.raises(ValueError, match="above maximum"):
+        apply_field_changes(dict(DEFAULT_SEARCH_FIELDS), [{"field": "num_rc_layers", "min": 9}])
+
+
+def test_a_pin_must_be_inside_the_limits_but_need_not_be_enabled():
+    assert coerce_fixed_values({"tank_mu": "900"}) == {"tank_mu": 900.0}, "a closed field can still be pinned"
+    for bad in ({"num_tank_layers": 12}, {"num_tank_turns": 0}, {"loop_r": -1}, {"rc_trace_thickness": 0.1},
+                {"tc_shield": 2}, {"num_tank_turns": 2.5}):
+        with pytest.raises(ValueError):
+            coerce_fixed_values(bad)
+    with pytest.raises(ValueError, match="aren't numeric"):
+        coerce_fixed_values({"config_name": 3})
+
+
+def test_a_baseline_outside_a_table_limit_is_named_but_code_floors_do_not_apply_to_it():
+    assert limit_problems(_baseline()) == []
+    (problem,) = limit_problems(_baseline(num_tank_layers=12))
+    assert "num_tank_layers" in problem and "1 to 8" in problem
+    assert limit_problems(_baseline(num_tank_layers=12), VariableSpec(excluded_fields={"num_tank_layers"})) == [], \
+        "an excluded field is never proposed, so its limit does not block the search"
+    assert limit_problems(_baseline(num_tank_turns=0)) == [], "a tank-less baseline is below the count floor and still opens"
+
+
+def test_runs_stored_before_the_table_are_audited_by_the_old_rule():
+    old = VariableSpec(enabled_groups={"tank_ferrite"}, excluded_fields={"loop_r"}, fixed_values={"rc_mu": 5})
+    allowed = legacy_allowed_fields(old)
+    assert {"tank_mu", "tank_ferrite_present", "tc_loss_angle", "rc_ferrite_y_offset", "rc_mu"} <= allowed
+    assert "loop_r" not in allowed and "rc_shield" not in allowed
+    assert legacy_allowed_fields(VariableSpec(enabled_groups={"gone_group"})) >= set(FREE_VARIABLES)
+
+
+def test_schema_module_is_the_only_source_of_field_kinds():
+    assert variables.FLAG_FIELDS == {"tank_ferrite_present", "rc_ferrite_present", "backplane", "rc_backplane",
+                                     "tc_shield", "rc_shield"}

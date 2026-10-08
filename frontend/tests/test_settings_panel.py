@@ -106,3 +106,73 @@ def test_discard_and_reset_all():
     state.reset_all()
     assert state.dirty and state.draft == AgentSettings(), "reset is a draft change until saved"
     assert state.save() and agent_settings_repository.load_overrides() == {}
+
+
+# ---- the Search fields page ----------------------------------------------------------------------
+
+def test_search_fields_page_lists_every_numeric_field_once_in_the_forms_groups():
+    from agent.input_chat.models.variables import DEFAULT_SEARCH_FIELDS
+    from frontend.screen_settings import settings_panel
+
+    assert "Search fields" in settings_panel.SECTIONS
+    groups = settings_panel.search_field_groups()
+    listed = [name for _, names in groups for name in names]
+    assert sorted(listed) == sorted(DEFAULT_SEARCH_FIELDS) and len(listed) == len(set(listed))
+    assert [g for g, _ in groups] == ["Loop", "Tank", "RC", "Ferrite", "Shield & backplane", "Advanced"]
+
+
+def test_unticking_a_field_and_setting_limits_is_saved_as_only_those_rows():
+    state = SettingsPanelState()
+    assert state.search_rule("tank_trace_width").enabled and not state.search_rule("tank_mu").enabled
+    assert state.limit_text("num_tank_layers", "max") == "8" and state.limit_text("tank_center_r", "max") == ""
+
+    state.set_search_enabled("tank_trace_width", False)
+    state.set_limit_text("tank_center_r", "max", "80")
+    state.set_limit_text("tank_center_r", "min", " 20.5 ")
+    assert state.dirty and state.is_search_field_modified("tank_center_r") and not state.is_search_field_modified("loop_r")
+
+    assert state.save() is True
+    assert agent_settings_repository.load_overrides() == {"search_fields": {
+        "tank_trace_width": {"enabled": False, "min": None, "max": None},
+        "tank_center_r": {"enabled": True, "min": 20.5, "max": 80},
+    }}
+    assert not SettingsPanelState().search_rule("tank_trace_width").enabled, "a fresh panel loads what was saved"
+
+
+def test_clearing_the_layer_limit_and_resetting_it():
+    state = SettingsPanelState()
+    state.set_limit_text("num_rc_layers", "max", "")
+    assert state.search_rule("num_rc_layers").max is None and state.is_search_field_modified("num_rc_layers")
+    assert state.save() is True
+    assert load_settings().search_fields == {"num_rc_layers": {"enabled": True, "min": None, "max": None}}
+
+    state.reset_search_field("num_rc_layers")
+    assert state.search_rule("num_rc_layers").max == 8 and state.save() is True
+    assert agent_settings_repository.load_overrides() == {}, "a row back at its default is stored as nothing"
+
+
+def test_half_typed_or_inconsistent_limits_block_save():
+    state = SettingsPanelState()
+    state.set_limit_text("tank_center_r", "max", "8o")
+    assert state.limit_text("tank_center_r", "max") == "8o", "what was typed stays in the box"
+    assert state.save() is False and any("tank_center_r: maximum must be a number" in p for p in state.problems())
+    assert state.search_rule("tank_center_r").max is None, "text that isn't a number is never stored as a limit"
+
+    state.set_limit_text("tank_center_r", "max", "50")
+    state.set_limit_text("tank_center_r", "min", "60")
+    assert state.save() is False and any("minimum 60 is above maximum 50" in p for p in state.problems())
+    state.reset_search_field("tank_center_r")
+    assert state.problems() == [] and not state.dirty
+
+    state.set_limit_text("loop_r", "min", "x")
+    state.discard()
+    assert state.problems() == [] and state.limit_text("loop_r", "min") == ""
+
+
+def test_reset_everything_puts_the_table_back():
+    state = SettingsPanelState()
+    state.set_search_enabled("tank_mu", True)
+    assert state.save() is True
+    state.reset_all()
+    assert not state.search_rule("tank_mu").enabled and state.save() is True
+    assert agent_settings_repository.load_overrides() == {}
