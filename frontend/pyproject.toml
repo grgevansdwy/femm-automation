@@ -4,6 +4,7 @@ version = "0.0.1"
 requires-python = ">=3.13"
 dependencies = [
     "imgui-bundle>=1.6",
+    "matplotlib>=3.11.1",  # the chat PDF report (backend/agent/services/chat_export.py)
     "numpy>=2.5.2",
 ]
 

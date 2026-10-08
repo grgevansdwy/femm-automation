@@ -1,6 +1,6 @@
 ---
 owns: backend/agent/**
-last-verified: 2026-10-07
+last-verified: 2026-10-08
 ---
 
 # Agent: the AI search agent
@@ -374,12 +374,42 @@ chat side (transcript, plan, settings) without touching the solver, and
 after the stored ones. `list_messages()` with no phase returns both phases in the order
 they were written; `list_chat_rows()` is the light per-run query the sidebar lists from.
 
-**Schema version.** `PRAGMA user_version` is 1. An older database is migrated the first
+**Schema version.** `PRAGMA user_version` is 2. An older database is migrated the first
 time it is opened (`_ensure_schema()`; the app also calls `migrate_if_needed()` at
-startup): the file is copied to `backend/data/backups/`, then `ai_runs` is rebuilt in one
-transaction with every row carried over unchanged. A failure rolls back and stops the app
+startup): the file is copied to `backend/data/backups/`, then, from version 0, `ai_runs` is
+rebuilt in one transaction with every row carried over unchanged; from version 1 the one
+new column (`imported_at`) is added. A failure rolls back and stops the app
 with a message naming the backup. `python -m agent.cleanup_runs` (dry run by default) is
 the one-time, human-gated cleanup of rows left by the old lifecycle.
+
+**A chat as a file.** `agent/services/chat_export.py` writes one stored chat as JSON
+(`{"format": "femm-agent-chat", "version": 1, "content_sha256", "run", "messages",
+"baseline_coilset"}`: the run row without its id, every message, and the baseline copy) and
+as a PDF report (plan, ending, best design against the baseline, one row per candidate;
+drawn with matplotlib from the stored values, nothing re-simulated). A running chat is not
+exported. A chat still being planned carries its config as it is at export time; a run
+that started before baselines were copied carries none. `import_chat()` stores a file as a
+**new** run (`insert_imported_run()`: fresh id, `imported_at` set, one transaction) after
+`validate()` has passed every check, in this order: `size`, `json`, `format`, `version`,
+`checksum`, `run`, `coilset`, `messages`, `payload`. The first failure rejects the whole
+file and names the check. Statuses, stop reasons, phases and roles must be in the
+repository's lists; every design must have exactly `CoilSet`'s fields with finite numbers;
+the keys this version reads from a round, a candidate or a result must hold the right kind
+of value (keys it does not know are kept as data). The checksum catches damage, not a
+deliberate edit. An import adds no config and no solve to the cache and touches no
+setting; text in the file is stored and shown, never acted on. The export refuses to write
+a file its own `validate()` would reject.
+
+**An imported chat on this machine.** Opening it simulates nothing; its stored results are
+shown as imported. `restore.stored_spec()` keeps its goal, distances, objectives, pins and
+exclusions but replaces its settings with the local ones in full (prompts, server, budgets,
+the Search fields table), so the follow-up chat and a continued search never use a prompt
+or a field list from a file. `restore_run()` re-simulates and re-scores every stored design
+before either; `AgentRunner.continue_run()` first runs `plan_problems()` against the local
+table and refuses a plan that does not fit. `stored_baseline()` uses only the baseline the
+file carried, never a local config with the same id. A chat imported before its search
+started can only be read (`AgentRunner.submit()` refuses it too): planning reads the
+baseline from the local config library.
 
 ### Scoring
 
@@ -661,7 +691,8 @@ relying on any of these:
 | `agent/services/run_log.py` | `RunLog` — the per-run JSON-lines log of every AI request and warning (§8) |
 | `agent/input_chat/services/runner.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |
 | `agent/femm_agent/services/runner.py` | `AgentRunner` — background-thread wrapper around the search loop, for the GUI; runs on its own thread, never the solve pool (Engine.md §6) |
-| `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table; `transition()`, the schema version and its migration (§5) |
+| `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table; `transition()`, the schema version and its migrations, `insert_imported_run()` (§5) |
+| `agent/services/chat_export.py` | A chat as a file: JSON export, the import checks, import as a new run, the PDF report (§5) |
 | `agent/*/tests/` | Each phase's own tests; `agent/tests/` is cross-phase (LLM client, run store, live reasoning) |
 
 **Import rule:** `agent/`'s core imports `engine/`, never `frontend/` (the sole

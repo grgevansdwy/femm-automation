@@ -218,6 +218,10 @@ class AgentRunState:
     spec: "AgentSpec"
     baseline_coilset: "CoilSet"
     status: AgentRunStatus = AgentRunStatus.RUNNING
+    # The chat came from an exported file (ai_runs.imported_at): its plan was
+    # made elsewhere, so it is checked against this machine's Search fields
+    # table before it may search here (AgentRunner.continue_run()).
+    imported: bool = False
     rounds: list[RoundState] = dataclasses.field(default_factory=list)
     best: "Scored | None" = None
     error: str | None = None

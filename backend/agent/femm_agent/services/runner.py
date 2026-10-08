@@ -111,10 +111,14 @@ class AgentRunner:
         every agent run gets persisted history either way."""
         from engine.repositories.coilset_repository import get_coilset  # deferred - resolves via agent/__init__.py's sys.path bootstrap
         baseline = get_coilset(spec.baseline_config_id)
-        from agent.repositories.ai_run_repository import create_ai_run, finalize_spec, transition
+        from agent.repositories.ai_run_repository import create_ai_run, finalize_spec, get_ai_run, transition
         if ai_run_id is None:
             ai_run_id = create_ai_run(spec.baseline_config_id)["id"]
             finalize_spec(ai_run_id, dataclasses.asdict(spec))
+        elif (get_ai_run(ai_run_id) or {}).get("imported_at"):
+            # Its baseline id names a config on another machine; the one read
+            # above is whatever this machine has under that id.
+            raise ValueError("a chat imported before its search started can only be read")
         # Start Search: the plan is confirmed. The baseline is copied into the
         # run, since its config can be edited or deleted later.
         transition(ai_run_id, "running", started_at=now().isoformat(), baseline_coilset=dataclasses.asdict(baseline))
@@ -157,6 +161,14 @@ class AgentRunner:
             thread.join(timeout=30)  # the finished segment's last save
             if thread.is_alive():
                 raise ValueError("this search is still finishing - try again in a moment")
+        if state.imported:
+            # Its plan was made on another machine: it runs under this one's
+            # settings (restore.stored_spec()), and only if it fits them.
+            from agent.input_chat.services.interview import plan_problems
+            problems = plan_problems(state.spec, state.baseline_coilset)
+            if problems:
+                raise ValueError("this imported plan can't search under this machine's Search fields: "
+                                 + "; ".join(problems))
         transition(run_id, "running")
         state.segment += 1
         state.segment_start_round = len(state.rounds)

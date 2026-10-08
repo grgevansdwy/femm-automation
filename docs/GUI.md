@@ -1,6 +1,6 @@
 ---
 owns: frontend/**
-last-verified: 2026-10-07
+last-verified: 2026-10-08
 ---
 
 # GUI: the desktop app
@@ -103,6 +103,13 @@ turns, search rounds, scoring) belong to `Agent.md`:
   search still running can't be deleted. Rows with neither a goal nor a message (blanks
   from before the run lifecycle) are not listed. The file also holds `draw_stored_run()`:
   a stored run's summary and rounds drawn from its database rows as plain dicts.
+  **Import...** opens a chat exported to a JSON file as a new chat (tagged "Imported" in its
+  row; its results are labelled as coming from the file). A row's right-click menu has
+  **Export JSON...** and **Export PDF report...** (off while that chat is searching). An
+  imported chat that had searched can be asked about and continued: its designs are
+  simulated here first and it runs under this machine's settings. One imported before its
+  search started, or without its baseline design, can only be read. A rejected file adds
+  nothing and the reason shows under the button.
 - **`agent_panel.py`** — owns `AgentPanelState` and one `ChatSession` per conversation
   (its baseline, interview state, run state, draft, search markers). `AgentPanelState.chat`
   is the one on screen; `state.interview_state`, `state.run_state` and the like forward to
@@ -244,7 +251,7 @@ Roughly in order of how much they'd bite:
 | `_sim_path.py` | Puts `backend/` on `sys.path` so `import engine`/`import agent` resolve |
 | `screen_agent/agent_panel.py` | AI Agent mode's chats (one `ChatSession` each) + state machine — **the frontend/↔agent/ boundary** |
 | `screen_agent/agent_candidate_card.py` | Shared round/summary card renderer |
-| `screen_agent/agent_sidebar.py` | Sidebar of saved chats (search, New, Delete); replays a stored run through the same renderer |
+| `screen_agent/agent_sidebar.py` | Sidebar of saved chats (search, New, Import, a row's right-click Export JSON / Export PDF / Delete); replays a stored run through the same renderer |
 | `screen_settings/settings_panel.py` | Settings screen — edit prompts/numbers (§5) |
 | `visualization/coil_diagram.py` | Geometry schematic — used everywhere, not agent-only |
 | `visualization/result_table.py` | The 12-value result table, shared by both modes |
@@ -254,6 +261,7 @@ Roughly in order of how much they'd bite:
 | `services/job_runner.py` | The FEMM-solve cache + thread pool — documented in `Engine.md` §6 |
 | `files_backup/config_io.py`, `run_io.py` | Export/import of one config or run |
 | `files_backup/backup_io.py` | Backup All / Restore All |
+| `files_backup/chat_io.py` | Export of one AI chat to JSON or PDF and import of a JSON, as files (`agent/services/chat_export.py` does the work): file name, write-then-move so a failed export leaves no half file, size check before reading, one-sentence errors. Called by the sidebar |
 | `tests/*.py` | 38 tests against real code paths (§6) |
 
 **Import rule:** `frontend/` only ever calls into `agent/input_chat/services/runner.py` and

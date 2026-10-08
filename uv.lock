@@ -167,6 +167,7 @@ version = "0.0.1"
 source = { editable = "frontend" }
 dependencies = [
     { name = "imgui-bundle" },
+    { name = "matplotlib" },
     { name = "numpy" },
 ]
 
@@ -178,6 +179,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "imgui-bundle", specifier = ">=1.6" },
+    { name = "matplotlib", specifier = ">=3.11.1" },
     { name = "numpy", specifier = ">=2.5.2" },
 ]
 

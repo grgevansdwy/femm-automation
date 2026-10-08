@@ -30,18 +30,37 @@ class RestoreError(Exception):
 
 def stored_baseline(record):
     """The baseline design a stored run compares against: the copy made at
-    Start Search, else its config as it is now. Raises RestoreError."""
+    Start Search, else its config as it is now. An imported chat only ever
+    has the copy its file carried - a local config that happens to share the
+    id is some other design. Raises RestoreError."""
     from engine.models.coilset import CoilSet
     from engine.repositories.coilset_repository import get_coilset
     stored = record.get("baseline_coilset")
     try:
         if stored:
             return CoilSet(**stored)
+        if record.get("imported_at"):
+            raise RestoreError("it was imported from a file that did not carry its baseline design")
         return get_coilset(record["baseline_config_id"])  # a run from before the baseline was copied into it
     except KeyError:
         raise RestoreError(f"its baseline design {record['baseline_config_id']!r} no longer exists") from None
     except TypeError as exc:
         raise RestoreError(f"its stored baseline no longer fits this version's design fields ({exc})") from None
+
+
+def stored_spec(record: dict):
+    """A stored run's plan. An imported chat keeps its goal, distances,
+    objectives, pins and exclusions, but runs under THIS machine's settings
+    in full - prompts, server, budgets and the Search fields table: what a
+    file carries is shown, and never decides what a search here may do."""
+    from agent.settings.settings import load_settings
+    spec = spec_from_dict(record["spec"])
+    if record.get("imported_at"):
+        local = load_settings()
+        spec = dataclasses.replace(
+            spec, settings=local, max_tool_calls=local.max_tool_calls,
+            candidates_per_round=local.candidates_per_round, keep_best_candidates=local.keep_best_candidates)
+    return spec
 
 
 def interview_transcript(messages: list[dict]) -> list[dict]:
@@ -60,7 +79,7 @@ def restore_interview(record: dict, messages: list[dict]) -> InterviewState:
     spec = None
     if record.get("spec"):
         try:
-            spec = spec_from_dict(record["spec"])
+            spec = stored_spec(record)
         except Exception as exc:
             raise RestoreError(f"its stored plan can't be read by this version ({exc})") from None
     return InterviewState(
@@ -84,13 +103,14 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     if not record.get("spec"):
         raise RestoreError("it has no search plan yet")
     try:
-        spec = spec_from_dict(record["spec"])
+        spec = stored_spec(record)
     except Exception as exc:
         raise RestoreError(f"its stored plan can't be read by this version ({exc})") from None
     baseline = stored_baseline(record)
 
     state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline,
-                          status=AgentRunStatus(record["status"]), stop_reason=record.get("stop_reason"))
+                          status=AgentRunStatus(record["status"]), stop_reason=record.get("stop_reason"),
+                          imported=bool(record.get("imported_at")))
     state.outcome_report = record.get("error")
     state.budget_history = list(record.get("budget") or [])
     if record.get("finished_at"):

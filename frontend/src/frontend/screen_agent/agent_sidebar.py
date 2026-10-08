@@ -3,7 +3,9 @@ ai_run_repository.py's ai_runs), whatever its status - one still being
 planned, a cancelled one and an interrupted search included - with a search
 box and New. Clicking a row opens that chat in the conversation view
 (agent_panel.AgentPanelState.open_chat()); Delete is the only way a chat
-leaves the list.
+leaves the list. Import brings in a chat exported to a file, as a new chat;
+a row's right-click menu exports that chat to JSON or PDF
+(files_backup/chat_io.py).
 
 Also draws a stored run's results for the right column (draw_stored_run()):
 for a finished run with a winner the same Search Summary the live panel
@@ -15,9 +17,11 @@ object.
 
 import dataclasses
 import time
+from pathlib import Path
 
-from imgui_bundle import imgui, imspinner
+from imgui_bundle import imgui, imspinner, portable_file_dialogs as pfd
 
+from ..files_backup import chat_io
 from . import agent_candidate_card
 
 WIDTH = 260.0            # the same width as the Manual Runs config list
@@ -77,6 +81,12 @@ class AgentSidebarState:
         self.pending_delete_id: str | None = None
         self._open_delete_popup: bool = False
         self._refreshed_at: float | None = None
+        # File dialogs in flight: a pfd.open_file() handle, and (pfd.save_file()
+        # handle, run id, "json" or "pdf") - None while none is open.
+        self._import_dialog = None
+        self._export_dialog: tuple | None = None
+        self.io_message: str = ""  # the last import/export, in one line
+        self.io_error: str = ""
         self.refresh()
 
     def refresh(self) -> None:
@@ -111,6 +121,46 @@ class AgentSidebarState:
         self.pending_delete_id = run_id
         self._open_delete_popup = True
 
+    def export(self, run_id: str, kind: str, path) -> None:
+        """Writes one chat to `path` as "json" (complete) or "pdf" (a report)."""
+        self.io_message = self.io_error = ""
+        try:
+            (chat_io.export_pdf if kind == "pdf" else chat_io.export_json)(run_id, path)
+        except chat_io.ChatIOError as exc:
+            self.io_error = str(exc)
+            return
+        self.io_message = f"Exported to {Path(path).name}"
+
+    def import_from(self, path, panel) -> None:
+        """Brings the chat file at `path` in as a new chat and opens it."""
+        self.io_message = self.io_error = ""
+        try:
+            new_id = chat_io.import_json(path)
+        except chat_io.ChatIOError as exc:
+            self.io_error = str(exc)
+            return
+        self.io_message = f"Imported {Path(path).name}"
+        self.refresh()
+        panel.open_chat(new_id)
+
+    def open_export_dialog(self, row: dict, kind: str) -> None:
+        filters = ["PDF files", "*.pdf"] if kind == "pdf" else ["JSON files", "*.json"]
+        dialog = pfd.save_file("Export chat", default_path=chat_io.default_name(row, kind), filters=filters)
+        self._export_dialog = (dialog, row["id"], kind)
+
+    def poll_dialogs(self, panel) -> None:
+        if self._export_dialog is not None and self._export_dialog[0].ready():
+            dialog, run_id, kind = self._export_dialog
+            path = dialog.result()  # save_file() -> a single path string, "" if cancelled
+            if path:
+                self.export(run_id, kind, path)
+            self._export_dialog = None
+        if self._import_dialog is not None and self._import_dialog.ready():
+            paths = self._import_dialog.result()  # open_file() -> a list of paths, [] if cancelled
+            if paths:
+                self.import_from(paths[0], panel)
+            self._import_dialog = None
+
 
 def width(state: AgentSidebarState) -> float:
     return COLLAPSED_WIDTH if state.collapsed else WIDTH
@@ -129,9 +179,14 @@ def _draw_row(state: AgentSidebarState, panel, row: dict, config_names: dict, ro
         panel.open_chat(row["id"])
     if imgui.is_item_hovered():
         imgui.set_tooltip(f"{chat_title(row)}\n{baseline} - {label}\n{_format_dt(row['created_at'])}\n"
-                          f"ID: {row['id']}\nRight-click to delete")
+                          f"ID: {row['id']}\nRight-click to export or delete")
     if imgui.begin_popup_context_item(f"chat_menu_{row['id']}"):
-        imgui.begin_disabled(row["status"] == "running")
+        imgui.begin_disabled(row["status"] == "running")  # a running search's rows are still changing
+        if imgui.menu_item_simple("Export JSON..."):
+            state.open_export_dialog(row, "json")
+        if imgui.menu_item_simple("Export PDF report..."):
+            state.open_export_dialog(row, "pdf")
+        imgui.separator()
         if imgui.menu_item_simple("Delete..."):
             state.request_delete(row["id"])
         imgui.end_disabled()
@@ -155,7 +210,7 @@ def _draw_row(state: AgentSidebarState, panel, row: dict, config_names: dict, ro
     if row["status"] == "running":
         imspinner.spinner_ang(f"##chat_spinner_{row['id']}", 5.0, 2.0)
         imgui.same_line()
-    imgui.text_colored(color, f"{label} - {baseline}")
+    imgui.text_colored(color, ("Imported - " if row.get("imported_at") else "") + f"{label} - {baseline}")
     imgui.pop_clip_rect()
 
     # A real item (not just a bare cursor move) is required here so the
@@ -195,6 +250,7 @@ def draw(state: AgentSidebarState, panel, size: imgui.ImVec2) -> None:
     """`panel` is agent_panel's AgentPanelState: the sidebar calls its
     new_chat() / open_chat() / delete_chat() and reads which chat is open."""
     state.refresh_if_stale()
+    state.poll_dialogs(panel)
     imgui.begin_child("agent_sidebar_pane", size, imgui.ChildFlags_.borders.value)
     if state.collapsed:
         if imgui.button(">##expand_sidebar"):
@@ -215,6 +271,16 @@ def draw(state: AgentSidebarState, panel, size: imgui.ImVec2) -> None:
         state.collapsed = True
     if imgui.is_item_hovered():
         imgui.set_tooltip("Hide past chats")
+    if imgui.button("Import...", imgui.ImVec2(imgui.get_content_region_avail().x, 0)):
+        state._import_dialog = pfd.open_file("Import chat", filters=["JSON files", "*.json"])
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Open a chat exported to a JSON file, as a new chat.\n"
+                          "To export one, right-click it in the list.")
+    for text, color in ((state.io_error, _REJECTED_COLOR), (state.io_message, _MUTED_COLOR)):
+        if text:
+            imgui.push_text_wrap_pos(0.0)
+            imgui.text_colored(color, text)
+            imgui.pop_text_wrap_pos()
     imgui.set_next_item_width(imgui.get_content_region_avail().x)
     changed, text = imgui.input_text_with_hint("##chat_search", "Search chats...", state.search_text)
     if changed:
@@ -328,6 +394,11 @@ def draw_stored_run(record: dict, messages: list[dict], summary_distance: float 
     imgui.text_disabled(_format_dt(record["created_at"]))
     label, color = status_label(record["status"])
     imgui.text_colored(color, f"Status: {label}" + (f" - ended by: {record['stop_reason']}" if record.get("stop_reason") else ""))
+    if record.get("imported_at"):
+        imgui.push_text_wrap_pos(0.0)
+        imgui.text_colored(_MUTED_COLOR, f"Imported {_format_dt(record['imported_at'])}. These results come from the "
+                                         "file and were not simulated on this machine.")
+        imgui.pop_text_wrap_pos()
 
     has_summary = has_stored_summary(record, messages)
     if has_summary:

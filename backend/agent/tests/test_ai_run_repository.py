@@ -174,7 +174,7 @@ def test_migration_keeps_every_row_makes_a_backup_and_opens_the_new_statuses(tmp
 
     ar.migrate_if_needed()
 
-    assert _raw(path, "PRAGMA user_version") == [(1,)]
+    assert _raw(path, "PRAGMA user_version") == [(ar.SCHEMA_VERSION,)]
     old_columns = "id, baseline_config_id, spec_json, status, created_at, started_at, finished_at, error, " \
                   "best_round, best_coilset_json, best_tool_result_json"
     assert _raw(path, f"SELECT {old_columns} FROM ai_runs ORDER BY id") == _V0_ROWS, "every value carried over unchanged"
@@ -191,7 +191,8 @@ def test_migration_keeps_every_row_makes_a_backup_and_opens_the_new_statuses(tmp
     assert ar.get_ai_run('c')['best_coilset'] == {'loop_r': 50}
     ar.migrate_if_needed()
     assert len(list((path.parent / "backups").glob("*.db"))) == 1, "an up-to-date database is not migrated again"
-    print("  ok  version 0 -> 1: rows unchanged, backup written, new statuses accepted")
+    assert "imported_at" in [c[1] for c in _raw(path, "PRAGMA table_info(ai_runs)")]
+    print("  ok  version 0 -> current: rows unchanged, backup written, new statuses accepted")
 
 
 def test_a_migration_that_fails_half_way_changes_nothing_and_names_the_backup(tmp_path, monkeypatch):
@@ -215,8 +216,64 @@ def test_a_migration_that_fails_half_way_changes_nothing_and_names_the_backup(tm
     monkeypatch.undo()  # the real index statement again
     monkeypatch.setattr(db, "DB_PATH", path)
     ar.migrate_if_needed()
-    assert _raw(path, "PRAGMA user_version") == [(1,)], "the next start retries and succeeds"
+    assert _raw(path, "PRAGMA user_version") == [(ar.SCHEMA_VERSION,)], "the next start retries and succeeds"
     print("  ok  an interrupted migration rolls back completely")
+
+
+def _v1_database(path):
+    """The ai_runs table as version 1 had it: today's, without imported_at."""
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute(ar._RUNS_TABLE.format(name="ai_runs"))
+    conn.execute("ALTER TABLE ai_runs DROP COLUMN imported_at")
+    conn.execute("INSERT INTO ai_runs (id, baseline_config_id, status, created_at, stop_reason, budget_json) "
+                 "VALUES ('a', 'base_coil', 'stalled', '2026-10-01T00:00:00+00:00', 'stalled', '[{\"segment\": 1}]')")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+
+def test_migration_from_version_1_adds_imported_at_and_keeps_every_row(tmp_path, monkeypatch):
+    path = tmp_path / "v1" / "femm_automation.db"
+    path.parent.mkdir()
+    _v1_database(path)
+    before = _raw(path, "SELECT * FROM ai_runs")
+    monkeypatch.setattr(db, "DB_PATH", path)
+
+    ar.migrate_if_needed()
+
+    assert _raw(path, "PRAGMA user_version") == [(2,)]
+    assert _raw(path, "SELECT * FROM ai_runs") == [row + (None,) for row in before], "rows unchanged, imported_at empty"
+    (backup,) = list((path.parent / "backups").glob("femm_automation-v1-*.db"))
+    assert _raw(backup, "PRAGMA user_version") == [(1,)] and _raw(backup, "SELECT * FROM ai_runs") == before
+    record = ar.get_ai_run('a')
+    assert record['imported_at'] is None and record['budget'] == [{'segment': 1}]
+    ar.transition('a', 'running')  # the row still works, and a status change keeps the new column
+    assert ar.get_ai_run('a')['imported_at'] is None
+    ar.migrate_if_needed()
+    assert len(list((path.parent / "backups").glob("*.db"))) == 1, "an up-to-date database is not migrated again"
+    print("  ok  version 1 -> 2: imported_at added, rows unchanged, backup written")
+
+
+def test_insert_imported_run_is_a_new_row_that_keeps_its_fields_through_later_changes():
+    existing = ar.create_ai_run('base_coil')
+    run = {**existing, 'status': 'cancelled', 'baseline_config_id': 'someone_elses_coil',
+           'created_at': '2026-01-01T00:00:00+00:00', 'spec': {'distances': [5.0]}}
+    messages = [{'phase': 'interview', 'seq': 1, 'role': 'user', 'round_num': None, 'content': 'hello',
+                 'payload': {'role': 'user', 'content': 'hello'}, 'created_at': '2026-01-01T00:00:01+00:00'}]
+
+    new_id = ar.insert_imported_run(run, messages)
+
+    assert new_id != existing['id'], "the id in the data is ignored: an import never lands on an existing row"
+    assert ar.get_ai_run(existing['id']) == existing
+    imported = ar.get_ai_run(new_id)
+    assert imported['status'] == 'cancelled' and imported['created_at'] == '2026-01-01T00:00:00+00:00'
+    assert imported['imported_at'] is not None
+    (message,) = ar.list_messages(new_id)
+    assert message['content'] == 'hello' and message['created_at'] == '2026-01-01T00:00:01+00:00'
+    ar.finalize_spec(new_id, {'distances': [3.0]})
+    assert ar.get_ai_run(new_id)['imported_at'] == imported['imported_at'], "a status change keeps imported_at"
+    print("  ok  insert_imported_run(): new id, fields kept, imported_at set and kept")
 
 
 def test_get_ai_run_missing_returns_none():
@@ -305,7 +362,7 @@ def test_list_chat_rows_names_each_chat_by_its_goal_or_first_message():
     by_id = {r['id']: r for r in rows}
     assert by_id[planned['id']] == {
         'id': planned['id'], 'baseline_config_id': 'base_coil', 'status': 'plan_ready',
-        'created_at': planned['created_at'], 'objective_text': 'cut tank ESR in half',
+        'created_at': planned['created_at'], 'imported_at': None, 'objective_text': 'cut tank ESR in half',
         'first_message': 'make the tank better'}
     assert (by_id[planning['id']]['objective_text'], by_id[planning['id']]['first_message']) == (None, 'reduce loop esr')
     assert (by_id[blank['id']]['objective_text'], by_id[blank['id']]['first_message']) == (None, None)

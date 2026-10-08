@@ -346,6 +346,12 @@ class AgentPanelState:
         if problem is not None:
             chat.read_only_reason = f"This chat can only be read: {problem}."
             return chat
+        if record.get("imported_at") and not chat.search_started:
+            # Planning goes on against a config in this machine's library, and
+            # the one this chat names lives on another machine.
+            chat.read_only_reason = ("This chat can only be read: it was imported before its search started. "
+                                     "Start a new chat to plan on this machine.")
+            return chat
         if not chat.search_started:
             # Still planning: the same baseline solve picking a config starts.
             chat.baseline_runs = {BASELINE_DISTANCE: self._solve_one(chat, BASELINE_DISTANCE)}

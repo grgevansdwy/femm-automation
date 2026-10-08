@@ -265,3 +265,168 @@ def test_delete_removes_the_chat_and_leaves_a_new_one_open(monkeypatch):
 
     assert state.delete_chat(keep) and not state.delete_chat(keep), "a chat that is not open; then nothing left to delete"
     assert state.sidebar.visible_rows() == []
+
+
+# --- export and import (files_backup/chat_io.py, agent/services/chat_export.py) ---------------------
+
+def _chat_file(tmp_path, run_id, edit=None):
+    """`run_id` exported to a file; `edit(document)` changes it first (the
+    checksum is made to match again, as a file written elsewhere would)."""
+    import json
+    from agent.services import chat_export
+    document = json.loads(chat_export.dumps_export(chat_export.build_export(run_id)))
+    if edit is not None:
+        edit(document)
+        document["content_sha256"] = chat_export._checksum(
+            {key: document[key] for key in ("run", "messages", "baseline_coilset")})
+    folder = tmp_path / "files"
+    folder.mkdir(exist_ok=True)
+    path = folder / f"{run_id}.json"
+    path.write_text(json.dumps(document))
+    return path
+
+
+def test_export_and_import_from_the_sidebar(monkeypatch, tmp_path):
+    from agent.repositories.ai_run_repository import get_ai_run
+
+    first, _ = _planned_state(monkeypatch, lambda n, kwargs: _proposal(n), max_rounds=2)
+    _start(first)
+    run_id = _finished(first)["id"]
+    sidebar = first.sidebar
+    folder = tmp_path / "files"
+    folder.mkdir()
+
+    sidebar.export(run_id, "json", folder / "chat.json")
+    assert sidebar.io_message == "Exported to chat.json" and not sidebar.io_error
+    sidebar.export(run_id, "pdf", folder / "chat.pdf")
+    assert (folder / "chat.pdf").read_bytes().startswith(b"%PDF")
+    sidebar.export("no-such-chat", "json", folder / "nothing.json")
+    assert "no longer exists" in sidebar.io_error and not (folder / "nothing.json").exists()
+
+    sidebar.import_from(folder / "chat.json", first)
+    new_id = first.chat.ai_run_id
+    assert new_id != run_id and sidebar.io_message == "Imported chat.json", "the imported chat is opened"
+    assert get_ai_run(new_id)["imported_at"] is not None
+    rows = {row["id"]: row for row in sidebar.visible_rows()}
+    assert rows[new_id]["imported_at"] and not rows[run_id]["imported_at"]
+    assert agent_sidebar.chat_title(rows[new_id]) == agent_sidebar.chat_title(rows[run_id])
+
+    (folder / "bad.json").write_text((folder / "chat.json").read_text().replace("goal_met", "victory").replace(
+        "budget_exhausted", "victory"))
+    before = len(sidebar.rows)
+    sidebar.import_from(folder / "bad.json", first)
+    sidebar.refresh()
+    assert "check" in sidebar.io_error and len(sidebar.rows) == before, "a rejected file adds no chat"
+
+
+def test_an_imported_chat_is_asked_and_continued_under_this_machines_settings(monkeypatch, tmp_path):
+    from agent.femm_agent.services import optimize
+    from agent.repositories.ai_run_repository import delete_ai_run, get_ai_run
+    from agent.settings.settings import AgentSettings, load_settings
+    from engine.repositories import db
+
+    first, _ = _planned_state(monkeypatch, lambda n, kwargs: _proposal(n), max_rounds=2)
+    _start(first)
+    run_id = _finished(first)["id"]
+
+    def other_machine(document):
+        settings = document["run"]["spec"]["settings"]
+        settings["prompts"] = {"search_system": AgentSettings().prompt("search_system") + "\nFILE-PROMPT-MARKER"}
+        settings["api_base_url"] = "http://elsewhere.example:9/v1"
+        settings["max_tool_calls"] = document["run"]["spec"]["max_tool_calls"] = 9
+        settings["search_fields"] = {"tank_ferrite_thickness": {"enabled": True, "min": 0.1, "max": 5}}
+
+    path = _chat_file(tmp_path, run_id, other_machine)
+    # This machine has neither the original chat nor its baseline config.
+    delete_ai_run(run_id)
+    with db.connection() as conn:
+        conn.execute("DELETE FROM configs")
+        conn.commit()
+
+    solver = _InstantSolver()
+    state = AgentPanelState(solver)
+    state.sidebar.import_from(path, state)
+    chat = state.chat
+    assert state.sidebar.io_error == "" and chat.read_only_reason is None and state.phase == "finished"
+    assert solver.submitted == 0, "opening an imported chat simulates nothing"
+    assert chat.baseline_coilset.tank_center_r == 72.688, "the baseline is the one the file carried"
+    assert state.interview_state.settings == load_settings(), "the chat runs under local settings"
+    assert agent_sidebar.has_stored_summary(chat.record, chat.messages)
+
+    requests = []
+
+    def search_ai(messages, tools, **kwargs):
+        requests.append((messages, tools, kwargs))
+        return _proposal(len(requests) + 5)
+
+    monkeypatch.setattr(optimize, "call_llm", search_ai)
+    state.chat_input = "continue"
+    state.send_chat()
+    _poll_until(lambda: chat.live, timeout=10)
+    row = _finished(state)
+
+    assert solver.submitted > 0, "its designs were simulated here before the search went on"
+    spec = state.run_state.spec
+    assert spec.settings.api_base_url == load_settings().api_base_url != "http://elsewhere.example:9/v1"
+    assert row["budget"][-1]["max_rounds"] == 2, "the local round limit, not the file's 9"
+    messages, tools, kwargs = requests[0]
+    assert "FILE-PROMPT-MARKER" not in str(messages), "the file's prompt is never sent"
+    assert kwargs["settings"].api_base_url == load_settings().api_base_url
+    offered = tools[0]["function"]["parameters"]["properties"]
+    assert "tank_center_r" in offered and "tank_ferrite_thickness" not in offered, \
+        "a field the file opened stays closed: the local Search fields table decides"
+    assert get_ai_run(row["id"])["imported_at"] is not None
+
+
+def test_an_imported_plan_that_does_not_fit_local_limits_is_not_continued(monkeypatch, tmp_path):
+    from agent.settings.settings import load_settings, save_settings
+
+    first, _ = _planned_state(monkeypatch, lambda n, kwargs: _proposal(n), max_rounds=1)
+    _start(first)
+    path = _chat_file(tmp_path, _finished(first)["id"])
+
+    local = load_settings()
+    local.search_fields = {"tank_center_r": {"enabled": True, "min": 80.0, "max": 90.0}}  # the baseline's 72.688 is outside
+    save_settings(local)
+    state = AgentPanelState(_InstantSolver())
+    state.sidebar.import_from(path, state)
+    chat = state.chat
+    rounds_before = len(agent_sidebar.stored_rounds(chat.messages))
+
+    assert state.continue_search()
+    _poll_until(lambda: not chat.restoring, timeout=10)
+    assert "Search fields" in chat.error and not chat.live
+    assert state.run_state.status.value != "running"
+    from agent.repositories.ai_run_repository import list_messages
+    assert len(list_messages(chat.ai_run_id, phase="optimize")) == rounds_before, "no round was added"
+
+
+def test_imported_chats_that_cannot_search_here_open_read_only(tmp_path):
+    import pytest
+    from agent.femm_agent.services.runner import AgentRunner
+    from agent.repositories import ai_run_repository as ar
+    from engine.repositories import db
+
+    planned = _chat_file(tmp_path, _stored_run("plan_ready"))
+    started = _stored_run("cancelled")
+    with db.connection() as conn:  # a run from before baselines were copied: its file carries none
+        conn.execute("UPDATE ai_runs SET baseline_coilset_json = NULL WHERE id = ?", (started,))
+        conn.commit()
+    no_baseline = _chat_file(tmp_path, started)
+
+    solver = _InstantSolver()
+    state = AgentPanelState(solver)
+    state.sidebar.import_from(planned, state)
+    assert "imported before its search started" in state.chat.read_only_reason
+    assert state.interview_state.finalized, "its plan can still be read"
+    state.confirm_plan()
+    state.poll()
+    assert state.run_state is None and ar.get_ai_run(state.chat.ai_run_id)["status"] == "plan_ready"
+    with pytest.raises(ValueError, match="can only be read"):
+        AgentRunner(solver).submit(state.interview_state.spec, ai_run_id=state.chat.ai_run_id)
+
+    state.sidebar.import_from(no_baseline, state)
+    assert "did not carry its baseline" in state.chat.read_only_reason, \
+        "base_coil exists here, but a local config is never taken for an imported chat's baseline"
+    before = solver.submitted
+    assert not state.continue_search() and solver.submitted == before

@@ -21,8 +21,9 @@ from pathlib import Path
 from engine.repositories import db
 
 # The schema version this module writes, kept in SQLite's `PRAGMA user_version`
-# (0 = the ai_runs table as it was before run lifecycle states existed).
-SCHEMA_VERSION = 1
+# (0 = the ai_runs table as it was before run lifecycle states existed,
+# 1 = before a chat could be imported from a file).
+SCHEMA_VERSION = 2
 
 # How a run moves: interviewing -> plan_ready (the model proposed a plan the code
 # accepted) -> running (the user clicked Start Search) -> one terminal status.
@@ -61,26 +62,30 @@ CREATE TABLE {name} (
     stop_reason           TEXT,  -- which rule ended the search (STOP_REASONS); NULL while not terminal
     budget_json           TEXT,  -- list, one entry per search segment: limits in force and what was used
     fragility_json        TEXT,  -- list of fragility checks (filled from milestone M3b)
-    baseline_coilset_json TEXT   -- the baseline as it was at Start Search (a config can be edited later)
+    baseline_coilset_json TEXT,  -- the baseline as it was at Start Search (a config can be edited later)
+    imported_at           TEXT   -- set on a chat that came from an exported file (agent/services/chat_export.py)
 )""" % ", ".join(f"'{s}'" for s in STATUSES)
 _RUNS_INDEX = "CREATE INDEX IF NOT EXISTS idx_ai_runs_created_at ON ai_runs (created_at)"
 _V0_COLUMNS = ("id, baseline_config_id, spec_json, status, created_at, started_at, finished_at, error, "
                "best_round, best_coilset_json, best_tool_result_json")
 
+PHASES = ('interview', 'optimize')
+ROLES = ('user', 'assistant', 'tool', 'system')
+
 _MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ai_run_messages (
     id           TEXT PRIMARY KEY,
     ai_run_id    TEXT NOT NULL REFERENCES ai_runs (id),  -- documents intent only, not enforced - see connect()
-    phase        TEXT NOT NULL CHECK (phase IN ('interview', 'optimize')),
+    phase        TEXT NOT NULL CHECK (phase IN (%s)),
     seq          INTEGER NOT NULL,  -- monotonic order within (ai_run_id, phase)
-    role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'system')),
+    role         TEXT NOT NULL CHECK (role IN (%s)),
     round_num    INTEGER,  -- NULL for interview rows
     content      TEXT,
     payload_json TEXT,  -- e.g. finalize_spec args, or a round's candidate list
     created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_run_messages_run ON ai_run_messages (ai_run_id, phase, seq);
-"""
+""" % (", ".join(f"'{p}'" for p in PHASES), ", ".join(f"'{r}'" for r in ROLES))
 
 
 class MigrationError(RuntimeError):
@@ -109,8 +114,12 @@ def _ensure_schema(conn) -> None:
         conn.execute(_RUNS_INDEX)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
-    elif conn.execute("PRAGMA user_version").fetchone()[0] < 1:
-        _migrate_v0(conn, Path(path))
+    else:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
+            _migrate_v0(conn, Path(path))
+        elif version < 2:
+            _migrate_v1(conn, Path(path))
     conn.executescript(_MESSAGES_SCHEMA)
     _checked_paths.add(path)
 
@@ -121,15 +130,7 @@ def _migrate_v0(conn, path: Path) -> None:
     copied to backups/ first; then one transaction copies every row over
     unchanged (new columns NULL). Any failure rolls back and raises
     MigrationError naming the backup."""
-    backup_dir = path.parent / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = backup_dir / f"{path.stem}-v0-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-    copy = sqlite3.connect(backup_path)
-    try:
-        with copy:
-            conn.backup(copy)
-    finally:
-        copy.close()
+    backup_path = _backup(conn, path, "v0")
 
     previous_isolation = conn.isolation_level
     conn.isolation_level = None  # explicit BEGIN/COMMIT, so the DDL below is really one transaction
@@ -154,6 +155,36 @@ def _migrate_v0(conn, path: Path) -> None:
             f"A copy of the database made just before is at {backup_path}.") from exc
     finally:
         conn.isolation_level = previous_isolation
+
+
+def _migrate_v1(conn, path: Path) -> None:
+    """Version 1 -> 2: adds ai_runs.imported_at. No row is touched, but the
+    database file is still copied to backups/ first, like every migration."""
+    backup_path = _backup(conn, path, "v1")
+    try:
+        conn.execute("ALTER TABLE ai_runs ADD COLUMN imported_at TEXT")
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+    except Exception as exc:
+        with contextlib.suppress(sqlite3.Error):
+            conn.rollback()
+        raise MigrationError(
+            f"Could not update the agent's run history in {path} ({exc!r}). Nothing was changed. "
+            f"A copy of the database made just before is at {backup_path}.") from exc
+
+
+def _backup(conn, path: Path, tag: str) -> Path:
+    """Copies the whole database file to backups/ before a migration; returns the copy's path."""
+    backup_dir = path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"{path.stem}-{tag}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
+    copy = sqlite3.connect(backup_path)
+    try:
+        with copy:
+            conn.backup(copy)
+    finally:
+        copy.close()
+    return backup_path
 
 
 def migrate_if_needed() -> None:
@@ -212,6 +243,7 @@ def _run_row_to_record(row) -> dict:
         'budget': _loads(_column(row, 'budget_json')),
         'fragility': _loads(_column(row, 'fragility_json')),
         'baseline_coilset': _loads(_column(row, 'baseline_coilset_json')),
+        'imported_at': _column(row, 'imported_at'),
     }
 
 
@@ -240,7 +272,7 @@ def _message_row_to_record(row) -> dict:
 _JSON_COLUMNS = {'spec': 'spec_json', 'best_coilset': 'best_coilset_json', 'best_tool_result': 'best_tool_result_json',
                  'budget': 'budget_json', 'fragility': 'fragility_json', 'baseline_coilset': 'baseline_coilset_json'}
 _PLAIN_COLUMNS = ('id', 'baseline_config_id', 'status', 'created_at', 'started_at', 'finished_at', 'error',
-                  'best_round', 'stop_reason')
+                  'best_round', 'stop_reason', 'imported_at')
 
 
 def _upsert_run(conn, record) -> None:
@@ -273,10 +305,46 @@ def create_ai_run(baseline_config_id) -> dict:
         'budget': None,
         'fragility': None,
         'baseline_coilset': None,
+        'imported_at': None,
     }
     with _connection() as conn:
         _upsert_run(conn, record)
     return record
+
+
+def insert_imported_run(run: dict, messages: list[dict]) -> str:
+    """Stores a chat that came from an exported file as a NEW run and returns
+    its id. `run` holds the ai_runs fields as get_ai_run() returns them (no
+    id), `messages` the ai_run_messages fields (no id, no ai_run_id); both
+    were checked by agent/services/chat_export.py's validate(). The run keeps
+    its status and timestamps, gets imported_at, and is a plain INSERT under a
+    fresh id, so no existing row can be overwritten. One transaction: any
+    failure leaves nothing behind."""
+    with _connection() as conn:
+        try:
+            while True:
+                run_id = uuid.uuid4().hex[:12]
+                if conn.execute('SELECT 1 FROM ai_runs WHERE id = ?', (run_id,)).fetchone() is None:
+                    break
+            values = {name: run.get(name) for name in _PLAIN_COLUMNS}
+            values.update({column: _dumps(run.get(key)) for key, column in _JSON_COLUMNS.items()})
+            values.update(id=run_id, imported_at=_now_iso())
+            columns = list(values)
+            conn.execute(f"INSERT INTO ai_runs ({', '.join(columns)}) VALUES ({', '.join(':' + c for c in columns)})",
+                         values)
+            for message in messages:
+                conn.execute(
+                    """INSERT INTO ai_run_messages (id, ai_run_id, phase, seq, role, round_num, content, payload_json, created_at)
+                       VALUES (:id, :ai_run_id, :phase, :seq, :role, :round_num, :content, :payload_json, :created_at)""",
+                    {'id': uuid.uuid4().hex[:12], 'ai_run_id': run_id, 'phase': message['phase'],
+                     'seq': message['seq'], 'role': message['role'], 'round_num': message.get('round_num'),
+                     'content': message.get('content'), 'payload_json': _dumps(message.get('payload')),
+                     'created_at': message['created_at']})
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return run_id
 
 
 _TRANSITION_FIELDS = ('spec', 'started_at', 'finished_at', 'error', 'stop_reason', 'budget', 'fragility',
@@ -373,7 +441,7 @@ def list_chat_rows() -> list[dict]:
     none of the large JSON columns list_ai_runs() parses."""
     with _connection() as conn:
         rows = conn.execute(
-            """SELECT r.id, r.baseline_config_id, r.status, r.created_at,
+            """SELECT r.id, r.baseline_config_id, r.status, r.created_at, r.imported_at,
                       json_extract(r.spec_json, '$.objective_text') AS objective_text,
                       (SELECT m.content FROM ai_run_messages m
                         WHERE m.ai_run_id = r.id AND m.phase = 'interview' AND m.role = 'user'
