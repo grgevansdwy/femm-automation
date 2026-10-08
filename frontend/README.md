@@ -118,7 +118,7 @@ frontend/src/frontend/
   main.py          starts the app, lays out both modes
   _sim_path.py     makes engine/ and agent/ importable
   screen_manual/   Manual Runs mode: configs_panel, runs_panel
-  screen_agent/    AI Agent mode: agent_panel (chat + live search), agent_candidate_card, agent_history
+  screen_agent/    AI Agent mode: agent_sidebar (saved chats), agent_panel (chat + live search), agent_candidate_card
   screen_settings/ Settings screen (opened from AI Agent): settings_panel (edit the agent's system prompts and numbers)
   visualization/   drawing pieces both modes share: coil_diagram, femm_open, result_table
   services/        logic with no drawing: job_runner (solve queue + cache), field_layout

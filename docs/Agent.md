@@ -210,7 +210,7 @@ order; the first that applies is recorded as the run's `stop_reason`:
 
 | # | Rule | `stop_reason` |
 |---|---|---|
-| 1 | The user stopped it (Stop and keep the best, or Restart) | `user_stopped` |
+| 1 | The user stopped it (Stop and keep the best) | `user_stopped` |
 | 2 | A budget limit is reached | `rounds`, `time`, `simulations` |
 | 3 | A design passes and the goal has only `match` objectives (nothing to push further) | `nothing_left` |
 | 4 | After a pass: `plateau_rounds` (2) rounds in a row without a better design | `plateau` |
@@ -273,7 +273,7 @@ this table:
 | `interviewing` | `plan_ready` | `finalize_spec` accepted by code |
 | `plan_ready` | `plan_ready` | a revised plan |
 | `plan_ready` | `running` | Start Search |
-| `interviewing`, `plan_ready` | `cancelled` | Restart, or another baseline picked |
+| `interviewing`, `plan_ready` | `cancelled` | `InterviewRunner.cancel_conversation()`; the app no longer calls it (a new chat leaves a planning chat as it is, to be reopened) |
 | `running` | `goal_met`, `budget_exhausted`, `stopped_by_model`, `stalled`, `failed`, `cancelled` | the search ends (rules above) |
 | `running` | `interrupted` | the app starts and finds the row still `running` (`reap_running()`) |
 | any ending | `running` | "continue" |
@@ -293,7 +293,13 @@ Each round's payload also carries its segment and code's verdict after it. The b
 is copied into the run at Start Search (`baseline_coilset_json`), since a config can be
 edited later. `femm_agent/services/restore.py::restore_run()` rebuilds a stored run's
 live state (rounds, memory, best design, verdict) by re-requesting each candidate's
-solves — cache hits — and re-scoring them.
+solves — cache hits — and re-scoring them. The app calls it when the user asks about or
+continues a chat reopened from the sidebar, then hands the state to
+`AgentRunner.adopt()` so `continue_run()` accepts it. `restore_interview()` rebuilds the
+chat side (transcript, plan, settings) without touching the solver, and
+`InterviewRunner.attach()` points a runner at the stored row so new messages are saved
+after the stored ones. `list_messages()` with no phase returns both phases in the order
+they were written; `list_chat_rows()` is the light per-run query the sidebar lists from.
 
 **Schema version.** `PRAGMA user_version` is 1. An older database is migrated the first
 time it is opened (`_ensure_schema()`; the app also calls `migrate_if_needed()` at
@@ -461,7 +467,7 @@ the closest candidate with exactly what it still missed; for `stalled`, also the
 and near-copy counts and the fields never changed; for `llm_failed`, which rounds and
 tries failed and why. At a budget limit with the verdict still `improving`, it invites
 "continue". It never says a target is impossible. Stored in `ai_runs.error`, shown in the
-chat, the search summary, and History, and handed to the follow-up chat (§9).
+chat, the search summary, and a reopened chat, and handed to the follow-up chat (§9).
 
 ## 9. The follow-up chat
 
@@ -472,7 +478,7 @@ context than the search loop's own message history, which is trimmed to its late
 plus the best few candidates. **It cannot change anything, structurally, not just by
 prompt instruction:** it's called with no tools at all, so it has no `finalize_spec` to
 re-plan with and no `propose_coilset` to try a design with — the prompt just tells it to
-point the user at Restart instead. Its snapshot includes the budget used, code's progress
+point the user at a new chat instead. Its snapshot includes the budget used, code's progress
 verdict and the end-of-run report, so "why did it stop?" is answered from what code
 recorded, with no extra model call when a search ends.
 

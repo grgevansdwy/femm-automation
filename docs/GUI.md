@@ -33,7 +33,7 @@ switching back and forth to see a run's result next to the config that produced 
 | Mode | Layout | What it's for |
 |---|---|---|
 | **Manual Runs** | 3 columns: config list · edit form · diagram + run controls + history | Pick/edit one design, run one solve at one distance, no AI involved |
-| **AI Agent** | 2 columns: chat + progress · baseline picker + diagram/history + progress feed | Describe a goal in chat, watch a search run, browse past searches |
+| **AI Agent** | 3 columns: saved chats (collapsible) · the open chat · baseline picker + diagram + progress feed or results | Describe a goal in chat, watch a search run, reopen any past chat |
 
 `_gui()` (in `main.py`) calls `poll()` on the job runner and the agent panel every frame,
 then draws whichever mode is active — nothing here blocks on I/O; all of that happens on
@@ -44,10 +44,12 @@ background threads the panels poll.
 ```python
 from agent.input_chat.services.runner import InterviewRunner
 from agent.femm_agent.services.runner import AgentRunner
+from agent.femm_agent.services.restore import restore_interview, restore_run, stored_baseline
 ```
 
-These two imports, in `screen_agent/agent_panel.py`, are the **entire** surface area
-between this package and the AI agent. Everything on this side of the line is rendering
+These imports in `screen_agent/agent_panel.py`, plus the read and delete functions of
+`agent.repositories.ai_run_repository` that it and `agent_sidebar.py` call, are the
+**entire** surface area between this package and the AI agent. Everything on this side of the line is rendering
 and clicking; everything past it is the real agent, which has no idea a GUI exists (see
 `Agent.md`). If you're debugging "the chat isn't updating" or "the search seems stuck,"
 the bug is almost certainly on the agent side, not here — this package only polls and
@@ -91,32 +93,50 @@ draws state it's handed.
 Three files in `screen_agent/`, each with one job — the mechanics they render (interview
 turns, search rounds, scoring) belong to `Agent.md`:
 
-- **`agent_panel.py`** — owns `AgentPanelState`: the chat, and which of the other two
-  views to show (live progress / finished summary / history). It also gates planning on the
+- **`agent_sidebar.py`** — the left column: every saved chat whatever its status, newest
+  first, from `ai_run_repository.list_chat_rows()` (re-read at most once a second). A row
+  is titled with the plan's goal text, else the user's first message; its second line is
+  the baseline name, the status label (one per status) and the date. The search box matches
+  title, baseline name and run id. **+ New** opens an empty chat on the selected baseline;
+  the column collapses to a strip. **Delete** (right-click a row, or the button in the chat
+  header; always behind a confirmation) is the only way a chat leaves the list, and a
+  search still running can't be deleted. Rows with neither a goal nor a message (blanks
+  from before the run lifecycle) are not listed. The file also holds `draw_stored_run()`:
+  a stored run's summary and rounds drawn from its database rows as plain dicts.
+- **`agent_panel.py`** — owns `AgentPanelState` and one `ChatSession` per conversation
+  (its baseline, interview state, run state, draft, search markers). `AgentPanelState.chat`
+  is the one on screen; `state.interview_state`, `state.run_state` and the like forward to
+  it. Sessions touched in this app session are kept by run id, and `poll()` polls all of
+  them, so a search keeps running while another chat is open and switching back returns
+  the same live object. **One search at a time:** while one runs, Start Search and
+  Continue are disabled in every other chat (`search_busy_elsewhere`).
+  `open_chat()` rebuilds a chat that is not in memory from the database: transcript and
+  plan through `restore_interview()`, the baseline from the copy stored in the run. A chat
+  still planning (or with a plan never started) carries on where it was. For a chat whose
+  search has started, the right column is drawn from the stored rows and nothing is
+  simulated; the run state is rebuilt (`restore_run()`, on a background thread) only when
+  the user asks a question or continues, and from then on a continued search is shown
+  live. If the baseline or the plan can't be rebuilt, the chat opens read-only with a
+  one-line reason and its conversation and stored rounds still shown.
+  Picking another baseline never changes a chat: it opens a new one, and a chat with
+  messages stays in the sidebar as it was (a planning chat is not cancelled).
+  It also gates planning on the
   baseline: if a baseline solve failed (the 5 mm one started on picking a config, or any of
   a finalized plan's distances), `planning_blocked` disables the chat input and Start
   Search and shows a fixed notice with the solver's error and a **Retry solve** button
   (`retry_baseline()` re-queues only the failed solves). No LLM turn is involved. It stops
   applying once the search has started, so follow-up questions stay available.
-  Run lifecycle on this screen: nothing is saved until the user's first message; **Restart**
-  always keeps the old conversation in History (a planning chat as cancelled, a running
-  search stopped with its finished rounds); **Stop and keep the best** (shown while a
+  Run lifecycle on this screen: nothing is saved until the user's first message;
+  **Stop and keep the best** (shown while a
   search runs, with a confirmation) ends the search at its next checkpoint and stays on
   it; once a search has ended, typing exactly "continue" or clicking **Continue** resumes
   the same run with a fresh budget (`continue_search()`), and a status line is drawn in
   the chat where each search segment started.
 - **`agent_candidate_card.py`** — the shared renderer for one round/candidate (geometry +
   result tables + reasoning) and the finished-search summary. Used by *both* the live
-  view and history replay so they can never visually drift apart — deliberately its own
-  file (not part of `agent_panel.py`) so `agent_history.py` can import it without a
+  view and the stored-run replay so they can never visually drift apart — deliberately its
+  own file (not part of `agent_panel.py`) so `agent_sidebar.py` can import it without a
   circular import.
-- **`agent_history.py`** — reads saved runs straight from the agent's repository and
-  replays them through `agent_candidate_card.py`'s same rendering functions, from plain
-  dicts, never a live run object. It lists every run whatever its status (planning, plan
-  ready, searching, each ending, interrupted, cancelled), each with its own label and, for
-  an ended search, the rule that ended it. **Delete** (with a confirmation) is the only way
-  a run leaves History; a search still running can't be deleted. Reopening a past run in
-  the chat is not built.
 
 `visualization/coil_diagram.py` is reused here too (not agent-specific) — both the live
 view and the finished summary call `draw()` directly.
@@ -209,9 +229,9 @@ Roughly in order of how much they'd bite:
 |---|---|
 | `main.py` | App entry point, top-level layout, owns `AppState`, no tab bar |
 | `_sim_path.py` | Puts `backend/` on `sys.path` so `import engine`/`import agent` resolve |
-| `screen_agent/agent_panel.py` | AI Agent mode's chat + state machine — **the frontend/↔agent/ boundary** |
+| `screen_agent/agent_panel.py` | AI Agent mode's chats (one `ChatSession` each) + state machine — **the frontend/↔agent/ boundary** |
 | `screen_agent/agent_candidate_card.py` | Shared round/summary card renderer |
-| `screen_agent/agent_history.py` | Replays a saved AI run through the same renderer |
+| `screen_agent/agent_sidebar.py` | Sidebar of saved chats (search, New, Delete); replays a stored run through the same renderer |
 | `screen_settings/settings_panel.py` | Settings screen — edit prompts/numbers (§5) |
 | `visualization/coil_diagram.py` | Geometry schematic — used everywhere, not agent-only |
 | `visualization/result_table.py` | The 12-value result table, shared by both modes |

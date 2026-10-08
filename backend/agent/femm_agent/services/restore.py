@@ -18,13 +18,16 @@ from agent.femm_agent.services import progress
 from agent.femm_agent.services.scorer import evaluate_async, rank_key, score, tool_result, wait_for_jobs
 from agent.input_chat.models.spec import spec_from_dict
 from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, free_fields_for
+from agent.input_chat.services.interview import InterviewState
 
 
 class RestoreError(Exception):
     """The run can't be rebuilt; the message says why in one line."""
 
 
-def _baseline(record):
+def stored_baseline(record):
+    """The baseline design a stored run compares against: the copy made at
+    Start Search, else its config as it is now. Raises RestoreError."""
     from engine.models.coilset import CoilSet
     from engine.repositories.coilset_repository import get_coilset
     stored = record.get("baseline_coilset")
@@ -36,6 +39,31 @@ def _baseline(record):
         raise RestoreError(f"its baseline design {record['baseline_config_id']!r} no longer exists") from None
     except TypeError as exc:
         raise RestoreError(f"its stored baseline no longer fits this version's design fields ({exc})") from None
+
+
+def interview_transcript(messages: list[dict]) -> list[dict]:
+    """The chat as the model saw it: each stored interview message's payload
+    (the message dict InterviewRunner saved), in order."""
+    rows = sorted((m for m in messages if m["phase"] == "interview"), key=lambda m: m["seq"])
+    return [m["payload"] or {"role": m["role"], "content": m["content"]} for m in rows]
+
+
+def restore_interview(record: dict, messages: list[dict]) -> InterviewState:
+    """The chat side of a stored run, so it can be shown and carried on: the
+    transcript, the plan if it has one (shown for confirmation only while the
+    run is still 'plan_ready'), and the settings the plan was made under.
+    Submits nothing. Raises RestoreError when the stored plan can't be read."""
+    from agent.settings.settings import load_settings
+    spec = None
+    if record.get("spec"):
+        try:
+            spec = spec_from_dict(record["spec"])
+        except Exception as exc:
+            raise RestoreError(f"its stored plan can't be read by this version ({exc})") from None
+    return InterviewState(
+        baseline_config_id=record["baseline_config_id"], transcript=interview_transcript(messages), spec=spec,
+        finalized=spec is not None and record["status"] == "plan_ready",
+        settings=spec.settings if spec is not None else load_settings())
 
 
 def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
@@ -56,7 +84,7 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
         spec = spec_from_dict(record["spec"])
     except Exception as exc:
         raise RestoreError(f"its stored plan can't be read by this version ({exc})") from None
-    baseline = _baseline(record)
+    baseline = stored_baseline(record)
 
     state = AgentRunState(id=ai_run_id, spec=spec, baseline_coilset=baseline,
                           status=AgentRunStatus(record["status"]), stop_reason=record.get("stop_reason"))

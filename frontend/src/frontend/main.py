@@ -11,15 +11,18 @@ Manual Runs mode (_draw_manual_mode(), 3 columns):
   center  - the selected config's edit form (configs_panel.draw_form)
   right   - stacked top-to-bottom: coil diagram, run controls, run history
 
-AI Agent mode (_draw_agent_mode(), 2 columns):
-  left    - interview chat + search progress (agent_panel.draw_chat)
+AI Agent mode (_draw_agent_mode(), 3 columns):
+  left    - saved chats: New, search, one row per chat (agent_sidebar.draw);
+            collapses to a narrow strip
+  center  - the open chat: interview, then questions about its search
+            (agent_panel.draw_chat)
   right   - stacked top-to-bottom: baseline config picker, coil diagram (or
-            the best-vs-baseline comparison once a search finishes) /
-            AI-run history, search progress feed (agent_panel.*)
+            the best-vs-baseline comparison once a search finishes), search
+            progress feed (agent_panel.*)
 
 Settings mode (screen_settings/settings_panel.py): the agent's prompts and
 numbers, edited and saved - see agent/settings/. Opened by the "Settings"
-button beside "History" in AI Agent mode; "Back" returns there.
+button in AI Agent mode; "Back" returns there.
 
 HelloImGui (via immapp.run) provides an implicit full-screen background
 window by default (DefaultImGuiWindowType.provide_full_screen_window), so
@@ -32,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend import _sim_path  # noqa: F401 - _sim_path must run before any backend import
-from frontend.screen_agent import agent_panel
+from frontend.screen_agent import agent_panel, agent_sidebar
 from frontend.files_backup import backup_io
 from frontend.screen_manual import configs_panel, runs_panel
 from frontend.screen_settings import settings_panel
@@ -150,22 +153,14 @@ def _draw_mode_toggle(state: AppState) -> None:
 
     if state.mode in ("agent", "settings"):
         # Right-aligned on the same row. In agent mode: Settings opens the
-        # agent's prompts/numbers, History swaps the right column for the
-        # AI-run history browser (agent_panel.draw_right_column()). In
-        # settings mode a single Back returns to the agent.
-        btn_w, gap = 100.0, imgui.get_style().item_spacing.x
-        n_btns = 2 if state.mode == "agent" else 1
+        # agent's prompts/numbers. In settings mode: Back returns to the agent.
+        btn_w = 100.0
         imgui.same_line()
-        imgui.set_cursor_pos_x(
-            imgui.get_cursor_pos_x() + max(imgui.get_content_region_avail().x - (btn_w * n_btns + gap * (n_btns - 1)), 0.0))
+        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max(imgui.get_content_region_avail().x - btn_w, 0.0))
         if state.mode == "agent":
             if imgui.button("Settings", imgui.ImVec2(btn_w, 0)):
                 state.settings_panel.reload()  # pick up anything changed elsewhere since it was last open
                 state.mode = "settings"
-            imgui.same_line()
-            label = "Back" if state.agent_panel.showing_history else "History"
-            if imgui.button(label, imgui.ImVec2(btn_w, 0)):
-                state.agent_panel.showing_history = not state.agent_panel.showing_history
         elif imgui.button("Back", imgui.ImVec2(btn_w, 0)):
             state.mode = "agent"
 
@@ -195,9 +190,15 @@ def _draw_manual_mode(state: AppState) -> None:
 
 
 def _draw_agent_mode(state: AppState) -> None:
+    sidebar = state.agent_panel.sidebar
+    sidebar_w = agent_sidebar.width(sidebar)
+    agent_sidebar.draw(sidebar, state.agent_panel, imgui.ImVec2(sidebar_w, 0))
+    imgui.same_line()
+
+    # The chat and the results share what the sidebar leaves.
     avail = imgui.get_content_region_avail()
     left_w = max(420.0, avail.x * 0.35)
-    right_w = max(avail.x - left_w - 16.0, 300.0)
+    right_w = max(avail.x - left_w - 8.0, 300.0)
 
     agent_panel.draw_chat(state.agent_panel, imgui.ImVec2(left_w, 0))
     imgui.same_line()

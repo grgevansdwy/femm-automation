@@ -476,3 +476,71 @@ def test_restore_says_why_a_run_cannot_be_rebuilt():
         restore_run("nope", _Jobs())
     with pytest.raises(RestoreError, match="no search plan"):
         restore_run(create_ai_run("base_coil")["id"], _Jobs())
+
+
+# --- reopening a stored chat: the interview side, and continuing a restored run -------------------
+
+def test_restore_interview_rebuilds_the_chat_and_only_a_waiting_plan_asks_for_confirmation():
+    from agent.femm_agent.services.restore import restore_interview
+    from agent.repositories.ai_run_repository import append_message, finalize_spec, transition
+
+    run_id = create_ai_run("base_coil")["id"]
+    said = [{"role": "user", "content": "cut tank ESR"}, {"role": "assistant", "content": "", "tool_calls": [{"id": "p"}]},
+            {"role": "tool", "tool_call_id": "p", "content": '{"valid": true}'}]
+    for i, message in enumerate(said):
+        append_message(run_id, phase="interview", seq=i, role=message["role"], content=message["content"], payload=message)
+    append_message(run_id, phase="optimize", seq=1, role="assistant", round_num=1, content="round 1", payload={})
+
+    planning = restore_interview(get_ai_run(run_id), list_messages(run_id))
+    assert planning.transcript == said and planning.spec is None and not planning.finalized
+
+    finalize_spec(run_id, dataclasses.asdict(_spec(max_tool_calls=7)))
+    waiting = restore_interview(get_ai_run(run_id), list_messages(run_id))
+    assert waiting.finalized and waiting.spec.objectives == _spec().objectives
+    assert waiting.settings.max_tool_calls == 7, "the chat goes on under the settings its plan was made with"
+
+    transition(run_id, "running")
+    transition(run_id, "cancelled")
+    assert not restore_interview(get_ai_run(run_id), list_messages(run_id)).finalized, "a started search has no plan to confirm"
+
+    unreadable = create_ai_run("base_coil")["id"]
+    finalize_spec(unreadable, {"objectives": "not a list of objectives"})
+    with pytest.raises(RestoreError, match="stored plan"):
+        restore_interview(get_ai_run(unreadable), [])
+
+
+def test_an_attached_interview_runner_appends_after_the_stored_chat_and_leaves_the_plan_alone(monkeypatch):
+    from agent.femm_agent.services.restore import restore_interview
+    from agent.input_chat.services.runner import InterviewRunner
+    from agent.repositories.ai_run_repository import append_message
+
+    state, row, _ = _search(monkeypatch, [_propose(60.0)], _spec(max_tool_calls=1))
+    append_message(state.id, phase="interview", seq=0, role="user", content="cut tank ESR",
+                   payload={"role": "user", "content": "cut tank ESR"})
+
+    chat = restore_interview(get_ai_run(state.id), list_messages(state.id))
+    runner = InterviewRunner()
+    runner.attach(state.id, chat)
+    runner.record_user_message(chat, "continue")
+
+    assert [(m["seq"], m["content"]) for m in list_messages(state.id, phase="interview")] == [(0, "cut tank ESR"), (1, "continue")]
+    assert get_ai_run(state.id)["status"] == row["status"] == "goal_met", "the stored plan was not written again"
+
+
+def test_a_restored_run_can_be_adopted_and_continued_in_another_session(monkeypatch):
+    jobs = _Jobs()
+    state, row, requests = _search(monkeypatch, [_propose(71.0), _propose(70.0), _propose(60.0)],
+                                   _spec(max_tool_calls=2), jobs=jobs)
+    assert _ending(state, row)[:2] == ("budget_exhausted", "rounds")
+
+    later = AgentRunner(jobs)  # a new app session: the run is not in memory
+    with pytest.raises(ValueError):
+        later.continue_run(state.id)
+    restored = restore_run(state.id, jobs)
+    later.adopt(restored)
+    assert later.continue_run(state.id) is restored
+    row = _wait(restored)
+
+    assert _ending(restored, row) == ("goal_met", "rounds", 4)
+    assert [m["payload"]["segment"] for m in list_messages(state.id, phase="optimize")] == [1, 1, 2, 2]
+    assert "'tank_center_r': 71.0" in requests[2][0][2]["content"], "the model still knows what was tried before"

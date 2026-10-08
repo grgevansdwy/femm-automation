@@ -279,6 +279,39 @@ def test_list_ai_runs_sorted_newest_first():
     print("  ok  list_ai_runs() sorts newest first")
 
 
+def test_list_messages_without_a_phase_follows_the_order_they_were_written():
+    record = ar.create_ai_run('Gen2_coil')
+    ar.append_message(record['id'], phase='interview', seq=0, role='user', content='cut tank ESR')
+    ar.append_message(record['id'], phase='optimize', seq=1, role='assistant', round_num=1, content='round 1')
+    ar.append_message(record['id'], phase='interview', seq=1, role='user', content='continue')
+    ar.append_message(record['id'], phase='optimize', seq=2, role='assistant', round_num=2, content='round 2')
+
+    assert [m['content'] for m in ar.list_messages(record['id'])] == ['cut tank ESR', 'round 1', 'continue', 'round 2']
+    assert [m['seq'] for m in ar.list_messages(record['id'], phase='interview')] == [0, 1]
+    print("  ok  list_messages() interleaves chat and search rounds as they happened")
+
+
+def test_list_chat_rows_names_each_chat_by_its_goal_or_first_message():
+    blank = ar.create_ai_run('Gen2_coil')
+    planning = ar.create_ai_run('Gen2_coil')
+    ar.append_message(planning['id'], phase='interview', seq=0, role='user', content='reduce loop esr')
+    ar.append_message(planning['id'], phase='interview', seq=1, role='user', content='at 5 mm')
+    planned = ar.create_ai_run('base_coil')
+    ar.append_message(planned['id'], phase='interview', seq=0, role='user', content='make the tank better')
+    ar.finalize_spec(planned['id'], {'objective_text': 'cut tank ESR in half', 'distances': [5.0]})
+
+    rows = ar.list_chat_rows()
+    assert [r['id'] for r in rows] == [planned['id'], planning['id'], blank['id']], "newest first"
+    by_id = {r['id']: r for r in rows}
+    assert by_id[planned['id']] == {
+        'id': planned['id'], 'baseline_config_id': 'base_coil', 'status': 'plan_ready',
+        'created_at': planned['created_at'], 'objective_text': 'cut tank ESR in half',
+        'first_message': 'make the tank better'}
+    assert (by_id[planning['id']]['objective_text'], by_id[planning['id']]['first_message']) == (None, 'reduce loop esr')
+    assert (by_id[blank['id']]['objective_text'], by_id[blank['id']]['first_message']) == (None, None)
+    print("  ok  list_chat_rows() returns the goal text and the first user message per run")
+
+
 
 def test_delete_ai_run_removes_the_run_and_its_messages():
     keep = ar.create_ai_run('Gen2_coil')

@@ -1,10 +1,10 @@
 """Shared per-candidate round card: geometry + input-changes table +
 output-vs-goal table + a short reasoning line. Used by both the live
-Search Progress feed (agent_panel.py) and the AI-run history replay
-(agent_history.py) - kept in its own module, not agent_panel.py, so
-agent_history.py can import it without a circular import (agent_panel.py
-already imports agent_history for the "History" toggle). The finished-
-search summary (draw_search_summary()) lives here for the same reason.
+Search Progress feed (agent_panel.py) and the replay of a stored run
+(agent_sidebar.py) - kept in its own module, not agent_panel.py, so
+agent_sidebar.py can import it without a circular import (agent_panel.py
+already imports agent_sidebar). The finished-search summary
+(draw_search_summary()) lives here for the same reason.
 
 Works on plain dicts throughout - a candidate shaped like
 agent.state.CandidateResult (delta/valid/tool_result/error/
@@ -262,7 +262,7 @@ _STATUS_HEADLINES = {
 
 def draw_outcome_report(report: str) -> None:
     """Why a finished search didn't meet its goal (agent/femm_agent/services/outcome.py) - the
-    live panel, the chat and History all show the same text."""
+    live panel, the chat and a reopened chat all show the same text."""
     imgui.push_text_wrap_pos(0.0)
     for i, line in enumerate(_ascii(report).splitlines()):
         (imgui.text_colored(_FAIL_COLOR, line) if i == 0 else imgui.text_colored(_MUTED_COLOR, line))
@@ -481,7 +481,7 @@ def draw_search_summary(pane_id: str, status: str, rounds: list[tuple[int, list[
                         distances: list[float], selected_distance: float, audit: dict | None,
                         baseline_coilset=None, best_coilset=None, report: str | None = None) -> float:
     """A finished search in one view - shared by the live panel (the moment
-    a search ends) and the history replay, from plain dicts: headline, best
+    a search ends) and the stored-run replay, from plain dicts: headline, best
     vs. baseline geometry, the full result table (baseline vs. best, every
     metric, AT ONE CHOSEN DISTANCE), the full input table (baseline vs.
     best, every field, highlighted where changed - distance-independent,
@@ -498,8 +498,7 @@ def draw_search_summary(pane_id: str, status: str, rounds: list[tuple[int, list[
     draw, selected_distance=None), and returns whichever is selected after
     this frame's dropdown interaction - stateless itself, so the CALLER
     persists the return value back into its own per-run/per-search state
-    for next frame (agent_panel.py's AgentPanelState.summary_distance /
-    agent_history.py's AgentHistoryState.summary_distance).
+    for next frame (agent_panel.py's ChatSession.summary_distance).
 
     audit: variables.audit_changed_fields()'s result, or None when it
     couldn't be rebuilt (a plain field diff is shown, without the check).

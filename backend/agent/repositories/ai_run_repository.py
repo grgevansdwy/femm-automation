@@ -366,17 +366,34 @@ def get_ai_run(ai_run_id) -> dict | None:
     return _run_row_to_record(row) if row else None
 
 
+def list_chat_rows() -> list[dict]:
+    """One light row per ai_run, newest first, for a list of past chats: id,
+    baseline_config_id, status, created_at, and what to call it - the plan's
+    objective text and the user's first message (either may be None). Reads
+    none of the large JSON columns list_ai_runs() parses."""
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT r.id, r.baseline_config_id, r.status, r.created_at,
+                      json_extract(r.spec_json, '$.objective_text') AS objective_text,
+                      (SELECT m.content FROM ai_run_messages m
+                        WHERE m.ai_run_id = r.id AND m.phase = 'interview' AND m.role = 'user'
+                        ORDER BY m.seq LIMIT 1) AS first_message
+                 FROM ai_runs r ORDER BY r.created_at DESC""").fetchall()
+    return [dict(row) for row in rows]
+
+
 def list_messages(ai_run_id, phase=None) -> list[dict]:
-    """Every message for one ai_run, in replay order. phase=None returns
-    both phases interleaved in (phase, seq) order - interview rows (all
-    phase='interview') sort before optimize rows, matching session order
-    since the interview always finishes before optimize begins."""
+    """Every message for one ai_run, in replay order. Within one phase that is
+    `seq`. phase=None returns both phases in the order they were written
+    (created_at): a run can hold several search segments with chat messages
+    between them, so interview rows no longer all come before optimize rows."""
     query = 'SELECT * FROM ai_run_messages WHERE ai_run_id = ?'
     params = [ai_run_id]
     if phase is not None:
-        query += ' AND phase = ?'
+        query += ' AND phase = ? ORDER BY seq'
         params.append(phase)
-    query += ' ORDER BY phase, seq'
+    else:
+        query += ' ORDER BY created_at, phase, seq'
     with _connection() as conn:
         rows = conn.execute(query, params).fetchall()
     return [_message_row_to_record(r) for r in rows]
@@ -384,7 +401,7 @@ def list_messages(ai_run_id, phase=None) -> list[dict]:
 
 def delete_ai_run(ai_run_id) -> None:
     """Removes an ai_run and all its messages. No-op if it doesn't exist.
-    Only ever an explicit user action (Delete in History) - a stopped or
+    Only ever an explicit user action (Delete in the chat sidebar) - a stopped or
     cancelled run is kept, with its plan and every finished round."""
     with _connection() as conn:
         conn.execute('DELETE FROM ai_run_messages WHERE ai_run_id = ?', (ai_run_id,))

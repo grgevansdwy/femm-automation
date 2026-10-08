@@ -58,6 +58,17 @@ class InterviewRunner:
         self._persisted_spec = None
         return InterviewState(baseline_config_id=baseline_config_id, settings=load_settings())
 
+    def attach(self, ai_run_id: str, state: InterviewState) -> None:
+        """Points this runner at a stored run whose chat was rebuilt from the
+        database (restore.restore_interview()): new messages are saved after
+        the stored ones, and the stored plan is not written again."""
+        from agent.services.run_log import RunLog
+        self.ai_run_id = ai_run_id
+        self.discarded = False
+        self._log = RunLog(ai_run_id)
+        self._persisted_count = len(state.transcript)
+        self._persisted_spec = state.spec
+
     def _ensure_run(self, baseline_config_id: str) -> None:
         """The user's first message: the run gets its row ('interviewing') and its log."""
         if self.ai_run_id is None:

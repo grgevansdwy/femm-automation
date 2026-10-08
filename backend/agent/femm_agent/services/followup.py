@@ -7,7 +7,7 @@ AgentRunner.continue_run().)
 That lock is structural, not a prompt instruction: the model is called with
 no tools at all, so it has no finalize_spec to re-plan with and no
 propose_coilset to try a design with. The prompt only tells it what to say
-instead (inputs are locked - Restart and start a new task).
+instead (inputs are locked - start a new chat).
 
 Each turn rebuilds the run's context from the live AgentRunState (plan,
 baseline numbers, every round so far, the best candidate), so answers track

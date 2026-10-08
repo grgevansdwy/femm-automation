@@ -130,6 +130,15 @@ class AgentRunner:
         self._threads[state.id] = thread
         thread.start()
 
+    def adopt(self, state: AgentRunState) -> None:
+        """Takes in a finished run rebuilt from the database
+        (restore.restore_run()), so it can be continued here like one that
+        ran in this session."""
+        if state.log is None:
+            from agent.services.run_log import RunLog
+            state.log = RunLog(state.id)
+        self.runs[state.id] = state
+
     def continue_run(self, run_id: str) -> AgentRunState:
         """ "continue": searches on from where a finished search stopped, as a
         new segment of the same run - a fresh budget (the run's own settings),

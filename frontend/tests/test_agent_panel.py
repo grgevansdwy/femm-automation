@@ -73,7 +73,7 @@ def test_interview_hands_off_to_a_real_optimize_run_only_after_confirmation():
     assert len(state.run_state.rounds) >= 1
 
     # The whole session (interview + optimize) must be persisted under that
-    # one ai_run id, replayable from the history repository agent_history.py
+    # one ai_run id, replayable from the repository agent_sidebar.py
     # reads. AgentRunner._persist() runs in the same thread's `finally`
     # right after status flips in memory, but isn't instantaneous (writes
     # one row per round plus the final status) - poll for it to actually
@@ -108,48 +108,49 @@ def test_interview_hands_off_to_a_real_optimize_run_only_after_confirmation():
     assert any(m["content"] == state.interview_state.transcript[-2]["content"]
                for m in list_messages(state.run_state.id, phase="interview"))
 
-    # Restart on a finished run keeps it in History and opens a fresh chat.
+    # A new chat leaves the finished run as it is, in the sidebar.
     finished_id = state.run_state.id
-    state.restart()
+    state.new_chat()
     assert state.phase == "interview" and state.run_state is None
     assert state.interview_runner.ai_run_id != finished_id
     assert get_ai_run(finished_id)["status"] == finished_status
 
 
-def test_switching_baseline_asks_first_only_when_there_is_a_chat_to_lose():
-    """No LLM needed - the transcript is filled in by hand."""
-    from agent.repositories.ai_run_repository import get_ai_run
+def test_picking_another_baseline_opens_a_new_chat_and_keeps_the_one_with_messages(monkeypatch):
+    """A scripted interview AI - no server needed."""
+    from agent.input_chat.services import interview
+    from agent.repositories.ai_run_repository import get_ai_run, list_ai_runs
     from engine.repositories.coilset_repository import restore_config, get_config
 
     other = {**get_config("base_coil"), "id": "other_coil", "name": "other_coil"}
     restore_config(other)
+    monkeypatch.setattr(interview, "call_llm",
+                        lambda messages, tools, **kwargs: {"role": "assistant", "content": "At which distances?"})
 
     state = AgentPanelState(JobRunner())
     state.select_config("base_coil")
-    assert state.request_baseline("base_coil") is False, "re-picking the same baseline does nothing"
+    untouched = state.chat
+    state.request_baseline("base_coil")
+    assert state.chat is untouched, "re-picking the same baseline does nothing"
 
-    # Empty chat: switches straight away.
-    assert state.request_baseline("other_coil") is False
-    assert state.selected_config_id == "other_coil"
-
-    # A chat with messages: only records the pick until confirmed.
-    first_id = state.interview_runner.ai_run_id
-    state.interview_state.transcript.append({"role": "user", "content": "cut tank ESR"})
-    assert state.request_baseline("base_coil") is True
-    assert state.selected_config_id == "other_coil" and state.pending_baseline_id == "base_coil"
-    state.cancel_baseline_change()
-    assert state.pending_baseline_id is None and state.interview_state.transcript
-
-    assert state.request_baseline("base_coil") is True
-    state.confirm_baseline_change()
-    assert state.selected_config_id == "base_coil" and not state.interview_state.transcript
-    assert get_ai_run(first_id) is None, "the abandoned planning chat isn't kept"
-
-    # An unsent draft counts as something to lose too.
+    # An empty chat has nothing to keep: its unsent draft moves to the new one.
     state.chat_input = "half-typed objective"
-    assert state.request_baseline("other_coil") is True
-    state.confirm_baseline_change()
-    assert state.selected_config_id == "other_coil" and state.chat_input == ""
+    state.request_baseline("other_coil")
+    assert state.selected_config_id == "other_coil" and state.chat_input == "half-typed objective"
+    assert list_ai_runs() == []
+
+    # A chat with messages stays as it is - still planning, and it can be opened again.
+    state.send_chat()
+    _poll_until(lambda: not state.interview_runner.busy, timeout=10)
+    first_id, first_chat = state.interview_runner.ai_run_id, state.chat
+    state.request_baseline("base_coil")
+    assert state.selected_config_id == "base_coil" and not state.interview_state.transcript
+    assert state.interview_runner.ai_run_id is None and state.chat_input == ""
+    assert get_ai_run(first_id)["status"] == "interviewing", "not cancelled, not deleted"
+
+    state.open_chat(first_id)
+    assert state.chat is first_chat and state.selected_config_id == "other_coil"
+    assert [m["content"] for m in state.interview_state.transcript] == ["half-typed objective", "At which distances?"]
 
 
 # --- run lifecycle, Stop and Continue: scripted AI and an instant solver, no server needed ---------
@@ -244,46 +245,26 @@ def _wait_for_abort(n, kwargs):
     raise LLMError("aborted", "", elapsed_s=0.0)
 
 
-def test_no_run_is_saved_until_the_first_message_and_a_closed_chat_is_kept_as_cancelled(monkeypatch):
+def test_no_run_is_saved_until_the_first_message_and_a_new_chat_leaves_the_plan_waiting(monkeypatch):
     from agent.repositories.ai_run_repository import get_ai_run, list_ai_runs, list_messages
 
     empty = AgentPanelState(_InstantSolver())
     empty.select_config("base_coil")
-    empty.restart()
+    empty.new_chat()
     empty.select_config("base_coil")
-    assert list_ai_runs() == [], "opening the panel, picking a baseline and restarting leave no row behind"
+    assert list_ai_runs() == [], "opening the panel, picking a baseline and New leave no row behind"
 
     state, _ = _planned_state(monkeypatch, lambda n, kwargs: _proposal(n))
     run_id = state.interview_runner.ai_run_id
     assert get_ai_run(run_id)["status"] == "plan_ready", "a proposed plan is not a running search"
     assert get_ai_run(run_id)["started_at"] is None
 
-    state.restart()  # the user never clicked Start Search
+    state.new_chat()  # the user never clicked Start Search
     row = get_ai_run(run_id)
-    assert row["status"] == "cancelled" and row["spec"]["objective_text"] == "cut tank ESR in half"
+    assert row["status"] == "plan_ready" and row["spec"]["objective_text"] == "cut tank ESR in half"
     assert [m["role"] for m in list_messages(run_id)][0] == "user", "the conversation is kept with it"
     assert state.phase == "interview" and not state.interview_state.transcript
     assert state.interview_runner.ai_run_id is None and len(list_ai_runs()) == 1
-
-
-def test_restart_during_a_search_stops_it_and_keeps_it_in_history(monkeypatch):
-    from agent.repositories.ai_run_repository import get_ai_run, list_messages
-
-    state, _ = _planned_state(monkeypatch, _wait_for_abort)
-    run_state = _start(state)
-    assert get_ai_run(run_state.id)["status"] == "running" and state.baseline_locked
-    _poll_until(lambda: run_state.rounds, timeout=10)
-
-    state.restart()
-    assert run_state.cancelled
-    assert state.phase == "interview" and state.run_state is None and not state.baseline_locked
-
-    _poll_until(lambda: get_ai_run(run_state.id)["status"] != "running", timeout=10)
-    row = get_ai_run(run_state.id)
-    assert (row["status"], row["stop_reason"]) == ("cancelled", "user_stopped")
-    assert row["spec"] is not None and row["baseline_coilset"]["tank_center_r"] == 72.688
-    assert len(list_messages(run_state.id, phase="optimize")) == 1, "the round that was in flight is recorded"
-    assert list_messages(run_state.id, phase="interview"), "and so is the conversation"
 
 
 def test_stop_and_keep_the_best_ends_the_search_but_stays_on_the_run(monkeypatch):
@@ -333,30 +314,6 @@ def test_typing_continue_resumes_the_same_run_with_a_fresh_budget(monkeypatch):
     state.send_chat()
     _poll_until(lambda: not state.interview_runner.busy, timeout=10)
     assert len(run_state.rounds) == 6 and state.interview_state.transcript[-1]["content"] == "It ran out of rounds."
-
-
-def test_history_lists_every_status_with_its_own_label_and_delete_is_explicit(monkeypatch):
-    from agent.repositories import ai_run_repository as ar
-    from frontend.screen_agent import agent_history
-
-    assert set(agent_history.STATUS_LABELS) == set(ar.STATUSES), "every status has a label"
-    assert len({label for label, _ in agent_history.STATUS_LABELS.values()}) == len(ar.STATUSES)
-
-    planning = ar.create_ai_run("base_coil")["id"]
-    cancelled = ar.create_ai_run("base_coil")["id"]
-    ar.transition(cancelled, "cancelled")
-    running = ar.create_ai_run("base_coil")["id"]
-    ar.finalize_spec(running, {"distances": [5.0]})
-    ar.transition(running, "running")
-
-    history = agent_history.AgentHistoryState()
-    assert {r["id"] for r in history.visible_runs()} == {planning, cancelled, running}, "nothing is hidden"
-
-    history.selected_id = cancelled
-    history.delete(cancelled)
-    assert ar.get_ai_run(cancelled) is None and history.selected_id is None
-    history.delete(running)
-    assert ar.get_ai_run(running) is not None, "a search still running is not deleted from History"
 
 
 def test_off_topic_shows_a_fixed_message_never_the_models_own_words():
