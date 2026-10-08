@@ -260,6 +260,15 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     if fragility.unchecked_passing(state):
         fragility.run_episode(state, job_runner)
 
+    if state.revised_start:
+        # A revised plan kept the memory. If a design already tried meets the new
+        # goal, has now survived its check, and the goal has nothing to push
+        # further, there is nothing to search for.
+        state.revised_start = False
+        if state.winner is not None and not progress.can_improve_after_pass(spec) and not state.cancelled:
+            state.stop_reason = "nothing_left"
+            return
+
     while True:
         # Checkpoints for a user stop (see AgentRunState.cancelled) and the
         # budget: here, after the LLM call returns, before a round's solves
@@ -427,7 +436,10 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
                 scored = score(p.candidate, metrics, baseline, baseline_metrics, spec)
                 scored.changed_fields = p.changed_fields
                 stored = tool_result(scored, spec)
-                label = f"C{len(designs) + 1}"  # run-wide, in the order results are collected
+                # Run-wide, in the order results are collected. Counted over every simulated
+                # design the run has stored, not over the memory: after a revised plan the
+                # memory can be shorter than the run (services/replan.py) and a label is never reused.
+                label = f"C{sum(1 for r in state.rounds for c in r.candidates if c.label) + 1}"
                 round_state.candidates.append(CandidateResult(
                     delta=p.delta, valid=True, tool_result=stored, candidate_coilset=p.candidate_dict,
                     rationale=p.rationale, label=label, base_label=p.base_label, step=p.step,

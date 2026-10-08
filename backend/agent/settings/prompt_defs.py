@@ -70,11 +70,19 @@ PROMPT_DEFS = {d.key: d for d in [
               required=("sim_lines", "derived_lines", "variable_lines")),
 
     PromptDef("followup_system", "Follow up chat",
-              "Sent to the AI for the chat after a search has started. It answers questions about the run "
-              "and changes nothing (typing \"continue\" is handled by the app, not by this prompt).",
+              "Sent to the AI for the chat after a search has started. It answers questions about the run; "
+              "once the search has ended it may also turn a request to change the goal into a revised plan, "
+              "which the app checks and you start yourself (typing \"continue\" is handled by the app, not by "
+              "this prompt).",
               {"running": "set while the search is still running, empty once it has finished",
+               "can_replan": "set when the search has ended and the AI may propose a revised plan",
+               "locked": "set when the search has ended and the plan cannot be changed in this chat",
                "run_data": "the live snapshot of the run: plan, budget used, progress verdict, baseline, rounds, "
-                           "best candidate"},
+                           "best candidate",
+               "sim_lines": "the simulated quantities an objective can be set on, one per line",
+               "derived_lines": "outer-diameter quantities with their baseline values",
+               "variable_lines": "the design variables open in Search fields, with baseline values and limits",
+               "closed_fields": "the fields that are closed in Search fields"},
               required=("run_data",),
-              switches=("running",)),
+              switches=("running", "can_replan", "locked")),
 ]}

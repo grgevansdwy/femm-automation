@@ -65,6 +65,7 @@ def test_prompt_wording_tracks_whether_the_search_is_still_running():
     running = followup.followup_system_prompt(_run_state(AgentRunStatus.RUNNING))
     finished = followup.followup_system_prompt(_run_state())
     assert "still running" in running and "its search keeps running" in running and "one search runs at a time" in running
+    assert "plan of a running search is locked" in running and "Stop and keep the best" in running
     assert "has finished" in finished and "this one stays in the list" in finished
     assert "Restart" not in running + finished, "that button is gone: a new chat is + New"
     assert "BEST CANDIDATE SO FAR" in running and "PROPOSED DESIGN" in finished

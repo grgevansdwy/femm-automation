@@ -214,7 +214,7 @@ def test_a_stopped_search_is_kept_with_its_rounds_and_its_best_design(monkeypatc
     assert row["best_coilset"]["tank_center_r"] == 71.0 and row["spec"] is not None
     assert _seqs(state.id) == [1, 2] and len(sent) == 2
     assert state.rounds[1].candidates[0].error_code == "search_stopped"
-    assert row["budget"] == [state.budget.as_dict(1)] and row["budget"][0]["rounds_used"] == 2
+    assert row["budget"] == [runner._budget_entry(state)] and row["budget"][0]["rounds_used"] == 2
     print("  ok  Stop keeps the run: status cancelled, every finished round, the best design so far")
 
 
