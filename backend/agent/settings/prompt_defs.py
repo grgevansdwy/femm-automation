@@ -44,7 +44,7 @@ PROMPT_DEFS = {d.key: d for d in [
               "how to propose candidates, and the physics guidance - everything the AI knows while searching.",
               {"baseline_config_id": "the baseline's name",
                "objectives": "the objectives, one per line, with baseline values",
-               "free_fields": "the fields the AI may change, with baseline values (JSON)",
+               "free_fields": "the fields the AI may change, one per line, with baseline value and allowed values",
                "pinned": "values you pinned (empty if none)",
                "distances": "the distances being simulated, e.g. [3.0, 5.0]",
                "n_candidates": "candidates per turn when it is more than one (empty when one at a time)",
@@ -62,11 +62,10 @@ PROMPT_DEFS = {d.key: d for d in [
               "Sent to the AI at the start of the chat where it turns your request into an objective. "
               "It tells the AI what it may ask about and what a finished objective looks like.",
               {"baseline_config_id": "the baseline's name",
-               "present": "optional structural details the baseline has",
-               "absent": "optional structural details the baseline lacks",
+               "closed_fields": "the design fields closed in Settings > Search fields",
                "sim_lines": "the simulated quantities you can ask about, one per line",
                "derived_lines": "outer-diameter quantities with their baseline values",
-               "variable_lines": "design variables free by default with their baseline values",
+               "variable_lines": "the design variables open to the search, with baseline value and limit",
                "default_distances": "the built-in default distances, e.g. [3.0, 5.0]"},
               required=("sim_lines", "derived_lines", "variable_lines")),
 

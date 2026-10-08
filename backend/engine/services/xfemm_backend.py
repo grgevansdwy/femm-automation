@@ -240,6 +240,15 @@ def parse_femm_number(text):
     return complex(float(real_part), sign * float(imag_part))
 
 
+SOLVE_TIMEOUT_S = 120
+
+
+class SolverTimeout(RuntimeError):
+    """One femmcli solve ran past SOLVE_TIMEOUT_S. Its own class so a caller
+    that only has the job's repr(exc) text (frontend's JobRunner) can still
+    tell a timeout from a crash by the name it starts with."""
+
+
 def run_femmcli(script_text):
     """Writes `script_text` to a fresh per-call temp directory, runs it
     through femmcli, and returns the parsed key->float/complex result dict.
@@ -252,11 +261,14 @@ def run_femmcli(script_text):
 
         femmcli = os.path.join(XFEMM_BIN_DIR, "femmcli")
         init_lua = os.path.join(XFEMM_BIN_DIR, "init.lua")
-        proc = subprocess.run(
-            [femmcli, "--lua-base-dir", XFEMM_BIN_DIR, "--lua-init", init_lua,
-             "--lua-script", script_path],
-            cwd=workdir, capture_output=True, text=True, timeout=120,
-        )
+        try:
+            proc = subprocess.run(
+                [femmcli, "--lua-base-dir", XFEMM_BIN_DIR, "--lua-init", init_lua,
+                 "--lua-script", script_path],
+                cwd=workdir, capture_output=True, text=True, timeout=SOLVE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            raise SolverTimeout(f"femmcli did not finish within {SOLVE_TIMEOUT_S} s") from None
         result_path = os.path.join(workdir, _RESULT_FILE)
         if proc.returncode != 0 or not os.path.exists(result_path):
             raise RuntimeError(

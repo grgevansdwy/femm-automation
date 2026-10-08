@@ -270,15 +270,14 @@ def _audit(record: dict, baseline, best) -> dict | None:
     """The live summary's structural check, rebuilt from what the run
     stored. None (plain diff, no check line) if the saved spec doesn't fit
     today's VariableSpec, or either coilset couldn't be rebuilt."""
-    from agent.input_chat.models.variables import VariableSpec, allowed_fields, audit_changed_fields
+    from agent.input_chat.models.variables import audit_changed_fields, stored_allowed_fields
     if baseline is None or best is None:
         return None
     try:
-        raw = dict((record["spec"] or {}).get("variable_spec") or {})
-        for key in ("enabled_groups", "excluded_fields"):
-            raw[key] = set(raw.get(key) or [])
-        return audit_changed_fields(baseline, best, allowed_fields(baseline, VariableSpec(**raw)))
-    except (KeyError, TypeError):
+        # The run's own copy of the Search fields table, or - for a run stored
+        # before the table existed - the rule in force then.
+        return audit_changed_fields(baseline, best, stored_allowed_fields(baseline, record["spec"] or {}))
+    except (KeyError, TypeError, AttributeError):
         return None
 
 

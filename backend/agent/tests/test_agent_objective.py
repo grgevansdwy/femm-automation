@@ -20,7 +20,7 @@ from agent.femm_agent.services.scorer import (
     blended_score, coil_diameters, evaluate, points_past_bar, preference_score, rank_key, shortfall, tool_result,
 )
 from agent.input_chat.models.spec import AgentSpec
-from agent.input_chat.models.variables import VariableSpec, allowed_fields, audit_changed_fields, free_fields_for
+from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, free_fields_for
 from engine.repositories.coilset_repository import get_coilset
 
 DISTANCES = [3.0, 5.0, 8.0, 12.0]
@@ -385,21 +385,53 @@ def test_build_spec_pins_values_expands_features_and_checks_quantities_are_searc
     rejects("pinned", fixed_values={"loop_r": 60},
             objectives=[{"metric": "loop_r", "kind": "reduce", "tolerance_pct": 5}])
     rejects("isn't free", objectives=[{"metric": "tank_PCB_thickness", "kind": "reduce", "tolerance_pct": 5}])
-    rejects("neither a CoilSet field nor a consent group", excluded_fields=["tank_feritte"])
-    rejects("must be one of", fixed_values={"rc_trace_thickness": 0.1})
+    rejects("neither a CoilSet field nor a group", excluded_fields=["tank_feritte"])
+    rejects("not one of the allowed values", fixed_values={"rc_trace_thickness": 0.1})
     print("  ok  _build_spec() pins fixed_values, expands feature exclusions, rejects unsearchable objectives")
+
+
+def test_build_spec_blocks_a_plan_whose_baseline_or_pin_is_outside_a_limit():
+    from agent.settings.settings import AgentSettings
+    baseline = get_coilset('base_coil')
+    tight = AgentSettings(search_fields={"tank_center_r": {"enabled": True, "min": None, "max": baseline.tank_center_r - 1}})
+    with pytest.raises(ValueError, match="tank_center_r is .* on the baseline, outside its Search fields limit"):
+        _build_spec(_finalize_args(), "base_coil", baseline, tight)
+    # Excluding the field keeps it at baseline, so its limit no longer blocks the plan.
+    assert _build_spec(_finalize_args(excluded_fields=["tank_center_r"]), "base_coil", baseline, tight)
+
+    with pytest.raises(ValueError, match="num_tank_layers.*Allowed: 1 to 8"):
+        _build_spec(_finalize_args(fixed_values={"num_tank_layers": 12}), "base_coil", baseline)
+    roomy = AgentSettings(search_fields={"num_tank_layers": {"enabled": True, "min": None, "max": None}})
+    spec = _build_spec(_finalize_args(fixed_values={"num_tank_layers": 12}), "base_coil", baseline, roomy)
+    assert spec.variable_spec.fixed_values == {"num_tank_layers": 12}
+    assert spec.settings.search_fields == roomy.search_fields, "the run carries its own copy of the table"
+
+
+def test_build_spec_checks_distances_are_in_range_and_drops_duplicates():
+    baseline = get_coilset('base_coil')
+    spec = _build_spec(_finalize_args(distances=[5, 10.0, 5.0, 10]), "base_coil", baseline)
+    assert spec.distances == [5.0, 10.0]
+    for bad in ([0], [-5], [250], [5, 1000], [float("nan")]):
+        with pytest.raises(ValueError, match="distances must be above 0 and at most 200 mm"):
+            _build_spec(_finalize_args(distances=bad), "base_coil", baseline)
+    assert _build_spec(_finalize_args(distances=[200]), "base_coil", baseline).distances == [200.0]
 
 
 def test_system_prompt_is_computed_from_the_run_not_hardcoded():
     baseline = get_coilset('base_coil')
-    # base_coil has ferrite fitted, but that alone no longer frees it (see
+    # base_coil has ferrite fitted, but that alone does not open it (see
     # test_agent_variables.py) - the ferrite physics note only shows up once
-    # the run's own spec actually consents to it.
+    # the run's own Search fields table has a ferrite field enabled.
+    from agent.input_chat.models.variables import search_field_table
+    from agent.settings.settings import AgentSettings
+    settings = AgentSettings(search_fields={"tank_mu": {"enabled": True, "min": None, "max": 2000}})
     spec = AgentSpec(baseline_config_id="base_coil", distances=[2.0, 20.0],
-                     objectives=[Objective("L_rc", "increase", 5.0)],
-                     variable_spec=VariableSpec(enabled_groups={"tank_ferrite", "rc_ferrite"}))
-    free = free_fields_for(baseline, spec.variable_spec)
+                     objectives=[Objective("L_rc", "increase", 5.0)], settings=settings)
+    free = free_fields_for(baseline, spec.variable_spec, search_field_table(settings))
     prompt = system_prompt(baseline, free, spec, _baseline_metrics())
+    assert "Ferrite (tank_mu)" in prompt
+    assert f"tank_mu: {baseline.tank_mu:g}  (allowed: 0 to 2000)" in prompt, "each open field shows its limit"
+    assert "num_tank_layers: 1  (allowed: 1 to 8)" in prompt
     assert f"loop {baseline.loop_r:g}mm" in prompt and "[2.0, 20.0] mm" in prompt
     assert "56-73" not in prompt and "M23" not in prompt.split("Physics reference")[1], \
         "no baseline- or objective-specific leftovers in the physics reference"

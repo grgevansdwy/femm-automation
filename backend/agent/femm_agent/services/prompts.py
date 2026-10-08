@@ -20,9 +20,9 @@ import dataclasses
 import json
 
 from agent.input_chat.models.objective import QUANTITY_GLOSSES, is_per_distance
-from agent.femm_agent.models.schema import _THICKNESS_ENUM
+from agent.femm_agent.models.schema import _THICKNESS_ENUM, limit_text
 from agent.femm_agent.services.scorer import coil_diameters
-from agent.input_chat.models.variables import CONSENT_GROUPS
+from agent.input_chat.models.variables import FIELD_GROUPS
 from agent.settings.settings import AgentSettings
 from agent.settings.templating import render
 
@@ -37,7 +37,7 @@ def _physics_values(start, free_fields: dict, distances) -> dict:
     radii. `start` is the CoilSet every candidate starts from (baseline + any
     pinned values)."""
     def free(features):
-        return ", ".join(f for feat in features for f in [CONSENT_GROUPS[feat]["flag"], *CONSENT_GROUPS[feat]["fields"]]
+        return ", ".join(f for feat in features for f in [FIELD_GROUPS[feat]["flag"], *FIELD_GROUPS[feat]["fields"]]
                          if f in free_fields)
 
     radii = {"loop": start.loop_r, "tank": start.tank_center_r, "rc": start.rc_radius}
@@ -71,7 +71,11 @@ def system_prompt(baseline, free_fields: dict, spec, baseline_metrics: dict) -> 
     settings = spec.settings
     fixed = spec.variable_spec.fixed_values
     start = dataclasses.replace(baseline, **fixed)
-    free_values = {k: v for k, v in dataclasses.asdict(baseline).items() if k in free_fields}
+    values = dataclasses.asdict(baseline)
+    # One line per open field: its baseline value and what it may be set to (the
+    # run's Search fields limits - the same schema entries coerce_delta() enforces).
+    free_lines = "\n".join(f"  {name}: {values[name]:g}  (allowed: {limit_text(schema)})"
+                           for name, schema in free_fields.items())
     objective_lines = "\n".join(
         f"  {'REQUIRED' if o.required else 'PREFERRED'}: {o.kind} {o.metric} ({QUANTITY_GLOSSES[o.metric]}) - "
         f"{o.describe()}  [{'every distance' if is_per_distance(o.metric) else 'no distance'}; "
@@ -83,7 +87,7 @@ def system_prompt(baseline, free_fields: dict, spec, baseline_metrics: dict) -> 
     return render(settings.prompt("search_system"), {
         "baseline_config_id": spec.baseline_config_id,
         "objectives": objective_lines,
-        "free_fields": json.dumps(free_values, indent=2),
+        "free_fields": free_lines,
         "pinned": pinned,
         "distances": spec.distances,
         # Several candidates per turn is a different instruction from one at a

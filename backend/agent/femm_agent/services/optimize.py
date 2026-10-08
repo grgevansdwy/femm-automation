@@ -8,6 +8,10 @@ The search does not stop at the first design that meets the goal: it keeps
 looking for a better one and is ended by code, never by the model's say-so
 (the model can only stop by not proposing). The stop rules, their order, and
 the budget are in optimize_loop() and state.Budget.
+
+Meeting the goal is not yet winning: when the search is about to stop, the
+best passing design is put through the fragility check (services/fragility.py),
+and only a design that survives it is the winner (state.winner).
 """
 
 import dataclasses
@@ -16,13 +20,19 @@ import time
 
 from agent.services.llm_client import LLMError, call_llm
 from agent.femm_agent.services.prompts import system_prompt
-from agent.femm_agent.models.schema import PROPOSE_TOOL_NAME, RATIONALE_KEY, build_tools, coerce_delta
-from agent.femm_agent.services import progress
+from agent.femm_agent.models.schema import (
+    NEVER_EVALUATED, PROPOSE_TOOL_NAME, RATIONALE_KEY, Rejection, build_tools, coerce_delta,
+)
+from agent.femm_agent.services import fragility, progress
 from agent.femm_agent.services.scorer import (
-    SimulationLimit, evaluate_async, misses_summary, objective_summary, rank_key, score, tool_result, wait_for_jobs,
+    SimulationLimit, SolveFailed, evaluate_async, misses_summary, objective_summary, rank_key, score, tool_result,
+    wait_for_jobs,
 )
 from agent.femm_agent.models.state import Budget, CandidateResult, RoundState, RoundStatus, Tried, now
-from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, free_fields_for
+from agent.input_chat.models.variables import (
+    NUMERIC_FIELDS, allowed_fields, audit_changed_fields, free_fields_for, search_field_table,
+)
+from engine.core import validate_coilset
 
 
 class RoundFailed(Exception):
@@ -37,9 +47,6 @@ class RoundFailed(Exception):
 RETRY_PAUSE_S = 5.0  # between AI tries - long enough for a momentary server hiccup to clear
 MIN_REQUEST_S = 1.0  # with less than this left of the search's time limit, no AI request is started
 
-_SIMULATION_LIMIT_ERROR = ("not simulated: the search's simulation limit was reached - "
-                           "this proposal was not tried")
-_TIME_LIMIT_ERROR = "not simulated: the search's time limit was reached - this proposal was not tried"
 
 
 def _ask_for_proposals(state, round_state, send_messages, tools):
@@ -133,6 +140,14 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     The time limit is also checked before an AI request and before solves are
     queued: neither starts after it.
 
+    Whichever rule fires (except a stop by the user), passing designs that have
+    not been checked go through the fragility check first (fragility.run_episode).
+    If one survives, the search ends with it as the winner. If designs passed but
+    none survived and the rule was not a budget limit, the search carries on
+    instead of stopping: the model is told which designs failed, they no longer
+    count as passes, and the no-improvement count starts again. The budget keeps
+    a reserve for the check (Budget.reserved_simulations / reserved_s).
+
     `on_round_done(state)`, if given, is called each time a round finishes (however it
     ended) - AgentRunner uses it to save the rounds so far."""
     spec = state.spec
@@ -144,6 +159,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         state.budget = Budget.for_spec(spec)
     budget = state.budget
     budget.start()
+    budget.reserved_simulations = fragility.simulation_reserve(spec, budget.max_simulations)
 
     # The baseline's own solves are free: no budget. (Cache hits after the first time.)
     baseline_metrics = wait_for_jobs(evaluate_async(
@@ -151,8 +167,11 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         config_id=spec.baseline_config_id, config_name=baseline.config_name))
     state.baseline_metrics = baseline_metrics
 
-    free_fields = free_fields_for(baseline, spec.variable_spec)
-    allowed = allowed_fields(baseline, spec.variable_spec)
+    # The run's own copy of the Search fields table (spec.settings is the
+    # snapshot taken when the search started), never the live settings.
+    table = search_field_table(spec.settings)
+    free_fields = free_fields_for(baseline, spec.variable_spec, table)
+    allowed = allowed_fields(baseline, spec.variable_spec, table)
     tools = build_tools(free_fields, spec.baseline_config_id)
 
     user_message = {"role": "user", "content": "Find the best candidate you can that meets the objective. Start proposing."}
@@ -182,7 +201,10 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     def judge(round_state):
         """Code's verdict after this round, kept on the state and the round."""
         counted = [r.round_num for r in state.rounds if not r.no_reply]
-        state.progress = progress.assess(tried, counted, spec, free_fields, state.segment_start_round)
+        state.progress = progress.assess(tried, counted, spec, free_fields,
+                                         max(state.segment_start_round, state.progress_reset_round))
+        # Once a design is owed a check, the search stops early enough to make it.
+        budget.reserved_s = fragility.time_reserve(budget.time_limit_s) if fragility.unchecked_passing(state) else 0.0
         round_state.verdict = state.progress.verdict
         round_state.rounds_since_improvement = state.progress.rounds_since_improvement
 
@@ -211,13 +233,39 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         return (verdict is not None and not verdict.passed and not state.stalled_notice_sent
                 and verdict.rounds_since_improvement >= settings.stall_rounds)
 
+    def conclude(reason: str) -> list | None:
+        """A stop rule fired. Runs the fragility check on what is owed one and
+        returns None when the search really ends (state.stop_reason is set), or
+        the checks that failed when it should carry on instead."""
+        state.stop_reason = reason
+        if reason == "user_stopped":
+            # No solve is started for a search the user stopped: nothing is checked.
+            state.unchecked_pass = bool(fragility.unchecked_passing(state))
+            fragility.refresh_best(state)
+            return None
+        episode = fragility.run_episode(state, job_runner)
+        carry_on = (state.winner is None and episode.failed and not episode.out_of_budget and not state.cancelled
+                    and reason not in ("rounds", "time", "simulations") and budget.exhausted() is None)
+        if not carry_on:
+            return None
+        state.stop_reason = None
+        state.progress_reset_round = len(state.rounds)
+        state.stalled_notice_sent = False
+        return episode.failed
+
+    # A "continue" after a search that ended with a passing design it could
+    # not check starts with that check.
+    if fragility.unchecked_passing(state):
+        fragility.run_episode(state, job_runner)
+
     while True:
         # Checkpoints for a user stop (see AgentRunState.cancelled) and the
         # budget: here, after the LLM call returns, before a round's solves
         # are queued, and before each candidate's result is collected - an
         # in-flight FEMM solve can't be interrupted, only waited out.
-        state.stop_reason = "user_stopped" if state.cancelled else budget.exhausted()
-        if state.stop_reason is not None:
+        reason = "user_stopped" if state.cancelled else budget.exhausted()
+        if reason is not None:
+            conclude(reason)
             return
 
         # memory must be role "user" not "system" - the office server's chat
@@ -241,10 +289,10 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         if msg is None:
             # Abandoned: the user stopped the search, or its time limit ran out.
             round_state.no_reply = True
-            state.stop_reason = "user_stopped" if state.cancelled else "time"
             round_state.reasoning_text = ("No proposal - the search was stopped." if state.cancelled
                                           else "No proposal - the search's time limit was reached.")
             finish_round(round_state)
+            conclude("user_stopped" if state.cancelled else "time")
             return
 
         # Resent next round without "reasoning_content": the chain-of-thought
@@ -274,9 +322,15 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         judge(round_state)
         finish_round(round_state)
 
-        state.stop_reason = stop_rule() or ("model_stopped" if no_tool_call_streak >= 2 else None)
-        if state.stop_reason is not None:
-            return
+        reason = stop_rule() or ("model_stopped" if no_tool_call_streak >= 2 else None)
+        if reason is not None:
+            failed_checks = conclude(reason)
+            if failed_checks is None:
+                return
+            # Designs passed, none survived the check, and the budget is not spent: carry on.
+            notes.append(fragility.resume_note(failed_checks))
+            no_tool_call_streak = 0
+            judge(round_state)  # the failed designs no longer count as passes
         if stalled_notice_due():
             notes.append(progress.stalled_notice(state.progress))
             state.stalled_notice_sent = True
@@ -308,15 +362,18 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
         _prepare(tc, i, spec.candidates_per_round, baseline, fixed_values, free_fields, allowed)
         for i, tc in enumerate(tool_calls)
     ]
+    for p in proposals:
+        if p.exception is not None:
+            _warn(state, round_state, "optimize_loop.prepare", f"could not prepare {p.delta}", p.exception)
 
     launched: dict[str, dict] = {}  # candidate JSON -> its jobs, so a repeat within the round isn't solved twice
-    refuse = None  # set once nothing more may be queued this round: the reason sent back for the rest
+    refuse = None  # set once nothing more may be queued this round: the rejection code sent back for the rest
     if state.cancelled:
-        refuse = "not simulated: the search was stopped"
+        refuse = "search_stopped"
     elif budget.remaining_s() <= 0:
-        refuse = _TIME_LIMIT_ERROR
+        refuse = "time_limit"
     for p in proposals:
-        if p.error is not None:
+        if p.rejection is not None:
             continue
         key = json.dumps(p.candidate_dict, sort_keys=True, default=str)
         try:
@@ -325,12 +382,12 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
             if refuse is None:
                 p.jobs = launched[key]
         except SimulationLimit:
-            refuse = _SIMULATION_LIMIT_ERROR  # this candidate and every later one
+            refuse = "simulation_limit"  # this candidate and every later one
         except Exception as exc:
-            p.error = str(exc)
+            p.rejection = Rejection("solver_failed")
             _warn(state, round_state, "optimize_loop.launch", f"could not queue solves for {p.delta}", exc)
-        if refuse is not None and p.error is None:
-            p.error, p.over_limit = refuse, True
+        if refuse is not None and p.rejection is None:
+            p.rejection = Rejection(refuse)
 
     dropped: set[int] = set()  # id() of each job dropped from the queue because time ran out
     time_up = False
@@ -351,9 +408,9 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
                     budget.simulations_used -= 1
 
     for p in proposals:
-        if state.cancelled and p.error is None:
-            p.error, p.over_limit = "not simulated: the search was stopped", True  # its solves are not waited for
-        if p.error is None:
+        if state.cancelled and p.rejection is None:
+            p.rejection = Rejection("search_stopped")  # its solves are not waited for
+        if p.rejection is None:
             try:
                 metrics = wait_for_jobs(p.jobs, on_wait=drop_queued_when_time_is_up)
                 scored = score(p.candidate, metrics, baseline, baseline_metrics, spec)
@@ -364,23 +421,25 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
                     rationale=p.rationale,
                 ))
                 state.tried.append(Tried(round_state.round_num, p.delta, scored, result, state.segment))
-                # Best across the whole run - every attempt and segment.
-                if state.best is None or rank_key(scored, spec.favourite_metric) < rank_key(state.best, spec.favourite_metric):
-                    state.best = scored
+                # Best across the whole run - every attempt and segment - among
+                # designs that have not failed a fragility check.
+                fragility.refresh_best(state)
             except Exception as exc:
                 if any(id(job) in dropped for job in p.jobs.values()):
-                    p.error, p.over_limit = _TIME_LIMIT_ERROR, True
+                    p.rejection = Rejection("time_limit")
                 else:
-                    p.error = str(exc)
+                    timed_out = isinstance(exc, SolveFailed) and exc.timed_out
+                    p.rejection = Rejection("solver_timeout" if timed_out else "solver_failed")
                     _warn(state, round_state, "optimize_loop.collect", f"solve or scoring failed for {p.delta}", exc)
-        if p.error is not None:
-            # Invalid geometry becomes a rejected tool result, not a crash.
-            result = {"valid": False, "error": p.error}
+        if p.rejection is not None:
+            # A rejection is a tool result in the fixed format, not a crash - and
+            # never carries the exception's own text (that went to the run log).
+            result = p.rejection.as_result()
             round_state.candidates.append(CandidateResult(
-                delta=p.delta, valid=False, error=p.error, candidate_coilset=p.candidate_dict,
-                rationale=p.rationale,
+                delta=p.delta, valid=False, error=p.rejection.text(), error_code=p.rejection.code,
+                rejection=result, candidate_coilset=p.candidate_dict, rationale=p.rationale,
             ))
-            if not p.over_limit:  # never evaluated, so nothing to remember - it's only in this round's raw results
+            if p.rejection.code not in NEVER_EVALUATED:  # else nothing to remember - it's only in this round's raw results
                 state.tried.append(Tried(round_state.round_num, p.delta, None, result, state.segment))
 
         # Feedback for the next round. tool_call_id pairs this result with
@@ -394,8 +453,8 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
 
 @dataclasses.dataclass
 class _Proposal:
-    """One propose_coilset call on its way through a round. `error` set
-    means rejected without a solve (or, after collection, a failed solve);
+    """One propose_coilset call on its way through a round. `rejection` set
+    means turned down without a solve (or, after collection, a failed solve);
     `jobs` is set once its solves are queued (scorer.evaluate_async)."""
     tool_call_id: str | None
     delta: dict
@@ -403,54 +462,69 @@ class _Proposal:
     candidate: object = None
     candidate_dict: dict | None = None  # set as soon as a CoilSet can be built, even if it later fails validation/solving
     changed_fields: dict | None = None
-    error: str | None = None
-    # Never evaluated - past spec.candidates_per_round, or the search's simulation
-    # or time limit was reached first. Rejected unseen, not remembered as tried.
-    over_limit: bool = False
+    # Why it was turned down (None while it is still in the running). A code in
+    # schema.NEVER_EVALUATED - past spec.candidates_per_round, or the search's
+    # simulation or time limit was reached first - is not remembered as tried.
+    rejection: Rejection | None = None
     jobs: dict | None = None
+    exception: Exception | None = None  # an unexpected error while preparing, kept for the run log
+
+    @property
+    def error(self) -> str | None:
+        """The rejection as one line for a person, or None."""
+        return self.rejection.text() if self.rejection is not None else None
 
 
 def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed) -> _Proposal:
     """Builds and validates one tool call's candidate - everything that can
-    reject it before a FEMM solve is spent on it. Whatever shape the model's call
-    has, this returns a rejected _Proposal (its error is fed back to the model)
-    rather than raising - one malformed call must not cost the round's other
-    candidates, or the run."""
+    reject it before a FEMM solve is spent on it, in this order: over the
+    per-round limit, tool name, argument shape, each field (open in this
+    search, right type, inside its limit), the build, the audit against the
+    baseline, something actually changed, and the geometry (the same check
+    simulate() runs). Whatever shape the model's call has, this returns a
+    rejected _Proposal (schema.Rejection, fed back to the model in its fixed
+    format) rather than raising - one malformed call must not cost the
+    round's other candidates, or the run."""
     function = tc.get("function") or {}
     raw_args = function.get("arguments")
     delta = dict(raw_args) if isinstance(raw_args, dict) else {}
     rationale = str(delta.pop(RATIONALE_KEY, "") or "")  # not a CoilSet field - coerce_delta would reject it
     p = _Proposal(tool_call_id=tc.get("id"), delta=delta, rationale=rationale)
-    if index >= limit:
-        p.over_limit = True
-        p.error = (f"not simulated: over the limit of {limit} candidates per round - "
-                   "propose it again next round if it's still worth trying")
-        return p
-    if function.get("name") != PROPOSE_TOOL_NAME:
-        p.error = f"unknown tool {function.get('name')!r} - the only tool is {PROPOSE_TOOL_NAME}"
-        return p
-    if not isinstance(raw_args, dict):
-        p.error = (f"{PROPOSE_TOOL_NAME}'s arguments must be a JSON object of field values, "
-                   f"got {type(raw_args).__name__}")
-        return p
     try:
-        p.delta = coerce_delta(delta, free_fields)  # fix string-typed args before they hit real arithmetic
+        if index >= limit:
+            raise Rejection("over_candidate_limit", allowed=f"at most {limit} per round")
+        if function.get("name") != PROPOSE_TOOL_NAME:
+            raise Rejection("unknown_tool")
+        if not isinstance(raw_args, dict):
+            raise Rejection("bad_arguments")
+        p.delta = coerce_delta(delta, free_fields, NUMERIC_FIELDS)  # fix string-typed args before they hit real arithmetic
         candidate = dataclasses.replace(baseline, **fixed_values, **p.delta)  # baseline + pins + just this delta
         p.candidate_dict = dataclasses.asdict(candidate)
-        # Checked before the solve, so a violation never costs a FEMM run -
-        # and rejected through the same path as bad geometry.
+        # Checked before the solve, so a violation never costs a FEMM run.
         audit = audit_changed_fields(baseline, candidate, allowed)
         if audit["unexpected_fields"]:
-            raise ValueError(f"candidate changed field(s) outside the allowed set: {sorted(audit['unexpected_fields'])}")
+            raise Rejection("not_enabled", sorted(audit["unexpected_fields"])[0])
         # A candidate identical to the baseline is a wasted solve slot (and, when the baseline
         # already meets the goal, a false "goal met"). With pins the pinned start point is
         # itself a different design, so an empty delta stays a legitimate proposal then.
         if not audit["changed_fields"]:
-            raise ValueError("this changes nothing from the baseline - change at least one field")
+            raise Rejection("no_change")
+        problems = validate_coilset(candidate)
+        if problems:
+            coil, reason = problems[0]
+            raise Rejection("invalid_geometry", coil, detail=_geometry_detail(coil, reason))
         p.candidate, p.changed_fields = candidate, audit["changed_fields"]
+    except Rejection as rejection:
+        p.rejection = rejection
     except Exception as exc:
-        p.error = str(exc)
+        p.rejection, p.exception = Rejection("bad_arguments"), exc
     return p
+
+
+def _geometry_detail(coil: str, reason: str) -> str:
+    """The validity check's own sentence for one coil (numbers only, built by
+    femm_service.check_valid_coil - no exception text), tidied into one line."""
+    return f"The {coil} coil is not valid: {reason.strip().rstrip(',')}."
 
 
 def search_memory(tried: list[Tried], latest_round: int | None, keep_best: int, favourite: str | None = None) -> str:
@@ -462,22 +536,42 @@ def search_memory(tried: list[Tried], latest_round: int | None, keep_best: int, 
     roughly flat instead of growing by every result ever sent. "" before
     anything has been tried. `latest_round` None = no round is being sent
     raw (the search just resumed), so every candidate is listed here."""
-    valid = sorted((t for t in tried if t.scored is not None), key=lambda t: rank_key(t.scored, favourite))
+    valid = sorted((t for t in tried if t.scored is not None and not t.check_failed),
+                   key=lambda t: rank_key(t.scored, favourite))
     top = valid[:keep_best]
-    others = [t for t in tried if t not in top and t.round_num != latest_round]
-    if not top and not others:
+    # Met the goal but did not survive the fragility check: never a winner. Always
+    # listed, whichever round they came from, so the model stops building on them.
+    fragile = [t for t in tried if t.check_failed]
+    others = [t for t in tried if t not in top and t not in fragile and t.round_num != latest_round]
+    if not top and not others and not fragile:
         return ""
 
     lines = []
     if top:
         lines.append(f"Best {len(top)} candidate(s) so far, best first (each = baseline + the listed changes):")
         lines += [f"  #{i} round {t.round_num}: {t.delta} -> goal_met={t.result['goal_met']}: {objective_summary(t.result)}"
+                  + (" [survived the fragility check]" if t.check is not None else "")
                   for i, t in enumerate(top, start=1)]
+    if fragile:
+        lines.append("Met the goal but failed the fragility check (the goal must still be met with every dimension "
+                     "changed together by -2% to +2%) - not winners:")
+        lines += [f"  round {t.round_num}: {t.delta} -> {t.check['summary']}" for t in fragile]
     if others:
         lines.append("Other candidates already tried - don't propose these again:")
         lines += [f"  round {t.round_num}: {t.delta} -> " +
-                  (f"misses: {misses_summary(t.result)}" if t.scored is not None else f"rejected: {t.result['error'][:160]}")
+                  (f"misses: {misses_summary(t.result)}" if t.scored is not None else f"rejected: {_rejection_summary(t.result)}")
                   for t in others]
     if latest_round is not None and any(t.round_num == latest_round for t in tried):
         lines.append("Your latest turn's full results follow.")
     return "\n".join(lines)
+
+
+def _rejection_summary(result: dict) -> str:
+    """A rejected candidate's tool result (schema.Rejection.as_result()) as a
+    few words for the already-tried list: its code, the field, the allowed values."""
+    parts = [str(result.get("error"))]
+    if result.get("field"):
+        parts.append(str(result["field"]))
+    if result.get("allowed"):
+        parts.append(f"(allowed: {result['allowed']})")
+    return " ".join(parts)

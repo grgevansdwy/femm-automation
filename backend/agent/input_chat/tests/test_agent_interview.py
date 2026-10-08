@@ -106,7 +106,8 @@ def test_both_tools_are_offered_on_a_normal_turn(monkeypatch):
 
     (_, tools), = calls
     names = {t["function"]["name"] for t in tools}
-    assert names == {"finalize_spec", "flag_off_topic"}, "both tools must be offered every normal turn"
+    assert names == {"finalize_spec", "flag_off_topic", "propose_search_fields_change"}, \
+        "every tool must be offered every normal turn"
     print("  ok  finalize_spec and flag_off_topic are both offered on a normal turn")
 
 
@@ -183,3 +184,86 @@ def test_malformed_tool_arguments_end_in_a_question_not_a_dead_turn(monkeypatch)
         assert json.loads(state.transcript[-2]["content"])["valid"] is False
         assert state.transcript[-1]["content"] == "Could you say that again?"
     print("  ok  whatever shape finalize_spec's arguments have, the user gets a reply")
+
+
+# ---- the Search fields table: the model may propose a change, never apply one -------------------
+
+def _propose_fields(changes, reason="you asked to tune the tank ferrite"):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "propose_search_fields_change", "arguments": {
+            "changes": changes, "reason": reason}}}]}
+
+
+def test_proposing_a_search_fields_change_shows_it_and_writes_nothing(monkeypatch):
+    from agent.repositories import agent_settings_repository as repository
+    from agent.settings.settings import AgentSettings, load_settings
+
+    state, calls = _run(monkeypatch, [_propose_fields([{"field": "tank_mu", "enabled": True, "max": 2000}]),
+                                      _text("I've proposed opening tank_mu - click Apply if that's right.")])
+
+    assert state.pending_field_change == {"changes": [{"field": "tank_mu", "enabled": True, "max": 2000}],
+                                          "reason": "you asked to tune the tank ferrite"}
+    assert repository.load_overrides() == {} and load_settings() == AgentSettings(), "nothing is saved"
+    assert state.settings.search_fields == {}, "this conversation's own table is untouched too"
+    assert not state.finalized and state.spec is None
+    assert len(calls) == 2 and calls[1][1] is None, "the reply after a proposal is offered no tools"
+    assert json.loads(state.transcript[-2]["content"])["valid"] is True
+
+
+def test_a_malformed_search_fields_proposal_is_rejected_and_never_shown(monkeypatch):
+    for bad in ([{"field": "not_a_field", "enabled": True}], [], [{"field": "tank_mu", "min": "low"}], "tank_mu"):
+        state, _ = _run(monkeypatch, [_propose_fields(bad), _text("Which field did you mean?")])
+        assert state.pending_field_change is None, bad
+        assert json.loads(state.transcript[-2]["content"])["valid"] is False
+
+
+def test_nothing_the_model_sends_can_open_a_field_or_widen_a_limit(monkeypatch):
+    """Injection (P9): a finalize_spec that claims a closed field is open, by
+    the old enabled_groups argument or any made-up one, changes nothing - the
+    table alone decides, and an objective on a closed field is refused."""
+    from agent.input_chat.models.variables import free_fields_for, search_field_table
+
+    objectives = [{"metric": "L_loop", "kind": "match", "tolerance_pct": 5}]
+    state, _ = _run(monkeypatch, [_finalize(objectives, enabled_groups=["tank_ferrite"],
+                                            search_fields={"tank_mu": {"enabled": True}},
+                                            enabled_fields=["tank_mu"])])
+    assert state.finalized
+    assert state.spec.variable_spec.enabled_groups == set()
+    assert state.spec.settings.search_fields == {}
+    baseline = interview_baseline()
+    free = free_fields_for(baseline, state.spec.variable_spec, search_field_table(state.spec.settings))
+    assert "tank_mu" not in free
+
+    state, _ = _run(monkeypatch, [_finalize([{"metric": "tank_mu", "kind": "increase", "tolerance_pct": 5}]),
+                                  _text("tank_mu is closed - want me to propose opening it?")])
+    assert not state.finalized, "an objective on a closed field cannot be planned"
+
+    state, _ = _run(monkeypatch, [_finalize(objectives, fixed_values={"num_tank_layers": 12}),
+                                  _text("12 layers is above the limit of 8.")])
+    assert not state.finalized, "a pin cannot go past a limit"
+    assert "1 to 8" in json.loads(state.transcript[-2]["content"])["error"]
+
+
+def interview_baseline():
+    from engine.repositories.coilset_repository import get_coilset
+    return get_coilset("base_coil")
+
+
+def test_the_interview_prompt_lists_open_fields_with_limits_and_names_the_closed_ones():
+    from agent.settings.settings import AgentSettings
+    baseline = interview_baseline()
+    prompt = interview.interview_system_prompt("base_coil", baseline)
+    assert "num_tank_layers: Number of Tank Layers, baseline 1 - allowed: 1 to 8" in prompt
+    assert "must be one of [0.035, 0.07, 0.14]" in prompt
+    closed_line = next(line for line in prompt.splitlines() if line.startswith("Every other field is closed:"))
+    assert "tank_mu" in closed_line and "rc_ferrite_y_offset" in closed_line and "loop_r" not in closed_line
+    assert "enabled_groups" not in prompt and "{{" not in prompt
+
+    opened = AgentSettings(search_fields={"tank_mu": {"enabled": True, "min": None, "max": 2000}})
+    prompt = interview.interview_system_prompt("base_coil", baseline, opened)
+    assert f"tank_mu: Tank Ferrite Permeabilitiy, baseline {baseline.tank_mu:g} - allowed: 0 to 2000" in prompt
+
+
+def test_finalize_spec_no_longer_offers_enabled_groups():
+    properties = interview.FINALIZE_SPEC_TOOL[0]["function"]["parameters"]["properties"]
+    assert "enabled_groups" not in properties

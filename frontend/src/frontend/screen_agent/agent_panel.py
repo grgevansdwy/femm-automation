@@ -62,6 +62,9 @@ class ChatSession:
     # (the "Start Search" button on the rendered plan); poll() only
     # hands off to AgentRunner once both are true.
     plan_confirmed: bool = False
+    # Why the proposed plan can't start under the Search fields table as it is
+    # now (checked when Start Search is clicked - see confirm_plan()).
+    plan_problems: list = dataclasses.field(default_factory=list)
     chat_input: str = ""  # the unsent draft - each chat keeps its own
     error: str = ""
     # Which distance the finished-search Search Summary's Result table
@@ -131,6 +134,7 @@ class AgentPanelState:
         # run id -> every saved chat touched in this session. Opening one again
         # returns the same object, so a running search is found as it is now.
         self._sessions: dict[str, ChatSession] = {}
+        self._field_limits_cache: tuple | None = None
         self.chat = self._empty_chat()  # the chat on screen
         self.refresh_configs()
 
@@ -141,6 +145,7 @@ class AgentPanelState:
     interview_state = _chat_field("interview_state")
     run_state = _chat_field("run_state")
     plan_confirmed = _chat_field("plan_confirmed")
+    plan_problems = _chat_field("plan_problems")
     chat_input = _chat_field("chat_input")
     error = _chat_field("error")
     summary_distance = _chat_field("summary_distance")
@@ -395,6 +400,72 @@ class AgentPanelState:
             if d not in chat.baseline_runs:
                 chat.baseline_runs[d] = self._solve_one(chat, d)
 
+    # ---- the Search fields table (Settings): which fields a search may change
+    def field_limits(self) -> dict[str, str]:
+        """Open field -> its allowed values in words ("1 to 8"), under the table
+        this conversation is planning with. Shown beside the baseline's values."""
+        from agent.femm_agent.models.schema import limit_text
+        from agent.input_chat.models.variables import free_fields_for, search_field_table
+        if self.interview_state is None or self.baseline_coilset is None:
+            return {}
+        key = (self.selected_config_id, json.dumps(self.interview_state.settings.search_fields, sort_keys=True))
+        if self._field_limits_cache is None or self._field_limits_cache[0] != key:
+            free = free_fields_for(self.baseline_coilset, None, search_field_table(self.interview_state.settings))
+            self._field_limits_cache = (key, {name: limit_text(schema) for name, schema in free.items()})
+        return self._field_limits_cache[1]
+
+    @property
+    def pending_field_change(self) -> dict | None:
+        """A Search fields change the AI proposed and the user hasn't answered -
+        only while planning; once a search has started its table is fixed."""
+        if self.interview_state is None or self.chat.search_started or self.chat.read_only_reason:
+            return None
+        return self.interview_state.pending_field_change
+
+    def apply_field_change(self) -> None:
+        """The Apply button on a proposal: the user's own action, and the only
+        place outside the Settings screen that changes the table. Saves it,
+        brings this conversation onto the new table, and tells the model (a
+        fixed, code-written message) so it re-plans with the field open."""
+        from agent.settings.settings import apply_search_field_changes
+        pending = self.pending_field_change
+        if pending is None or self.interview_runner.busy:
+            return
+        try:
+            saved = apply_search_field_changes(pending["changes"])
+        except ValueError as exc:
+            self.error = f"Couldn't apply the change: {exc}"
+            return
+        self.error = ""
+        self.interview_state.settings.search_fields = dict(saved.search_fields)
+        self.interview_state.pending_field_change = None
+        self.plan_confirmed = False
+        self.interview_state.finalized = False
+        self.plan_problems = []
+        self.interview_runner.send(self.interview_state, FIELD_CHANGE_APPLIED_MESSAGE)
+
+    def dismiss_field_change(self) -> None:
+        if self.interview_state is not None:
+            self.interview_state.pending_field_change = None
+
+    def recheck_plan(self) -> list[str]:
+        """Copies the Search fields table as saved right now into the plan (it
+        may have been edited in Settings since the plan was proposed) and
+        re-runs the plan's own checks against it. Returns, and remembers, why
+        the plan can't start - empty when it can."""
+        from agent.input_chat.services.interview import plan_problems
+        from agent.repositories.ai_run_repository import finalize_spec
+        from agent.settings.settings import load_settings
+        spec = self.interview_state.spec
+        live = load_settings().search_fields
+        if live != spec.settings.search_fields:
+            spec.settings.search_fields = dict(live)
+            self.interview_state.settings.search_fields = dict(live)
+            if self.interview_runner.ai_run_id is not None:
+                finalize_spec(self.interview_runner.ai_run_id, dataclasses.asdict(spec))  # the stored plan carries the table it runs under
+        self.plan_problems = plan_problems(spec, self.baseline_coilset)
+        return self.plan_problems
+
     def confirm_plan(self) -> None:
         if self.planning_blocked or self.chat.read_only_reason:
             return  # the Start Search button is disabled too - this covers any other caller
@@ -403,6 +474,8 @@ class AgentPanelState:
             self.error = busy
             return
         self.error = ""
+        if self.recheck_plan():
+            return  # shown on the plan, which stays unconfirmed
         self.plan_confirmed = True
         self.search_markers = [len(self.interview_state.transcript)]
 
@@ -513,6 +586,7 @@ class AgentPanelState:
         # model calls finalize_spec again with the updated understanding.
         chat.plan_confirmed = False
         chat.interview_state.finalized = False
+        chat.plan_problems = []
         chat.interview_runner.send(chat.interview_state, text)
 
 
@@ -759,7 +833,7 @@ def _running_status_text(run_state) -> str:
     if current.status.value == "proposing" and current.ai_try > 1:
         doing += f" (retry {current.ai_try} of {run_state.spec.settings.round_llm_attempts} after a failed AI request)"
     best = run_state.best
-    best_text = "" if best is None else (" - goal met, looking for better" if best.goal_met else " - goal not met yet")
+    best_text = "" if best is None else (" - a design meets the goal, looking for better" if best.goal_met else " - goal not met yet")
     budget = run_state.budget
     where = f"round {current.round_num}"
     if budget is not None:
@@ -897,8 +971,6 @@ def _plan_context_lines(spec) -> list[str]:
     baseline's own numbers rather than reading targets in the abstract."""
     lines = [spec.objective_text or "(no objective text given)", f"Distances: {spec.distances} mm"]
     vs = spec.variable_spec
-    if vs.enabled_groups:
-        lines.append(f"Newly enabled: {sorted(vs.enabled_groups)}")
     if vs.fixed_values:
         lines.append("Set to: " + ", ".join(f"{k} = {v:g}" for k, v in vs.fixed_values.items()))
     if vs.excluded_fields:
@@ -998,12 +1070,23 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     imgui.push_style_color(imgui.Col_.button.value, _ACCENT_COLOR)
     imgui.push_style_color(imgui.Col_.button_hovered.value, _ACCENT_HOVER_COLOR)
     busy_elsewhere = state.search_busy_elsewhere
-    imgui.begin_disabled(state.planning_blocked or bool(busy_elsewhere))
+    imgui.begin_disabled(state.planning_blocked or bool(busy_elsewhere) or bool(state.plan_problems))
     if imgui.button("Start Search", imgui.ImVec2(avail_width, _START_BUTTON_H)):
         state.confirm_plan()
     imgui.end_disabled()
     imgui.pop_style_color(2)
     imgui.pop_style_var()
+    if state.plan_problems:
+        # Fixed, code-written text: the plan no longer fits the Search fields table.
+        imgui.push_text_wrap_pos(avail_width)
+        imgui.text_colored(_ERROR_COLOR, "This plan can't start with the Search fields as they are now:")
+        for problem in state.plan_problems:
+            imgui.bullet_text(problem)
+        imgui.pop_text_wrap_pos()
+        if imgui.small_button("Check again"):
+            state.recheck_plan()
+        imgui.same_line()
+        imgui.text_disabled("after changing Settings > Search fields - or send a message to change the plan")
 
     hint = ("Another search is running - one at a time" if busy_elsewhere
             else "or send another message to adjust the plan first")
@@ -1014,6 +1097,38 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
 
 
 _START_BUTTON_H = 38.0
+
+# What the model is told after the user clicks Apply on a proposed Search fields
+# change - fixed text, sent as the user's turn so the model re-plans.
+FIELD_CHANGE_APPLIED_MESSAGE = "I applied the Search fields change. Carry on with the plan."
+
+
+def _field_change_card_height(pending: dict) -> float:
+    return (len(pending["changes"]) + 3) * imgui.get_text_line_height_with_spacing() + 44.0
+
+
+def _draw_field_change_card(state: AgentPanelState, avail_width: float, pending: dict) -> None:
+    """A change to the Search fields table the AI proposed. It is only a
+    proposal: nothing is written until the user clicks Apply. The change lines
+    are built by code from the validated proposal; only `reason` is the model's."""
+    from agent.input_chat.models.variables import describe_field_change
+    imgui.separator()
+    imgui.text_colored(_ACCENT_COLOR, "Proposed change to Search fields")
+    imgui.push_text_wrap_pos(avail_width)
+    if pending.get("reason"):
+        imgui.text_wrapped(agent_candidate_card.full_text(pending["reason"]))
+    for change in pending["changes"]:
+        imgui.bullet_text(describe_field_change(change))
+    imgui.text_disabled("Applies to every design, not just this one. Nothing changes unless you click Apply.")
+    imgui.pop_text_wrap_pos()
+    imgui.begin_disabled(state.interview_runner.busy)
+    if imgui.button("Apply", imgui.ImVec2(110, 0)):
+        state.apply_field_change()
+    imgui.end_disabled()
+    imgui.same_line()
+    if imgui.button("Dismiss", imgui.ImVec2(110, 0)):
+        state.dismiss_field_change()
+    imgui.dummy(imgui.ImVec2(0, 4))
 
 
 _INPUT_HEIGHT = 64.0  # a real multi-line text area, not a single-line box
@@ -1135,9 +1250,11 @@ def _draw_baseline_results(state: AgentPanelState) -> None:
         _draw_one_baseline_result(distance, state.baseline_runs[distance])
 
 
-def _draw_baseline_inputs(buffer: dict) -> None:
+def _draw_baseline_inputs(buffer: dict, limits: dict[str, str]) -> None:
     """The baseline's parameters, read-only - the same sections and labels
-    as the manual-mode config form. Editing stays in Manual Runs."""
+    as the manual-mode config form. Editing stays in Manual Runs. `limits`
+    (AgentPanelState.field_limits()) says, for each field the search may
+    change, what it may be set to; a field not in it is closed."""
     labels = field_layout.field_labels()
     groups = [(g, names) for g, names in field_layout.FIELD_GROUPS.items() if g != "General"]
     groups.append(("Advanced", list(field_layout.ADVANCED_FIELDS)))
@@ -1145,10 +1262,12 @@ def _draw_baseline_inputs(buffer: dict) -> None:
         flags = imgui.TreeNodeFlags_.default_open.value if group_name in ("Loop", "Tank", "RC") else 0
         if not imgui.collapsing_header(f"{group_name}##baseline_{group_name}", flags=flags):
             continue
-        if imgui.begin_table(f"baseline_inputs_{group_name}", 2,
+        if imgui.begin_table(f"baseline_inputs_{group_name}", 3,
                              imgui.TableFlags_.borders.value | imgui.TableFlags_.row_bg.value):
             imgui.table_setup_column("Parameter", imgui.TableColumnFlags_.width_stretch.value)
             imgui.table_setup_column("Value", imgui.TableColumnFlags_.width_fixed.value, 90.0)
+            imgui.table_setup_column("Search may set", imgui.TableColumnFlags_.width_fixed.value, 150.0)
+            imgui.table_headers_row()
             for name in names:
                 value = buffer.get(name)
                 if name in field_layout.PRESENCE_FIELDS:
@@ -1158,6 +1277,11 @@ def _draw_baseline_inputs(buffer: dict) -> None:
                 imgui.text(labels.get(name, name))
                 imgui.table_next_column()
                 imgui.text(agent_candidate_card._fmt(value))
+                imgui.table_next_column()
+                if name in limits:
+                    imgui.text(limits[name])
+                else:
+                    imgui.text_disabled("fixed")
             imgui.end_table()
 
 
@@ -1203,7 +1327,7 @@ def draw_baseline_box(state: AgentPanelState, size: imgui.ImVec2, show_body: boo
         imgui.same_line()
         imgui.begin_child("agent_baseline_inputs", imgui.ImVec2(0, rest_h), imgui.ChildFlags_.borders.value)
         imgui.text("Inputs")
-        _draw_baseline_inputs(buffer)
+        _draw_baseline_inputs(buffer, state.field_limits())
         imgui.end_child()
     imgui.end_child()
 
@@ -1230,7 +1354,10 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
     # table (_PLAN_TABLE_H) + header/button chrome.
     plan_h = (_PLAN_CHROME_H + len(_plan_context_lines(state.interview_state.spec)) * imgui.get_text_line_height_with_spacing()
               + _PLAN_TABLE_H
+              + ((len(state.plan_problems) + 2) * imgui.get_text_line_height_with_spacing() if state.plan_problems else 0.0)
               if show_plan else 0.0)
+    pending_change = state.pending_field_change
+    plan_h += _field_change_card_height(pending_change) if pending_change else 0.0
     input_h = _INPUT_HEIGHT
     blocked_error = state.baseline_error if state.planning_blocked else None
     notice_h = _BLOCKED_NOTICE_H if blocked_error else 0.0
@@ -1240,6 +1367,9 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
     feed_h = max(avail.y - input_h - plan_h - status_h - notice_h - notes_h - 8.0, 60.0)
 
     _draw_chat_feed(state, imgui.ImVec2(avail.x, feed_h))
+
+    if pending_change:
+        _draw_field_change_card(state, avail.x, pending_change)
 
     if show_plan:
         _draw_plan_summary(state, avail.x)
@@ -1357,15 +1487,16 @@ def _draw_summary(state: AgentPanelState, size: imgui.ImVec2) -> None:
     """The finished search in one box, replacing both the live geometry and
     the round-by-round feed - the same view agent_sidebar.py replays for a
     stored run (agent_candidate_card.draw_search_summary())."""
-    from agent.femm_agent.services.scorer import tool_result
-    from agent.input_chat.models.variables import allowed_fields, audit_changed_fields
+    from agent.femm_agent.services import fragility
+    from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, search_field_table
 
     run_state = state.run_state
     best = run_state.best
     # Diffs EVERY field, not just the free ones - a free_fields-filtered diff
     # could never show a change outside the allowed set.
     audit = audit_changed_fields(run_state.baseline_coilset, best.coilset,
-                                 allowed_fields(run_state.baseline_coilset, run_state.spec.variable_spec))
+                                 allowed_fields(run_state.baseline_coilset, run_state.spec.variable_spec,
+                                                search_field_table(run_state.spec.settings)))
 
     baseline_buffer = dataclasses.asdict(run_state.baseline_coilset)
     spec_summary = dataclasses.asdict(run_state.spec)
@@ -1380,7 +1511,7 @@ def _draw_summary(state: AgentPanelState, size: imgui.ImVec2) -> None:
         "agent_summary", run_state.status.value,
         [(r.round_num, [dataclasses.asdict(c) for c in r.candidates]) for r in run_state.rounds],
         _total_timing_text(run_state), baseline_buffer,
-        dataclasses.asdict(best.coilset), tool_result(best, run_state.spec), spec_summary,
+        dataclasses.asdict(best.coilset), fragility.best_result(run_state), spec_summary,
         distances, state.summary_distance, audit,
         baseline_coilset=run_state.baseline_coilset, best_coilset=best.coilset,
         report=run_state.outcome_report,

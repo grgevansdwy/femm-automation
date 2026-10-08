@@ -141,7 +141,9 @@ def run_one(goal: Goal, repeat: int, results_dir: Path) -> dict:
         "goal": goal.key, "repeat": repeat, "run_id": state.id,
         "status": state.status.value, "stop_reason": state.stop_reason,
         "budget": state.budget_history[-1] if state.budget_history else None,
-        "goal_met": bool(state.best is not None and state.best.goal_met),
+        # A winner: met the goal and survived the fragility check (services/fragility.py).
+        "goal_met": state.winner is not None,
+        "fragility": state.fragility,
         "minutes": round((time.monotonic() - started) / 60, 1),
         "rounds": len(state.rounds),
         "first_pass_round": first_pass,

@@ -1,6 +1,6 @@
 ---
 owns: backend/engine/**, backend/conftest.py, backend/data/**, frontend/src/frontend/services/job_runner.py
-last-verified: 2026-09-24
+last-verified: 2026-10-07
 ---
 
 # Engine: physics, the FEMM/xfemm backend, and running solves
@@ -84,7 +84,7 @@ needs a coil's numbers eventually calls `simulate(coilset, distance)`:
 
 ```
 simulate(coilset, distance)
-  1. check_valid_coilset()   -- fast, no FEMM: can this geometry physically exist?
+  1. validate_coilset()      -- fast, no FEMM: can this geometry physically exist? (also run by the agent before it queues a solve)
                                  (services/femm_service.py — trace/turn overlap, does the
                                  winding cross the axis)
   2. build_script(coilset, distance)
@@ -242,7 +242,7 @@ this fast: **start everything first, then wait for all of it**, not one-at-a-tim
 
 - Worker count is just `os.cpu_count()` — not configurable, only lightly tested (4 jobs
   on 4 cores).
-- Each `femmcli` call has a hard 120 s subprocess timeout, untested against a genuinely
+- Each `femmcli` call has a hard 120 s subprocess timeout (raised as `xfemm_backend.SolverTimeout`), untested against a genuinely
   large/slow mesh.
 - `Job` status is mutated by a worker thread and read by a render thread with no lock —
   works today via the GIL and no read-modify-write race, not stress-tested under
