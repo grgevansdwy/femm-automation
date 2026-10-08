@@ -122,7 +122,7 @@ frontend/src/frontend/
   screen_settings/ Settings screen (opened from AI Agent): settings_panel (edit the agent's system prompts and numbers)
   visualization/   drawing pieces both modes share: coil_diagram, femm_open, result_table
   services/        logic with no drawing: job_runner (solve queue + cache), field_layout
-  files_backup/    import / export: config_io, run_io, backup_io
+  files_backup/    import / export: config_io, run_io, backup_io, chat_io (an AI chat as JSON or a PDF report)
 ```
 
 `screen_agent/` and `screen_manual/` never import each other; both use `visualization/`, `services/` and `files_backup/`.

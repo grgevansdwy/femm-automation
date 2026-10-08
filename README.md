@@ -61,6 +61,9 @@ Edit the numbers in the middle and click **Save** to change a design. **Clone** 
 2. Click **Start Search** and watch it try designs. At the end you can compare the best one with the original.
 3. Want something different once it has finished? Say so in the same chat (*"5% is enough"*, *"also check 8 mm"*).
    It shows the changed plan and what is different; click **Start Search** again to run it.
+4. To share a chat, right-click it in the list on the left: **Export JSON...** saves the whole chat as a
+   file a coworker opens with **Import...** on their computer, and **Export PDF report...** saves a
+   report to read or print.
 
 Your designs and results are saved on your computer. **Backup All** / **Restore All** at the top of the
 window save or load everything as one file, which is how to move your work to another computer.

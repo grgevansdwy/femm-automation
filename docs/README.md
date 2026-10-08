@@ -1,6 +1,6 @@
 ---
 owns: docs/*.md (routing table only — see the frontmatter on each doc for what it owns)
-last-verified: 2026-09-23
+last-verified: 2026-10-08
 ---
 
 # docs/ — how to find what you need
@@ -33,6 +33,7 @@ docs/
 | The desktop app's screens/panels, Manual Runs mode, the coil diagram | **GUI.md** |
 | Config list/edit/Save/Clone/Export/Delete behavior, name collisions | **GUI.md** |
 | The AI Agent mode's chat UI, Settings screen, History tab | **GUI.md** (UI side) — see **Agent.md** for what runs behind it |
+| Exporting a chat to JSON or PDF, importing one, what an imported chat may do | **Agent.md** (§5: the file format, the import checks, the rules) — **GUI.md** for the buttons |
 | Known GUI bugs/concerns (screenshot capture, delete confirmation, diagram fidelity) | **GUI.md** |
 | The interview (chat → objective), `finalize_spec`, consent groups | **Agent.md** |
 | The search loop, `propose_coilset`, scoring, margins, ranking | **Agent.md** |
