@@ -82,15 +82,22 @@ class InterviewRunner:
         self._run_turn_async(state, lambda: run_interview_turn(state, user_message, should_abort=lambda: self.discarded,
                                                                 log=self._phase_log("interview")))
 
-    def send_followup(self, state: InterviewState, run_state, user_message: str) -> None:
-        """A question after the search has started (running or finished) -
-        agent/femm_agent/services/followup.py, same transcript, no tools. Persisted under the
+    def send_followup(self, state: InterviewState, run_state, user_message: str, allow_replan: bool = False) -> None:
+        """A message after the search has started (running or finished) -
+        agent/femm_agent/services/followup.py, same transcript. Persisted under the
         same ai_run as the planning chat, after it, so History's
-        Conversation section shows the whole exchange in order."""
+        Conversation section shows the whole exchange in order.
+
+        `allow_replan`: once the search has ended, let the model turn a request
+        to change the goal into a revised plan (state.spec; the row moves to
+        'plan_ready'). Only a caller that can then show that plan and start it
+        (AgentRunner.start_revised()) should pass True. While the search runs
+        the turn has no tools either way."""
         from agent.femm_agent.services.followup import run_followup_turn
         self._run_turn_async(state, lambda: run_followup_turn(state, user_message, run_state,
                                                               should_abort=lambda: self.discarded,
-                                                              log=self._phase_log("followup")))
+                                                              log=self._phase_log("followup"),
+                                                              allow_replan=allow_replan))
 
     def record_user_message(self, state: InterviewState, user_message: str) -> None:
         """Adds a user message that code acts on itself (no AI turn) to the
@@ -139,7 +146,7 @@ class InterviewRunner:
             self.turn_started_at = None
 
     def _persist_new_messages(self, state: InterviewState) -> None:
-        from agent.repositories.ai_run_repository import append_message, finalize_spec
+        from agent.repositories.ai_run_repository import IllegalTransition, append_message, finalize_spec
 
         for i, msg in enumerate(state.transcript[self._persisted_count:], start=self._persisted_count):
             append_message(
@@ -148,9 +155,17 @@ class InterviewRunner:
             )
         self._persisted_count = len(state.transcript)
 
-        # Only a newly finalized plan - a follow-up turn leaves the spec
-        # untouched, and re-writing it would move a finished run back to
-        # 'plan_ready' (finalize_spec() sets that).
+        # Only a newly finalized plan: a turn that leaves the spec untouched must
+        # not move a finished run back to 'plan_ready' (finalize_spec() sets that).
+        # A revised plan accepted after a search (followup.run_followup_turn) is a
+        # new spec object, so it is written here like a first plan.
         if state.finalized and state.spec is not None and state.spec is not self._persisted_spec:
-            finalize_spec(self.ai_run_id, dataclasses.asdict(state.spec))
+            try:
+                finalize_spec(self.ai_run_id, dataclasses.asdict(state.spec))
+            except IllegalTransition as exc:
+                # A plan can't replace the one a running search is working to.
+                state.error = "The revised plan was not saved: a search is running. Stop it first."
+                if self._log is not None:
+                    self._log.warning("InterviewRunner._persist_new_messages", "a plan arrived for a running search", exc)
+                return
             self._persisted_spec = state.spec

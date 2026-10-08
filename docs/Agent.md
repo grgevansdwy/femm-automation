@@ -372,7 +372,9 @@ continues a chat reopened from the sidebar, then hands the state to
 chat side (transcript, plan, settings) without touching the solver, and
 `InterviewRunner.attach()` points a runner at the stored row so new messages are saved
 after the stored ones. `list_messages()` with no phase returns both phases in the order
-they were written; `list_chat_rows()` is the light per-run query the sidebar lists from.
+they were written; `list_chat_rows()` is the light per-run query the sidebar lists from. Each budget entry also names the plan its
+segment ran under, that plan's distances and the round the model's memory begins after
+(§9, "Changing the goal").
 
 **Schema version.** `PRAGMA user_version` is 1. An older database is migrated the first
 time it is opened (`_ensure_schema()`; the app also calls `migrate_if_needed()` at
@@ -548,10 +550,10 @@ Once a search starts, the same chat keeps going — "how's it going?" while runn
 did tank_esr drop?" after. It rebuilds a fresh snapshot of the live run (plan, baseline
 numbers, every round, best candidate) each turn — a deliberately different, much smaller
 context than the search loop's own message history, which is trimmed to its latest round
-plus the best few candidates. **It cannot change anything, structurally, not just by
-prompt instruction:** it's called with no tools at all, so it has no `finalize_spec` to
-re-plan with and no `propose_coilset` to try a design with — the prompt just tells it to
-point the user at a new chat instead. Its snapshot includes the budget used, code's progress
+plus the best few candidates. **While a search runs it cannot change anything,
+structurally, not just by prompt instruction:** it's called with no tools at all, so it
+has no `finalize_spec` to re-plan with and no `propose_coilset` to try a design with — the
+prompt tells it to say "stop the search first". Its snapshot includes the budget used, code's progress
 verdict and the end-of-run report, so "why did it stop?" is answered from what code
 recorded, with no extra model call when a search ends.
 
@@ -559,6 +561,32 @@ recorded, with no extra model call when a search ends.
 that is exactly the word "continue" (any case), the panel records it and calls
 `AgentRunner.continue_run()` (§5); the Continue button calls the same function. Any other
 message goes to the follow-up model.
+
+**Changing the goal after a search has ended.** `run_followup_turn(..., allow_replan=True)`
+offers the model `finalize_spec` and `propose_search_fields_change` (and nothing else)
+once the search is no longer running. A plan is checked by the same code as an
+interview's (`interview.accept_finalize_call()`), against the baseline copied into the
+run and the Search fields table as saved now; a Search fields proposal is only shown to
+the user (`InterviewState.pending_field_change`), as in the interview. An
+accepted plan becomes the conversation's `spec` and the row moves to `plan_ready`; the
+finished search's rounds and best design stay. Nothing is searched until the user starts
+it: `AgentRunner.start_revised(run_id, spec)` opens a new segment of the same run with a
+fresh budget. What the search then remembers is decided in
+`femm_agent/services/replan.py`:
+- every distance of the new plan was in the plan it replaces: memory is kept. Each stored
+  design is scored again against the new objectives (cache hits). A design the new plan
+  does not allow — it changes a field that is no longer open, is outside a limit, or
+  lacks a pinned value — stays listed as tried but unscored (`not_in_current_plan`), so
+  it can never be the best design. A fragility check counts only under the plan it was
+  made for (each check records its `plan`), so a design that meets the new goal is
+  checked again before it can win.
+- a distance was added: the search starts from the beginning. Earlier rounds stay stored
+  and visible, outside the model's memory (`AgentRunState.memory_from_round`).
+
+Stored rounds are never rewritten. A revised goal that an earlier design already meets
+and survives its check under, with nothing left to push, ends before any round. `allow_replan` is off by default and
+the panel does not pass it: the screen that shows a revised plan and starts it is not
+built, so in the app the chat after a search is questions plus "continue".
 
 ## 10. Settings — what's editable without touching code
 
@@ -651,12 +679,13 @@ relying on any of these:
 | `agent/femm_agent/models/state.py` | `AgentRunState`/`RoundState` — the search's live, polled state; `Budget`; `status_for()` |
 | `agent/femm_agent/services/progress.py` | Code's verdict on a search: improving / stalled / plateau (§5) |
 | `agent/femm_agent/services/restore.py` | Rebuilds a stored run's live state from the database (§5) |
+| `agent/femm_agent/services/replan.py` | A revised plan after a search: memory kept or fresh, re-scoring, what the plan changed (§9) |
 | `agent/cleanup_runs.py` | One-time, human-gated cleanup of rows from the old run lifecycle (§5) |
 | `agent/femm_agent/services/optimize.py` | The search loop body (§5) |
 | `agent/femm_agent/services/scorer.py` | Pass/fail + ranking (§5) |
 | `agent/femm_agent/services/prompts.py` | Fills the search system prompt each run |
 | `agent/femm_agent/services/outcome.py` | End-of-run report (§8) |
-| `agent/femm_agent/services/followup.py` | Read-only Q&A about a running/finished search (§9) |
+| `agent/femm_agent/services/followup.py` | The chat after Start Search: questions about the run, and a revised plan once it has ended (§9) |
 | `agent/services/llm_client.py` | Raw HTTP to the LLM server (§8) |
 | `agent/services/run_log.py` | `RunLog` — the per-run JSON-lines log of every AI request and warning (§8) |
 | `agent/input_chat/services/runner.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |

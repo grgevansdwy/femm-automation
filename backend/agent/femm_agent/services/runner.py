@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from agent.femm_agent.services import fragility
+from agent.femm_agent.services import fragility, replan
 from agent.femm_agent.services.optimize import RoundFailed, optimize_loop
 from agent.femm_agent.services.outcome import outcome_report
 from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, Budget, now, status_for
@@ -147,6 +147,43 @@ class AgentRunner:
         existing ones, candidates still compared with the original baseline.
         Raises ValueError if that run isn't here or is still searching."""
         from agent.repositories.ai_run_repository import transition
+        state = self._finished_run(run_id)
+        transition(run_id, "running")
+        self._begin_segment(state)
+        state.segment_memory = None
+        self._start_thread(state)
+        return state
+
+    def start_revised(self, run_id: str, spec) -> AgentRunState:
+        """Start Search on a revised plan: the user changed the goal after a
+        search ended, code accepted the new plan (followup.run_followup_turn)
+        and the user confirmed it. A new segment of the same run under `spec`,
+        with a fresh budget from the plan's own settings. What the search
+        remembers is decided by services/replan.py: everything already tried,
+        re-scored against the new plan - or nothing, when the plan adds a
+        distance. No earlier fragility check counts under the new plan.
+        Candidates are still compared with the original baseline.
+        Raises ValueError if that run isn't here or is still searching."""
+        from agent.repositories.ai_run_repository import get_ai_run, transition
+        state = self._finished_run(run_id)
+        row = get_ai_run(run_id)
+        if row is None or row["status"] == "interviewing":
+            raise ValueError(f"search {run_id!r} has no stored plan to start")  # checked before the state is touched
+        if state.status != AgentRunStatus.PLAN_READY:  # a state restored for a waiting revised plan is already on it
+            replan.adopt_plan(state, spec)
+        state.spec = spec
+        self._begin_segment(state)
+        state.rebuild_pending = True
+        state.tried, state.best, state.winner, state.progress = [], None, None, None
+        state.unchecked_pass = False
+        # The row says from the start which plan this segment runs under and where
+        # its memory begins, so a search cut short (the app closed) restores right.
+        transition(run_id, "running", spec=dataclasses.asdict(spec),
+                   budget=state.budget_history + [self._budget_entry(state)])
+        self._start_thread(state)
+        return state
+
+    def _finished_run(self, run_id: str) -> AgentRunState:
         state = self.runs.get(run_id)
         if state is None:
             raise ValueError(f"no search {run_id!r} in this session to continue")
@@ -157,7 +194,9 @@ class AgentRunner:
             thread.join(timeout=30)  # the finished segment's last save
             if thread.is_alive():
                 raise ValueError("this search is still finishing - try again in a moment")
-        transition(run_id, "running")
+        return state
+
+    def _begin_segment(self, state: AgentRunState) -> None:
         state.segment += 1
         state.segment_start_round = len(state.rounds)
         state.budget = Budget.for_spec(state.spec, self._clock)
@@ -166,8 +205,16 @@ class AgentRunner:
         state.stalled_notice_sent = False
         state.stop_reason = state.finished_at = state.outcome_report = state.error = None
         state.status = AgentRunStatus.RUNNING
-        self._start_thread(state)
-        return state
+
+    @staticmethod
+    def _budget_entry(state: AgentRunState) -> dict:
+        """This segment's entry in ai_runs.budget_json: what it spent, the plan
+        it ran under, its distances and where the model's memory began."""
+        entry = {**state.budget.as_dict(state.segment), "plan": state.plan,
+                 "memory_from_round": state.memory_from_round, "distances": list(state.spec.distances)}
+        if state.segment_memory is not None:
+            entry["memory"] = state.segment_memory
+        return entry
 
     def poll(self) -> None:
         """No-op: _run() mutates `state` directly on its own thread, no
@@ -210,6 +257,12 @@ class AgentRunner:
         started = time.monotonic()
         self._log_run_start(state)
         try:
+            if state.rebuild_pending:
+                # A revised plan: what the search remembers is rebuilt against it
+                # here, on the search's own thread (it reads the solver cache).
+                replan.rebuild_memory(state, run_jobs)
+                state.rebuild_pending = False
+                state.revised_start = True
             while True:
                 try:
                     optimize_loop(state, run_jobs, on_round_done=self._save_rounds)
@@ -242,7 +295,7 @@ class AgentRunner:
             status = status_for(state.stop_reason, state.winner is not None)
             state.finished_at = now()
             state.budget.stop()
-            state.budget_history.append(state.budget.as_dict(state.segment))
+            state.budget_history.append(self._budget_entry(state))
             state.outcome_report = outcome_report(state, internal_error, status=status)
             state.error = state.outcome_report if status == AgentRunStatus.FAILED else None
             state.status = status  # last: a poller that sees the search finished finds the report already there

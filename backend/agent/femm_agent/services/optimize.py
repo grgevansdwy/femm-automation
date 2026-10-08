@@ -258,6 +258,15 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     if fragility.unchecked_passing(state):
         fragility.run_episode(state, job_runner)
 
+    if state.revised_start:
+        # A revised plan kept the memory. If a design already tried meets the new
+        # goal, has now survived its check, and the goal has nothing to push
+        # further, there is nothing to search for.
+        state.revised_start = False
+        if state.winner is not None and not progress.can_improve_after_pass(spec) and not state.cancelled:
+            state.stop_reason = "nothing_left"
+            return
+
     while True:
         # Checkpoints for a user stop (see AgentRunState.cancelled) and the
         # budget: here, after the LLM call returns, before a round's solves

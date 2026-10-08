@@ -156,8 +156,10 @@ def check_design(tried, state, job_runner) -> dict | None:
     failed = any(not n["passed"] for n in nudges)
     if incomplete and not failed:
         return None
+    # `plan`: which plan the verdict is against - a revised plan (services/replan.py)
+    # changes the objectives, so an earlier plan's check does not count under it.
     check = {"round": tried.round_num, "delta": tried.delta, "key": design_key(tried.scored.coilset),
-             "passed": not failed, "nudges": sorted(nudges, key=lambda n: n["pct"])}
+             "plan": state.plan, "passed": not failed, "nudges": sorted(nudges, key=lambda n: n["pct"])}
     check["summary"] = check_summary(check)
     return check
 

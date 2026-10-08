@@ -11,16 +11,9 @@ the run's objectives. A solve that isn't cached any more is run again.
 import dataclasses
 from datetime import datetime
 
-from agent.femm_agent.models.state import (
-    AgentRunState, AgentRunStatus, CandidateResult, RoundState, RoundStatus, Tried,
-)
-from agent.femm_agent.services import fragility, progress
-from agent.femm_agent.services.scorer import evaluate_async, rank_key, score, tool_result, wait_for_jobs
+from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, CandidateResult, RoundState, RoundStatus
+from agent.femm_agent.services import replan
 from agent.input_chat.models.spec import spec_from_dict
-from agent.femm_agent.models.schema import NEVER_EVALUATED
-from agent.input_chat.models.variables import (
-    allowed_fields, audit_changed_fields, free_fields_for, search_field_table,
-)
 from agent.input_chat.services.interview import InterviewState
 
 
@@ -75,7 +68,6 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     verdict. The budget is not restored - what each segment spent is in the
     row's `budget`; a continuation starts a new one. Raises RestoreError
     when the run can't be rebuilt (no plan, baseline gone)."""
-    from engine.models.coilset import CoilSet
     from agent.repositories.ai_run_repository import get_ai_run, list_messages
 
     record = get_ai_run(ai_run_id)
@@ -95,10 +87,7 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     state.budget_history = list(record.get("budget") or [])
     if record.get("finished_at"):
         state.finished_at = datetime.fromisoformat(record["finished_at"])
-    state.baseline_metrics = wait_for_jobs(evaluate_async(
-        baseline, spec.distances, job_runner, config_id=spec.baseline_config_id, config_name=baseline.config_name))
-    table = search_field_table(spec.settings)  # the run's own copy of the Search fields table
-    allowed = allowed_fields(baseline, spec.variable_spec, table)
+    state.fragility = list(record.get("fragility") or [])
     candidate_fields = {f.name for f in dataclasses.fields(CandidateResult)}
 
     for message in sorted(list_messages(ai_run_id, phase="optimize"), key=lambda m: m["round_num"]):
@@ -112,40 +101,26 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
         for stored in payload.get("candidates") or []:
             candidate = CandidateResult(**{k: v for k, v in stored.items() if k in candidate_fields})
             round_state.candidates.append(candidate)
-            if not candidate.valid:
-                # A proposal turned away unseen (over a limit) was never part of the memory.
-                never_evaluated = (candidate.error_code in NEVER_EVALUATED
-                                   or (candidate.error or "").startswith("not simulated"))  # rows from before the codes
-                if not never_evaluated:
-                    state.tried.append(Tried(round_state.round_num, candidate.delta, None,
-                                             candidate.rejection or {"valid": False, "error": candidate.error or ""},
-                                             round_state.segment))
-                continue
-            coilset = CoilSet(**candidate.candidate_coilset)
-            scored = score(coilset, wait_for_jobs(evaluate_async(coilset, spec.distances, job_runner)),
-                           baseline, state.baseline_metrics, spec)
-            scored.changed_fields = audit_changed_fields(baseline, coilset, allowed)["changed_fields"]
-            candidate.tool_result = tool_result(scored, spec)
-            state.tried.append(Tried(round_state.round_num, candidate.delta, scored, candidate.tool_result,
-                                     round_state.segment))
         state.rounds.append(round_state)
-
-    # The fragility checks already made: a design is never checked twice, and
-    # the winner is the best design that survived one.
-    for check in record.get("fragility") or []:
-        fragility.record_check(state, check)
-    survivors = [t.scored for t in state.tried if t.check is not None and t.check["passed"]]
-    if survivors:
-        state.winner = min(survivors, key=lambda s: rank_key(s, spec.favourite_metric))
-    fragility.refresh_best(state)
-    state.unchecked_pass = state.winner is None and bool(fragility.unchecked_passing(state))
 
     state.rounds_persisted = len(state.rounds)
     state.segment = max([r.segment for r in state.rounds] + [len(state.budget_history), 1])
     state.segment_start_round = max([r.round_num for r in state.rounds if r.segment < state.segment] + [0])
     state.search_attempt = state.rounds[-1].search_attempt if state.rounds else 1
-    if state.rounds:
-        state.progress = progress.assess(
-            state.tried, [r.round_num for r in state.rounds if not r.no_reply], spec,
-            free_fields_for(baseline, spec.variable_spec, table), state.segment_start_round)
+
+    # Which plan the search was working to, and where its memory begins - written
+    # with each segment's budget entry (AgentRunner). A row left 'plan_ready' after
+    # a search holds a revised plan the user has not started yet: the state comes
+    # back as that plan would start, so what is shown is what Start Search will use.
+    last = state.budget_history[-1] if state.budget_history else {}
+    state.plan = last.get("plan") or 1
+    state.memory_from_round = last.get("memory_from_round") or 0
+    if state.status == AgentRunStatus.PLAN_READY and state.budget_history:
+        old_distances = last.get("distances")
+        mode = replan.memory_mode(old_distances, spec.distances) if old_distances else replan.FRESH
+        state.plan += 1
+        state.segment_memory = mode
+        if mode == replan.FRESH:  # also when the earlier plan's distances are unknown: never solve old designs anew
+            state.memory_from_round = len(state.rounds)
+    replan.rebuild_memory(state, job_runner)
     return state

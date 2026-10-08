@@ -238,8 +238,24 @@ class AgentRunState:
     budget_history: list[dict] = dataclasses.field(default_factory=list)  # Budget.as_dict() of each finished segment
     # Which rule ended the search (ai_runs.stop_reason) - None while it runs.
     stop_reason: str | None = None
-    segment: int = 1  # 1 for the first search, +1 for each "continue"
+    segment: int = 1  # 1 for the first search, +1 for each "continue" or revised plan
     segment_start_round: int = 0  # how many rounds earlier segments had (this one's first round is this + 1)
+    # Which plan the search is working to: 1, then +1 each time the user starts a
+    # revised plan (AgentRunner.start_revised()). `spec` is always the plan in force.
+    plan: int = 1
+    # Rounds up to and including this one are outside the model's memory: a
+    # revised plan added a distance they were never simulated at, so the search
+    # started from the beginning (services/replan.py). 0 = every round counts.
+    memory_from_round: int = 0
+    # How this segment's memory began when a revised plan started it: "kept" or
+    # "fresh". None for a first search or a "continue".
+    segment_memory: str | None = None
+    # Set by start_revised(): the tried list must be rebuilt against the new
+    # plan before the segment's first round (done on the search's own thread).
+    rebuild_pending: bool = False
+    # True until the first round of a segment a revised plan started: an earlier
+    # design may already meet the new goal, so the loop checks before proposing.
+    revised_start: bool = False
     # Every candidate evaluated so far, across resumes and continuations - the
     # model's memory is rebuilt from it each round (optimize.search_memory()).
     tried: list[Tried] = dataclasses.field(default_factory=list)
