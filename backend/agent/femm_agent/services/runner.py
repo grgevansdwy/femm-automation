@@ -318,7 +318,6 @@ class AgentRunner:
         included): saves any round not already saved by _save_rounds() (all of
         them if that never ran), then the final status, the rule that ended
         it, what each segment spent, and the best candidate if any."""
-        from agent.femm_agent.services.scorer import tool_result
         from agent.repositories.ai_run_repository import transition
 
         AgentRunner._write_rounds(state, only_finished=False)

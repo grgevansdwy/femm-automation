@@ -20,7 +20,7 @@ from agent.femm_agent.services.scorer import (
     blended_score, coil_diameters, evaluate, points_past_bar, preference_score, rank_key, shortfall, tool_result,
 )
 from agent.input_chat.models.spec import AgentSpec
-from agent.input_chat.models.variables import VariableSpec, allowed_fields, audit_changed_fields, free_fields_for
+from agent.input_chat.models.variables import allowed_fields, audit_changed_fields, free_fields_for
 from engine.repositories.coilset_repository import get_coilset
 
 DISTANCES = [3.0, 5.0, 8.0, 12.0]

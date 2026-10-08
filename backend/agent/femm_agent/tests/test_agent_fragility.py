@@ -220,7 +220,9 @@ def test_five_failures_send_the_search_on_with_one_memory_line_each(monkeypatch)
     later = requests[requests.index(next(r for r in requests if r[0] is resumed)) + 1][0]
     memory = next(m["content"] for m in later if "failed the fragility check" in str(m.get("content")))
     assert memory.count("failed at") == 5, "one line per failed design, in the rebuilt memory"
-    assert "Best " not in memory.split("Met the goal but failed")[0] or "65.3" not in memory.split("Met the goal but failed")[0]
+    best_section = memory.split("Met the goal but failed")[0]
+    assert "65.4}" in best_section, "the sixth design has not been checked yet: still the best so far"
+    assert not any(str(r) in best_section for r in barely[1:]), "a failed design is not listed among the best"
     assert "6 design(s) met the goal but failed the fragility check" in state.outcome_report
 
 
