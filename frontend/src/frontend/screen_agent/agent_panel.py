@@ -4,9 +4,11 @@ questions once the search has started - and on the right that chat's
 baseline, live search progress or results. Every chat is its own
 ChatSession, so a search keeps running in the background while another
 chat is read or planned; only one search runs at a time. The chat stays
-open after the search starts - questions go to
-agent/femm_agent/services/followup.py, which can answer but never change
-anything (the baseline and plan are locked once the search starts; "+ New"
+open after the search starts - messages go to
+agent/femm_agent/services/followup.py. While the search runs it only answers
+questions. Once it has ended the user can also change the goal there: the
+revised plan is shown as a plan card with what it changes, and Start Search
+runs it as a new segment of the same run (the baseline never changes; "+ New"
 opens another chat) - the toggle-mode counterpart to configs_panel/runs_panel's
 manual-run dashboard (see main.py's toolbar toggle, _draw_agent_mode()).
 
@@ -105,6 +107,32 @@ class ChatSession:
         if self.run_state is not None:
             return "running" if self.run_state.status.value == "running" else "finished"
         return "finished" if self.search_started else "interview"
+
+    @property
+    def revised_plan(self):
+        """A plan the user asked for after this chat's search ended, accepted by
+        code and not started yet (agent/femm_agent/services/followup.py) - or
+        None. interview_state.spec holds it; run_state.spec stays the plan the
+        finished search ran under until Start Search."""
+        state = self.interview_state
+        if state is None or state.spec is None or not self.search_started:
+            return None
+        run = self.run_state
+        if run is None:
+            # Reopened from the sidebar and not rebuilt yet: the row says so.
+            return state.spec if (self.record or {}).get("status") == "plan_ready" else None
+        if run.status.value == "running":
+            return None
+        # A run rebuilt for a waiting revised plan already carries it (restore_run()).
+        return state.spec if run.status.value == "plan_ready" or state.spec != run.spec else None
+
+    @property
+    def plan_in_force(self):
+        """The plan the finished search ran under, to show what a revised plan
+        changes - None when it is not known here (a chat reopened with its
+        revised plan already waiting: the row holds only the new one)."""
+        run = self.run_state
+        return run.spec if run is not None and run.status.value != "plan_ready" else None
 
     @property
     def title(self) -> str:
@@ -251,6 +279,11 @@ class AgentPanelState:
         if distances != chat.synced_distances:
             self._sync_baseline_distances(chat, distances)
             chat.synced_distances = distances
+        if chat.search_started:
+            # After a search the plan card is shown exactly while a revised plan
+            # waits; starting it is immediate (confirm_plan()), never this hand-off.
+            chat.plan_confirmed = chat.revised_plan is None
+            return
         if chat.plan_confirmed and chat.run_state is None and self.running_chat is None:
             chat.run_state = self.agent_runner.submit(state.spec, ai_run_id=chat.ai_run_id)
             chat.live = True
@@ -417,8 +450,9 @@ class AgentPanelState:
     @property
     def pending_field_change(self) -> dict | None:
         """A Search fields change the AI proposed and the user hasn't answered -
-        only while planning; once a search has started its table is fixed."""
-        if self.interview_state is None or self.chat.search_started or self.chat.read_only_reason:
+        while planning, or after a search has ended (for a revised plan). A
+        running search's table is fixed."""
+        if self.interview_state is None or self.chat.phase == "running" or self.chat.read_only_reason:
             return None
         return self.interview_state.pending_field_change
 
@@ -439,6 +473,11 @@ class AgentPanelState:
         self.error = ""
         self.interview_state.settings.search_fields = dict(saved.search_fields)
         self.interview_state.pending_field_change = None
+        if self.chat.search_started:
+            # After a search: the same fixed message, answered by the follow-up
+            # model, which may now send the revised plan (built on the saved table).
+            self._send_followup(self.chat, FIELD_CHANGE_APPLIED_MESSAGE)
+            return
         self.plan_confirmed = False
         self.interview_state.finalized = False
         self.plan_problems = []
@@ -473,11 +512,83 @@ class AgentPanelState:
         if busy:
             self.error = busy
             return
+        if self.chat.search_started:
+            self._confirm_revised_plan()
+            return
         self.error = ""
         if self.recheck_plan():
             return  # shown on the plan, which stays unconfirmed
         self.plan_confirmed = True
         self.search_markers = [len(self.interview_state.transcript)]
+
+    def revised_plan_blocked(self) -> str | None:
+        """Why a waiting revised plan can't be started this moment, in one line
+        - None when Start Search may be clicked."""
+        chat = self.chat
+        if chat.revised_plan is None:
+            return "There is no revised plan to start."
+        if chat.interview_runner.busy or chat.restoring:
+            return "Wait for the reply in progress."
+        for distance in chat.revised_plan.distances:
+            run = chat.baseline_runs.get(distance)
+            if run is None or (not isinstance(run, dict) and run.status.value not in ("done", "failed")):
+                return f"The baseline is still being simulated at {distance:g} mm."
+            if not isinstance(run, dict) and run.status.value == "failed":
+                return f"The baseline could not be simulated at {distance:g} mm: {run.error or 'no reason given'}"
+        return self.search_busy_elsewhere
+
+    def revised_plan_notes(self) -> list[str]:
+        """What the card of a waiting revised plan says besides the plan itself:
+        each change from the plan the finished search ran under, then what the
+        new search will start from. Written by code (services/replan.py)."""
+        from agent.femm_agent.services import replan
+        chat = self.chat
+        new, old = chat.revised_plan, chat.plan_in_force
+        if new is None:
+            return []
+        if old is not None:
+            changes = replan.plan_diff(old, new) or ["Nothing differs from the plan the search ran under."]
+            return [f"Changed: {c}" for c in changes] + [replan.memory_line(old, new, chat.run_state.tried)]
+        # Reopened with the revised plan already waiting: the plan it replaces is not stored.
+        last = ((chat.record or {}).get("budget") or [{}])[-1]
+        fresh = not last.get("distances") or replan.memory_mode(last["distances"], new.distances) == replan.FRESH
+        return ["Revised after the search below (the plan it replaces is not shown in a reopened chat).",
+                "A distance was added, so this search starts from the beginning." if fresh
+                else "Continues from the designs already simulated, re-scored against this plan."]
+
+    def _confirm_revised_plan(self) -> None:
+        """Start Search on a revised plan: a new segment of the same run
+        (AgentRunner.start_revised()). A chat reopened from the sidebar first
+        has its run rebuilt from the database, in the background."""
+        chat = self.chat
+        blocked = self.revised_plan_blocked()
+        if blocked:
+            chat.error = blocked
+            return
+        chat.error = ""
+        if self.recheck_plan():
+            return  # shown on the plan card, which stays
+        if chat.run_state is None:
+            self._restore_then(chat, lambda: self._start_revised(chat))
+        else:
+            self._start_revised(chat)
+
+    def _start_revised(self, chat: ChatSession) -> bool:
+        other = self.running_chat
+        if other is not None and other is not chat:
+            chat.error = "Another search started in the meantime - start this plan when it ends."
+            return False
+        try:
+            self.agent_runner.start_revised(chat.run_state.id, chat.interview_state.spec)
+        except Exception as exc:  # ValueError (not startable), or the row refused the change
+            chat.error = f"The revised plan could not be started: {exc}"
+            return False
+        chat.error = ""
+        chat.live = True
+        chat.plan_confirmed = True
+        chat.search_markers.append(len(chat.interview_state.transcript))
+        self.sidebar.refresh()
+        return True
 
     def stop_search(self) -> None:
         """ "Stop and keep the best": ends the running search at its next
@@ -549,6 +660,18 @@ class AgentPanelState:
         chat.restoring = True
         threading.Thread(target=work, daemon=True).start()
 
+    def _send_followup(self, chat: ChatSession, text: str) -> None:
+        """A message after Start Search (agent/femm_agent/services/followup.py).
+        While the search runs it is a question and nothing can change. Once it
+        has ended the model may also answer with a revised plan or a Search
+        fields proposal - both only shown here, for the user to start or apply."""
+        def ask():
+            chat.interview_runner.send_followup(chat.interview_state, chat.run_state, text, allow_replan=True)
+        if chat.run_state is None:
+            self._restore_then(chat, ask)
+        else:
+            ask()
+
     def send_chat(self) -> None:
         chat = self.chat
         text = chat.chat_input.strip()
@@ -568,14 +691,7 @@ class AgentPanelState:
         chat.chat_input = ""
         chat.error = ""
         if chat.search_started:
-            # The search has started: questions only, nothing about the plan
-            # can change - see agent/femm_agent/services/followup.py.
-            def ask():
-                chat.interview_runner.send_followup(chat.interview_state, chat.run_state, text)
-            if chat.run_state is None:
-                self._restore_then(chat, ask)
-            else:
-                ask()
+            self._send_followup(chat, text)
             return
         # A message sent after a plan was already proposed is feedback to
         # revise it, not a confirmation. Clear BOTH plan_confirmed and
@@ -604,7 +720,15 @@ def _stored_search_markers(record: dict, messages: list[dict]) -> list[int]:
         answered = i + 1 < len(interview) and interview[i + 1]["role"] != "user"
         if i >= first and said_continue and not answered:
             markers.append(i + 1)
-    return markers
+    # A revised plan the user started: its segment's budget entry says how its
+    # memory began, and its first round's time says where in the chat it started.
+    revised = {e.get("segment") for e in record.get("budget") or [] if e.get("memory")}
+    rounds = sorted((m for m in messages if m["phase"] == "optimize"), key=lambda m: m["round_num"] or 0)
+    for segment in sorted(s for s in revised if s):
+        first_round = next((m for m in rounds if (m["payload"] or {}).get("segment") == segment), None)
+        if first_round is not None:
+            markers.append(sum(1 for m in interview if (m["created_at"] or "") < (first_round["created_at"] or "")))
+    return sorted(set(markers))
 
 
 def _message_display_text(msg: dict, tool_outcome: dict | None) -> str:
@@ -866,6 +990,24 @@ def _chat_ending(chat: ChatSession) -> tuple[str, str | None]:
             record["error"])
 
 
+def _marker_text(chat: ChatSession, index: int) -> str:
+    """What began at the chat's `index`-th search marker: the first search, a
+    "continue", or a revised plan (and whether it kept the memory) - read
+    from the segment's budget entry, which says how its memory began."""
+    if index == 0:
+        return "Search started."
+    run = chat.run_state
+    entries = list(run.budget_history) if run is not None else list((chat.record or {}).get("budget") or [])
+    memory = next((e.get("memory") for e in entries if e.get("segment") == index + 1), None)
+    if memory is None and run is not None and run.segment == index + 1:
+        memory = run.segment_memory  # the segment in progress has no entry yet
+    if memory == "fresh":
+        return "Search started on the revised plan, from the beginning (a distance was added)."
+    if memory == "kept":
+        return "Search started on the revised plan, with everything already tried re-scored against it."
+    return "Search continued with a fresh budget."
+
+
 def _draw_search_marker(state: AgentPanelState, width: float, marker: int) -> None:
     """The point in the chat where a search segment was started (Start
     Search, or a "continue"). For the latest one: while it runs the live
@@ -873,7 +1015,7 @@ def _draw_search_marker(state: AgentPanelState, width: float, marker: int) -> No
     up); once it ends this line says how it ended and offers Continue."""
     imgui.separator()
     imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + width)
-    started_text = "Search started." if marker == state.search_markers[0] else "Search continued with a fresh budget."
+    started_text = _marker_text(state.chat, state.search_markers.index(marker))
     if marker != state.search_markers[-1]:
         imgui.text_colored(_ACCENT_COLOR, started_text)
     elif state.phase == "finished":
@@ -888,8 +1030,8 @@ def _draw_search_marker(state: AgentPanelState, width: float, marker: int) -> No
             imgui.dummy(imgui.ImVec2(width, _MSG_GAP))
             return
         imgui.text_colored(_PLACEHOLDER_COLOR, 'Ask anything about this run. To search further toward the same goal, '
-                                               'reply "continue" or click Continue. To change the goal, click + New '
-                                               "and start a new chat - this one stays in the list.")
+                                               'reply "continue" or click Continue. To change the goal, say what '
+                                               "to change: the revised plan is shown here for you to start.")
         busy_elsewhere = state.search_busy_elsewhere
         chat = state.chat
         imgui.begin_disabled(bool(busy_elsewhere or chat.read_only_reason or chat.restoring or chat.interview_runner.busy))
@@ -913,7 +1055,7 @@ def _draw_chat_header(state: AgentPanelState) -> None:
     this chat's search runs, otherwise Delete for a saved chat. A new chat
     is the sidebar's "+ New" - it never closes this one."""
     labels = {"interview": "Planning", "running": "Searching - questions only",
-              "finished": "Finished - questions only"}
+              "finished": "Finished - ask, continue or change the goal"}
     right_edge = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
     imgui.align_text_to_frame_padding()
     imgui.text_disabled("Read-only" if state.chat.read_only_reason else labels.get(state.phase, ""))
@@ -1054,11 +1196,18 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     from the actual structured AgentSpec (not the model's free-text reply,
     which can be inconsistent) and requires an explicit click before
     AgentRunner.submit() ever runs (see AgentPanelState.poll())."""
+    revised = state.chat.revised_plan is not None
     imgui.separator()
-    imgui.text_colored(_ACCENT_COLOR, "Proposed plan")
+    imgui.text_colored(_ACCENT_COLOR, "Revised plan" if revised else "Proposed plan")
     for line in _plan_context_lines(state.interview_state.spec):
         imgui.push_text_wrap_pos(avail_width)
         imgui.text_wrapped(line)
+        imgui.pop_text_wrap_pos()
+    # A revised plan: what changed and what the search starts from, written by
+    # code - so a change the model made unasked is seen before Start Search.
+    for line in state.revised_plan_notes():
+        imgui.push_text_wrap_pos(avail_width)
+        imgui.text_colored(_PLACEHOLDER_COLOR, line)
         imgui.pop_text_wrap_pos()
     imgui.dummy(imgui.ImVec2(0, 4))
     _draw_plan_metrics_table(state)
@@ -1070,7 +1219,9 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     imgui.push_style_color(imgui.Col_.button.value, _ACCENT_COLOR)
     imgui.push_style_color(imgui.Col_.button_hovered.value, _ACCENT_HOVER_COLOR)
     busy_elsewhere = state.search_busy_elsewhere
-    imgui.begin_disabled(state.planning_blocked or bool(busy_elsewhere) or bool(state.plan_problems))
+    revised_blocked = state.revised_plan_blocked() if revised else None
+    imgui.begin_disabled(state.planning_blocked or bool(busy_elsewhere) or bool(state.plan_problems)
+                         or bool(revised_blocked))
     if imgui.button("Start Search", imgui.ImVec2(avail_width, _START_BUTTON_H)):
         state.confirm_plan()
     imgui.end_disabled()
@@ -1089,6 +1240,7 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
         imgui.text_disabled("after changing Settings > Search fields - or send a message to change the plan")
 
     hint = ("Another search is running - one at a time" if busy_elsewhere
+            else revised_blocked if revised_blocked
             else "or send another message to adjust the plan first")
     hint_w = imgui.calc_text_size(hint).x
     imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((avail_width - hint_w) / 2.0, 0.0))
@@ -1169,7 +1321,7 @@ def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
         # A manual hint overlay, not input_text_with_hint() - that widget
         # has no multi-line form.
         hint = {"running": "Ask about the search while it runs...",
-                "finished": 'Ask about this run, or type "continue" to search on...'}.get(state.phase, "Describe your objective and requirements...")
+                "finished": 'Ask about this run, type "continue", or say what to change...'}.get(state.phase, "Describe your objective and requirements...")
         # Two lines: on one, the keys ran off the edge of a narrow chat column.
         draw_list.add_text(imgui.ImVec2(box_pos.x + 14, box_pos.y + 10), imgui.get_color_u32(_INPUT_HINT_COLOR), hint)
         draw_list.add_text(imgui.ImVec2(box_pos.x + 14, box_pos.y + 10 + imgui.get_text_line_height_with_spacing()),
@@ -1352,7 +1504,8 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
     show_plan = state.interview_state.finalized and not state.plan_confirmed
     # Context lines + the fixed-height, independently-scrolling metrics
     # table (_PLAN_TABLE_H) + header/button chrome.
-    plan_h = (_PLAN_CHROME_H + len(_plan_context_lines(state.interview_state.spec)) * imgui.get_text_line_height_with_spacing()
+    plan_lines = (len(_plan_context_lines(state.interview_state.spec)) + len(state.revised_plan_notes())) if show_plan else 0
+    plan_h = (_PLAN_CHROME_H + plan_lines * imgui.get_text_line_height_with_spacing()
               + _PLAN_TABLE_H
               + ((len(state.plan_problems) + 2) * imgui.get_text_line_height_with_spacing() if state.plan_problems else 0.0)
               if show_plan else 0.0)

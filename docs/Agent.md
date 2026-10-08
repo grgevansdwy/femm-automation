@@ -1,6 +1,6 @@
 ---
 owns: backend/agent/**
-last-verified: 2026-10-07
+last-verified: 2026-10-08
 ---
 
 # Agent: the AI search agent
@@ -584,9 +584,11 @@ fresh budget. What the search then remembers is decided in
   and visible, outside the model's memory (`AgentRunState.memory_from_round`).
 
 Stored rounds are never rewritten. A revised goal that an earlier design already meets
-and survives its check under, with nothing left to push, ends before any round. `allow_replan` is off by default and
-the panel does not pass it: the screen that shows a revised plan and starts it is not
-built, so in the app the chat after a search is questions plus "continue".
+and survives its check under, with nothing left to push, ends before any round. A plan
+that changes nothing from the one in force is turned down, so a run is never left waiting
+on a plan it already has. `allow_replan` is off by default; the chat panel passes it for
+every message after Start Search (`AgentPanelState._send_followup()`), shows the revised
+plan as a plan card and starts it from there (`GUI.md`).
 
 ## 10. Settings — what's editable without touching code
 

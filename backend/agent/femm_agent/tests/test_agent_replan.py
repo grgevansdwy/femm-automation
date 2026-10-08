@@ -429,6 +429,16 @@ def test_a_rejected_revised_plan_changes_nothing_and_becomes_a_question(monkeypa
     assert get_ai_run(state.id)["status"] == "budget_exhausted"
 
 
+def test_a_plan_that_changes_nothing_is_not_left_waiting(monkeypatch):
+    state = _first_search(monkeypatch).state
+    same = _finalize(objectives=[{"metric": "tank_esr", "kind": "reduce", "tolerance_pct": 50.0}])
+    sent = _chat(monkeypatch, [same, {"role": "assistant", "content": "That is already the plan."}])
+    conversation = _conversation(state)
+    followup.run_followup_turn(conversation, "keep going", state, allow_replan=True, settings=state.spec.settings)
+    assert conversation.spec is state.spec and "already has" in json.loads(conversation.transcript[-2]["content"])["error"]
+    assert len(sent) == 2 and get_ai_run(state.id)["status"] == "budget_exhausted"
+
+
 def test_a_plan_that_arrives_after_the_search_started_again_is_rejected(monkeypatch):
     search = _first_search(monkeypatch)
     state = search.state

@@ -42,6 +42,8 @@ _STATUS_TEXT = {
     AgentRunStatus.STALLED: "finished - stopped early because it was no longer getting closer to the goal",
     AgentRunStatus.FAILED: "finished - failed with an error",
     AgentRunStatus.INTERRUPTED: "interrupted - the app was closed while it was searching",
+    AgentRunStatus.PLAN_READY: "finished; a revised plan is waiting for the user to start it - the plan below is "
+                               "that revised plan, and the earlier results are shown re-scored against it",
     AgentRunStatus.CANCELLED: "stopped by the user before any design met the goal",
 }
 
@@ -303,6 +305,10 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
         # Against the baseline the run was started with, not the config as it is today.
         spec, result = accept_finalize_call(function, conversation.baseline_config_id, run_state.baseline_coilset,
                                             settings, log, where="run_followup_turn")
+    if spec is not None and not replan.plan_diff(run_state.spec, spec):
+        # Nothing to confirm, and the run must not be left waiting on a plan it already has.
+        spec, result = None, {"valid": False, "error": "this is the plan the search already has - nothing was changed. "
+                                                       "To search further toward the same goal the user replies \"continue\"."}
     conversation.transcript.append({"role": "tool", "content": json.dumps(result)})
     if spec is not None:
         conversation.spec, conversation.finalized = spec, True
