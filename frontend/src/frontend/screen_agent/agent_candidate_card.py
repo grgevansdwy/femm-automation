@@ -55,7 +55,18 @@ def _fmt(value) -> str:
     return f"{value:.6g}" if isinstance(value, float) else str(value)
 
 
-def _draw_input_table(table_id: str, delta: dict, baseline_buffer: dict) -> None:
+def design_name(candidate: dict) -> str:
+    """ "C7", or "C7, built on C3" - how the search itself names a simulated
+    design. "" for a rejected proposal and for runs saved before designs had labels."""
+    label, base = candidate.get("label"), candidate.get("base_label")
+    if not label:
+        return f"built on {base}" if base else ""
+    return f"{label}, built on {base}" if base else label
+
+
+def _draw_input_table(table_id: str, delta: dict, baseline_buffer: dict, step_fields=None) -> None:
+    """step_fields: the fields this proposal itself changed, when it was built on
+    an earlier design - marked with *, the rest being that design's changes."""
     if not delta:
         imgui.text_disabled("(no fields changed)")
         return
@@ -67,7 +78,7 @@ def _draw_input_table(table_id: str, delta: dict, baseline_buffer: dict) -> None
         for field, new_value in delta.items():
             imgui.table_next_row()
             imgui.table_next_column()
-            imgui.text(field)
+            imgui.text(f"{field} *" if step_fields and field in step_fields else field)
             imgui.table_next_column()
             imgui.text(_fmt(baseline_buffer.get(field, "?")))
             imgui.table_next_column()
@@ -206,6 +217,9 @@ def draw_round_block(round_id: str, header: str, timing_text: str, reasoning: st
 
 def draw_candidate_card(card_id: str, candidate: dict, baseline_buffer: dict, spec_summary: dict, distance: float) -> None:
     """candidate: a plain dict shaped like agent.state.CandidateResult."""
+    name = design_name(candidate)
+    if name:
+        imgui.text_colored(_MUTED_COLOR, name)
     rationale = candidate.get("rationale")
     if rationale:
         imgui.push_text_wrap_pos(0.0)
@@ -241,7 +255,11 @@ def draw_candidate_card(card_id: str, candidate: dict, baseline_buffer: dict, sp
     if geometry:
         femm_open.button(f"{card_id}_femm", geometry, distance,
                          f"{baseline_buffer.get('config_name') or 'candidate'} {card_id}")
-    _draw_input_table(f"{card_id}_input", candidate.get("delta") or {}, baseline_buffer)
+    base_label = candidate.get("base_label")
+    _draw_input_table(f"{card_id}_input", candidate.get("delta") or {}, baseline_buffer,
+                      step_fields=set(candidate.get("step") or {}) if base_label else None)
+    if base_label:
+        imgui.text_colored(_MUTED_COLOR, f"* changed in this step; the rest comes from {base_label}")
     imgui.end_group()
 
     if not candidate.get("valid", False):
@@ -600,7 +618,7 @@ def draw_process_table(table_id: str, steps: list[tuple[str, dict, bool]], basel
              | imgui.TableFlags_.sizing_stretch_prop.value)
     if not imgui.begin_table(table_id, 4, flags):
         return
-    imgui.table_setup_column("Step", imgui.TableColumnFlags_.width_fixed.value, 70.0)
+    imgui.table_setup_column("Step", imgui.TableColumnFlags_.width_fixed.value, 90.0)
     imgui.table_setup_column("Changes", 0, 1.3)
     imgui.table_setup_column("Result", 0, 0.8)
     imgui.table_setup_column("Reasoning", 0, 2.0)
@@ -608,8 +626,10 @@ def draw_process_table(table_id: str, steps: list[tuple[str, dict, bool]], basel
     for label, candidate, is_best in steps:
         imgui.table_next_row()
         imgui.table_next_column()
+        if candidate.get("label"):
+            label = f"{label}  {candidate['label']}"
         if is_best:
-            imgui.text_colored(_PASS_COLOR, f"{label} (proposed)")
+            imgui.text_colored(_PASS_COLOR, f"{label}\n(proposed)")  # own line: the column is too narrow for both
         else:
             imgui.text(label)
 

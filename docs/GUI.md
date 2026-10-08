@@ -150,7 +150,9 @@ turns, search rounds, scoring) belong to `Agent.md`:
 - **`agent_candidate_card.py`** — the shared renderer for one round/candidate (geometry +
   result tables + reasoning) and the finished-search summary. A design that has had its
   fragility check (`Agent.md` §5) shows the outcome under "Goal met"; the summary says
-  when the proposed design meets the goal but has not been checked. Used by *both* the live
+  when the proposed design meets the goal but has not been checked. A simulated design
+  shows its label and the design it was built on ("C7, built on C3"); in its changes table
+  a `*` marks the fields that step itself changed. Used by *both* the live
   view and the stored-run replay so they can never visually drift apart — deliberately its
   own file (not part of `agent_panel.py`) so `agent_sidebar.py` can import it without a
   circular import.

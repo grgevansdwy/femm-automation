@@ -159,6 +159,14 @@ class CandidateResult:
     # concise reasoning the GUI shows per candidate, instead of the raw
     # chain-of-thought, which reads as noise even when cut short.
     rationale: str = ""
+    # "C7" - given to every design that was simulated and scored, numbered
+    # run-wide in the order results came back. None for a rejected proposal,
+    # which can't be a starting design.
+    label: str | None = None
+    base_label: str | None = None  # the design this proposal started from (its `base` argument); None = the baseline
+    # Only the values this call itself gave. `delta` above stays every value
+    # the design changes from the baseline (its base's changes + this step).
+    step: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -197,19 +205,30 @@ class Tried:
     `scored` is None for a rejected candidate (bad field, invalid geometry,
     failed solve); `result` is what the model was sent for it."""
     round_num: int  # run-wide, as in RoundState.round_num
-    delta: dict
+    delta: dict  # every value changed from the baseline (see CandidateResult.delta)
     scored: "Scored | None"
     result: dict
     segment: int = 1
     # Its fragility check (services/fragility.py), once it has had one: only a
     # design that met the goal is ever checked.
     check: dict | None = None
+    label: str | None = None  # "C7" - simulated designs only (see CandidateResult.label)
+    base_label: str | None = None
+    step: dict = dataclasses.field(default_factory=dict)
 
     @property
     def check_failed(self) -> bool:
         """Met the goal but did not survive the check: never a winner, and no
         longer counted as a pass."""
         return self.check is not None and not self.check["passed"]
+
+    @property
+    def name(self) -> str:
+        """How memory lines refer to it: "C7 (round 3, from C3)", or
+        "round 3 (from C3)" for a rejected proposal, which has no label."""
+        if self.label is None:
+            return f"round {self.round_num}" + (f" (from {self.base_label})" if self.base_label else "")
+        return f"{self.label} (round {self.round_num}" + (f", from {self.base_label})" if self.base_label else ")")
 
 
 @dataclasses.dataclass

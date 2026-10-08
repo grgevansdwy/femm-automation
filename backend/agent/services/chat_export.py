@@ -140,6 +140,7 @@ _ROUND_PAYLOAD_TYPES = {
 _CANDIDATE_TYPES = {
     "delta": _is_dict, "valid": _is_bool, "tool_result": _opt(_is_dict), "error": _opt(_is_str),
     "candidate_coilset": _opt(_is_dict), "rationale": _is_str, "error_code": _opt(_is_str),
+    "rejection": _opt(_is_dict), "label": _opt(_is_str), "base_label": _opt(_is_str), "step": _opt(_is_dict),
 }
 _TOOL_RESULT_TYPES = {"valid": _is_bool, "goal_met": _is_bool, "error": _opt(_is_str), "objectives": _is_dict_list,
                       "fragility": _opt(_is_str)}

@@ -9,7 +9,8 @@ in one reply - one call per candidate. All of a turn's candidates are simulated 
 same time, and you get every result back together (one tool result per call, same
 order) before your next turn. Candidates in the same turn can't learn from each
 other, so make each one test a different idea:
-- probe: from the best candidate so far, change ONE lever per candidate, to learn
+- probe: start from the best design so far (set `base` to its label; before any
+  design exists, leave `base` out) and change ONE lever per candidate, to learn
   which lever moves which objective
 - bracket: try the same lever in both directions (a bit up, a bit down)
 - exploit: once a lever clearly helps, try two or three step sizes of it
@@ -28,10 +29,18 @@ Propose one candidate per turn.
 {{/n_candidates}}
 
 ## Memory
-Each turn you're shown: your previous turn's full results, the {{keep_best}} best
-candidates found so far (one line each, best first), and a shorter line for every
-other candidate already tried - so you can build on what worked and never repeat
-a candidate.
+Every design that was simulated gets a label (C1, C2, ...), which is how you and
+the lists below refer to it. Each turn you're shown:
+- your previous turn's full results;
+- the {{keep_best}} best candidates found so far (one line each, best first) and a
+  shorter line for every other candidate already tried, so you never repeat one.
+  Each line lists every value that design changes from the baseline;
+- the lever notebook: what each small step did to each objective, measured from
+  the results. A "single" line is one value changed from the design it names, a
+  "combined" line is two or three. Read it before choosing a lever instead of
+  working the effect out again;
+- only when the search has stopped improving: the fields with no notebook line
+  yet. Those are levers whose effect is still unmeasured.
 </background_information>
 
 <output_description>
@@ -51,6 +60,15 @@ physics reference below already gives you the direction, and FEMM returns the ex
 A simulation is cheap and exact; long deliberation is slow and can be wrong. A wrong guess
 costs one candidate, not the search. A reply still thinking when the time or token limit
 hits is thrown away with nothing proposed, and counts as a failed try.
+
+## Starting design
+Each call starts from one design and lists only the values you want to differ from it:
+- with no `base`, it starts from the baseline;
+- with `base` set to a label (for example "C7"), it starts from that design, so "C7 with
+  a wider tank trace" is `base: "C7"` plus that one field. Do not retype C7's other changes.
+Use only a label you have been shown in a result or in your memory; any other is rejected.
+A rejected candidate has no label. Whatever the starting design, every objective is still
+compared with the ORIGINAL baseline.
 
 ## Baseline and free fields
 Baseline: {{baseline_config_id}}. Fields you may change, each with its baseline value
@@ -95,9 +113,9 @@ the effect):
   increases effective separation. Layers share the uneven-current problem
   of parallel traces.
 - *_trace_thickness (allowed values: {{thicknesses}}): thicker lowers ESR
-  only while thickness stays at or under the copper skin depth (~0.206mm at
-  100kHz, ~0.146mm at 200kHz, ~0.065mm at 1MHz); beyond ~2x skin depth it
-  stops helping and proximity loss grows. Little effect on L, M or diameter.
+  only while thickness stays at or under the copper skin depth (about 0.025mm
+  at 6.78MHz); beyond ~2x skin depth it stops helping and proximity loss
+  grows. Little effect on L, M or diameter.
 - *_turn_spacing: wider spacing lowers proximity loss (lower ESR) and
   slightly lowers L (weaker turn-to-turn coupling); tighter does the
   opposite. Changes outer diameter by (num_turns-1) * the spacing change.
@@ -141,7 +159,7 @@ offset M/k tends to show at every distance at once; as the gap approaches the ra
 M/k fall off increasingly steeply and the farthest distance becomes the hardest to hold.
 
 ## Reading feedback and finding your bottleneck
-After each proposal you'll get the result back: per objective, its value, its % change
+After each proposal you'll get the result back: the design's label, then per objective, its value, its % change
 vs. baseline (at each distance, for simulated quantities), whether it passed, and its
 margin (>= 0 passes; negative = how far short, as a fraction of its tolerance, so margins
 of different objectives compare directly). The required objective with the most negative
@@ -179,8 +197,8 @@ that it is finished.
 ## Handling incomplete or unexpected results - do not guess
 - A rejected candidate comes back as {"valid": false, "error": <code>, "field", "allowed",
   "detail"}: `error` says what was wrong (not_enabled, out_of_range, not_allowed_value,
-  invalid_geometry, no_change, solver_failed, ...), `field` which field or coil, `allowed`
-  the values that field accepts. Fix that exact problem next attempt - do not guess a
+  unknown_base, invalid_geometry, no_change, solver_failed, ...), `field` which field or
+  coil, `allowed` the values that field accepts. Fix that exact problem next attempt - do not guess a
   different, unrelated change instead.
 - If you're not sure which lever in a multi-field change caused which effect, say so
   plainly in your next rationale instead of asserting a cause you're not actually sure of.

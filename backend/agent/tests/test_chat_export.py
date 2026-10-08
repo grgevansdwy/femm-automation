@@ -219,6 +219,7 @@ _REJECTIONS = [
     ("payload", lambda text: _edited(text, lambda d: _first_round(d)["payload"].update(llm_seconds="soon"))),
     ("payload", lambda text: _edited(text, lambda d: _candidate(d).update(valid="yes"))),
     ("payload", lambda text: _edited(text, lambda d: _candidate(d).pop("delta"))),
+    ("payload", lambda text: _edited(text, lambda d: _candidate(d).update(label=7))),
     ("payload", lambda text: _edited(text, _valid_without_result)),
     ("payload", lambda text: _edited(text, _objective_without_metric)),
     ("payload", lambda text: _edited(text, lambda d: d["run"]["best_tool_result"].update(objectives="none"))),
