@@ -264,6 +264,32 @@ def test_a_pinned_value_an_earlier_design_lacks_makes_it_not_allowed():
     assert problem(dataclasses.replace(baseline, tank_center_r=71.0), limited) is None
 
 
+def test_labels_are_never_reused_and_a_design_outside_the_memory_cannot_be_a_base(monkeypatch):
+    search = _first_search(monkeypatch)
+    state = search.state
+    assert [t.label for t in state.tried] == ["C1", "C2"]
+
+    # Memory kept: the earlier labels still name their designs, and one can be built on.
+    search.revise(dataclasses.replace(state.spec, objectives=_cut(40.0)),
+                  [_propose(base="C2", num_rc_turns=state.baseline_coilset.num_rc_turns + 1)])
+    assert [t.label for t in state.tried][:3] == ["C1", "C2", "C3"] and state.tried[2].base_label == "C2"
+    assert state.tried[2].scored.coilset.tank_center_r == 70.0, "C2's design plus the one new value"
+    assert "C2 (round 2)" in search.requests[search.first_request][2]["content"]
+
+    # A distance is added: the memory is empty, numbering goes on, and an old label is unknown.
+    search.revise(dataclasses.replace(state.spec, distances=[10.0, 20.0]),
+                  [_propose(base="C2", tank_center_r=69.0), _propose(tank_center_r=68.0)])
+    rejected, fresh = state.rounds[-2].candidates[0], state.rounds[-1].candidates[0]
+    assert rejected.error_code == "unknown_base" and fresh.label == "C4"
+    assert [t.label for t in state.tried if t.scored is not None] == ["C4"]
+
+    # ...and the plan forbidding a field takes the label away with the design.
+    search.revise(dataclasses.replace(state.spec, variable_spec=VariableSpec(excluded_fields={"tank_center_r"})),
+                  [_propose(base="C4", num_rc_turns=state.baseline_coilset.num_rc_turns + 1)])
+    proposed = [c for r in state.rounds if r.segment == state.segment for c in r.candidates]
+    assert proposed[0].error_code == "unknown_base"
+
+
 # --- restoring from the database -----------------------------------------------------------------
 
 def test_restore_builds_the_same_memory_as_the_live_search_after_a_fresh_start(monkeypatch):
@@ -530,4 +556,4 @@ def test_run_data_tells_the_follow_up_model_about_plans_and_the_search_that_star
     text = followup.run_context(state)
     assert "PLAN (revised 1 time(s) in this chat)" in text and "REVISED PLAN" not in text
     assert "EARLIER SEARCH" in text and "Rounds 1-2: an earlier plan at distances [10.0] mm, 2 design(s) simulated" in text
-    assert "Round 3: changes {'tank_center_r': 69.0}" in text and "Round 1: changes" not in text
+    assert "Round 3 [C3]: changes {'tank_center_r': 69.0}" in text and "Round 1" not in text.split("ROUNDS (")[1]

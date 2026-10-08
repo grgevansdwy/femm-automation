@@ -261,6 +261,9 @@ class AgentRunner:
                 # A revised plan: what the search remembers is rebuilt against it
                 # here, on the search's own thread (it reads the solver cache).
                 replan.rebuild_memory(state, run_jobs)
+                # The verdict so far was reached under the earlier plan; this plan's
+                # first round starts the count (and no "not improving" nudge before it).
+                state.progress = None
                 state.rebuild_pending = False
                 state.revised_start = True
             while True:

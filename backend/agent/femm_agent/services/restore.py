@@ -64,8 +64,8 @@ def restore_interview(record: dict, messages: list[dict]) -> InterviewState:
 
 def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     """The AgentRunState of a stored run: its plan, every saved round, the
-    tried list (the model's memory), the best design and the progress
-    verdict. The budget is not restored - what each segment spent is in the
+    tried list (the model's memory, design labels included), the best design
+    and the progress verdict. The budget is not restored - what each segment spent is in the
     row's `budget`; a continuation starts a new one. Raises RestoreError
     when the run can't be rebuilt (no plan, baseline gone)."""
     from agent.repositories.ai_run_repository import get_ai_run, list_messages

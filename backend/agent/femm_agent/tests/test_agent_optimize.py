@@ -13,7 +13,7 @@ import json
 from agent.femm_agent.services import optimize
 from agent.input_chat.models.objective import Objective
 from agent.input_chat.models.spec import AgentSpec
-from agent.femm_agent.models.state import AgentRunState
+from agent.femm_agent.models.state import AgentRunState, Tried
 from engine.repositories.coilset_repository import get_coilset
 
 _METRICS = {"L_loop": 1.9e-7, "L_tank": 4.6e-6, "L_rc": 1.6e-6, "M12": 6e-7, "M13": 1.3e-7, "M23": 6.9e-7,
@@ -103,6 +103,9 @@ def test_a_round_queues_every_solve_before_waiting_and_isolates_failures(monkeyp
     tool_messages = [m for m in sent[1] if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in tool_messages] == ["c1", "c2", "c3", "c4", "c5"]
     assert json.loads(tool_messages[0]["content"])["valid"] is True
+    assert [json.loads(m["content"]).get("label") for m in tool_messages] == ["C1", None, None, "C2", None], \
+        "only a simulated design gets a label, and labels stay dense"
+    assert [c.label for c in candidates] == ["C1", None, None, "C2", None]
     assert state.stop_reason == "rounds"
     print("  ok  a batch queues all its solves first, isolates failures, and tags results with tool_call_id")
 
@@ -178,7 +181,7 @@ def test_each_request_carries_the_latest_round_raw_plus_the_best_candidates_so_f
     best_lines = memory.split("Other candidates")[0]
     assert best_lines.index("69.0") < best_lines.index("70.0") and "71.0" not in best_lines, "best 2 overall, best first"
     others = memory.split("Other candidates")[1]
-    assert "round 1: {'tank_center_r': 71.0} -> misses:" in others
+    assert "C2 (round 1): {'tank_center_r': 71.0} -> misses:" in others
     assert "round 1: {'not_a_field': 1} -> rejected:" in others
     assert "72.0" not in others, "the latest round is already shown in full, not repeated as a line"
     print("  ok  each request = latest round raw + best-N lines + one line per other tried candidate, no CoT")
@@ -258,7 +261,8 @@ def _prepare_one(function, **kwargs):
     variable_spec = kwargs.pop("variable_spec", VariableSpec())
     fixed = variable_spec.fixed_values
     return optimize._prepare({"id": "x", "function": function}, 0, 5, baseline, fixed,
-                             free_fields_for(baseline, variable_spec), allowed_fields(baseline, variable_spec))
+                             free_fields_for(baseline, variable_spec), allowed_fields(baseline, variable_spec),
+                             kwargs.pop("designs", None))
 
 
 def test_prepare_rejects_arguments_that_are_not_a_json_object():
@@ -320,3 +324,176 @@ def test_a_malformed_call_costs_only_its_own_candidate_and_the_run_carries_on(mo
     assert state.best is not None and state.best.coilset.tank_center_r == 70.0
     assert state.stop_reason == "rounds"
     print("  ok  malformed calls are rejected one by one and the run carries on")
+
+
+# --- starting designs: labels and the `base` argument --------------------------------------------
+
+def test_a_proposal_can_build_on_an_earlier_design_by_its_label(monkeypatch):
+    """ "C1 plus one value" builds C1's design with that value. `delta` stays
+    every change from the baseline, `step` is what the call itself gave, and a
+    bad `base` or a step that changes nothing is rejected on its own."""
+    baseline = get_coilset("base_coil")
+    wider = baseline.loop_r + 1
+    spec = dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[10.0], max_tool_calls=3,
+                               candidates_per_round=5,
+                               objectives=[Objective(metric="tank_esr", kind="reduce", tolerance_pct=90.0)])
+    state = AgentRunState(id="b1", spec=spec, baseline_coilset=baseline)
+    replies = [
+        {"role": "assistant", "content": "", "tool_calls": [_tool_call("a", tank_center_r=70.0, rationale="r1")]},
+        {"role": "assistant", "content": "", "tool_calls": [
+            _tool_call("b", base="C1", loop_r=wider, rationale="C1 plus a wider loop"),
+            _tool_call("c", base="C9", loop_r=wider, rationale="no such design"),
+            _tool_call("d", base="C1", tank_center_r=70.0, rationale="restates C1")]},
+        {"role": "assistant", "content": "done"},
+    ]
+    sent = []
+
+    def fake_call_llm(messages, tools, **kwargs):
+        sent.append(messages)
+        return replies[len(sent) - 1]
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    optimize.optimize_loop(state, _FakeJobRunner())
+
+    built, unknown, restated = state.rounds[1].candidates
+    assert (built.label, built.base_label) == ("C2", "C1")
+    assert built.step == {"loop_r": wider} and built.delta == {"tank_center_r": 70.0, "loop_r": wider}
+    assert built.candidate_coilset["tank_center_r"] == 70.0 and built.candidate_coilset["loop_r"] == wider
+    assert "label" not in built.tool_result, "the stored result stays comparable with scorer.tool_result()"
+    assert {"label", "base_label", "step"} <= set(dataclasses.asdict(built)), "saved with the round's payload"
+    assert not unknown.valid and unknown.label is None
+    assert unknown.rejection == {"valid": False, "error": "unknown_base", "field": "base",
+                                 "allowed": "a label shown in your results or memory, or no base",
+                                 "detail": "No design with this label exists."}
+    assert (restated.error_code, restated.rejection["detail"]) == \
+        ("no_change", "This changes nothing from C1. Change at least one field.")
+
+    memory = next(m["content"] for m in sent[2] if m["role"] == "user" and "Best" in m["content"])
+    assert "C2 (round 2, from C1): {'tank_center_r': 70.0, 'loop_r': " in memory
+    assert f"single   C1 -> C2: loop_r {baseline.loop_r:g} -> {wider:g} | tank_esr +0.0 pts" in memory
+    assert json.loads(next(m["content"] for m in sent[2] if m.get("tool_call_id") == "b"))["label"] == "C2"
+    print("  ok  base + step builds on an earlier design; unknown and no-op bases are rejected alone")
+
+
+def test_a_field_outside_the_allowed_set_cannot_enter_through_a_base():
+    """The audit compares the built design with the ORIGINAL baseline, so a base
+    carrying a field that isn't free in this run is rejected, not inherited."""
+    from types import SimpleNamespace
+    baseline = get_coilset("base_coil")
+    smuggler = Tried(1, {"tank_mu": baseline.tank_mu + 1}, SimpleNamespace(coilset=baseline), {}, label="C1")
+    p = _prepare_one({"name": "propose_coilset",
+                      "arguments": {"base": "C1", "loop_r": baseline.loop_r + 1, "rationale": "x"}},
+                     designs={"C1": smuggler})
+    assert p.candidate is None and (p.rejection.code, p.rejection.field) == ("not_enabled", "tank_mu")
+
+
+def test_labels_keep_counting_when_the_search_carries_on_and_earlier_designs_stay_usable(monkeypatch):
+    baseline = get_coilset("base_coil")
+    spec = dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[10.0], max_tool_calls=1,
+                               objectives=[Objective(metric="tank_esr", kind="reduce", tolerance_pct=90.0)])
+    state = AgentRunState(id="b2", spec=spec, baseline_coilset=baseline)
+    replies = iter([
+        {"role": "assistant", "content": "", "tool_calls": [_tool_call("a", tank_center_r=70.0, rationale="r")]},
+        {"role": "assistant", "content": "", "tool_calls": [
+            _tool_call("b", tank_center_r=69.0, rationale="r"),
+            _tool_call("c", base="C1", loop_r=baseline.loop_r + 1, rationale="C1 is from the first segment")]},
+    ])
+    monkeypatch.setattr(optimize, "call_llm", lambda messages, tools, **kwargs: next(replies))
+    optimize.optimize_loop(state, _FakeJobRunner())
+    state.budget = None  # a "continue": a fresh budget, the same run and the same tried list
+    optimize.optimize_loop(state, _FakeJobRunner())
+
+    assert [c.label for r in state.rounds for c in r.candidates] == ["C1", "C2", "C3"]
+    assert state.rounds[1].candidates[1].base_label == "C1"
+    assert [t.label for t in state.tried] == ["C1", "C2", "C3"]
+
+
+def test_the_tool_schema_offers_base_and_still_rejects_unknown_fields():
+    from agent.femm_agent.models.schema import build_tools
+    from agent.input_chat.models.variables import free_fields_for
+    parameters = build_tools(free_fields_for(get_coilset("base_coil")), "base_coil")[0]["function"]["parameters"]
+    assert parameters["properties"]["base"]["type"] == "string"
+    assert parameters["required"] == ["rationale"] and parameters["additionalProperties"] is False
+
+
+# --- the nudge and the edited prompt -------------------------------------------------------------
+
+def test_untried_fields_are_listed_only_when_the_caller_passes_them():
+    tried = [Tried(1, {"loop_r": 1.0}, None, {"error": "bad"})]
+    assert "no notebook line" not in optimize.search_memory(tried, 2, 3)
+    nudged = optimize.search_memory(tried, 2, 3, untried=["loop_r", "rc_radius"])
+    assert "Fields with no notebook line yet: loop_r, rc_radius." in nudged
+    assert not any(word in nudged.lower() for word in ("several", "multiple", "too many")), \
+        "the nudge never comments on how many values a proposal changed"
+
+
+def test_the_untried_fields_line_appears_only_once_the_verdict_is_not_improving(monkeypatch):
+    """Rounds 2 and 3 bring nothing better than round 1, so code's verdict turns
+    'stalled' after round 3 - only the request after that carries the line."""
+    baseline = get_coilset("base_coil")
+    spec = dataclasses.replace(AgentSpec(baseline_config_id="base_coil"), distances=[10.0], max_tool_calls=4,
+                               objectives=[Objective(metric="tank_esr", kind="reduce", tolerance_pct=90.0)])
+    state = AgentRunState(id="n1", spec=spec, baseline_coilset=baseline)
+    sent = []
+
+    def fake_call_llm(messages, tools, **kwargs):
+        sent.append(messages)
+        return {"role": "assistant", "content": "", "tool_calls": [
+            _tool_call(f"t{len(sent)}", loop_r=baseline.loop_r + len(sent), rationale="r")]}  # the fake solver ignores loop_r
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    optimize.optimize_loop(state, _FakeJobRunner())
+
+    assert [r.verdict for r in state.rounds] == ["improving", "improving", "stalled", "stalled"]
+    nudged = ["Fields with no notebook line yet:" in "".join(m["content"] or "" for m in messages if m["role"] == "user")
+              for messages in sent]
+    assert nudged == [False, False, False, True]
+    line = next(l for l in "\n".join(m["content"] for m in sent[3] if m["role"] == "user").splitlines()
+                if l.startswith("Fields with no notebook line yet:"))
+    assert "tank_center_r" in line and "loop_r" not in line
+
+
+def test_memory_stays_bounded_over_a_full_length_search(monkeypatch):
+    """25 rounds x 5 candidates: the notebook block never exceeds its cap, and
+    the memory grows by a short line per design, not by full results."""
+    from agent.femm_agent.services.notebook import NOTEBOOK_MAX_LINES
+    baseline = get_coilset("base_coil")
+    spec = AgentSpec(baseline_config_id="base_coil")
+    spec = dataclasses.replace(spec, distances=[10.0], max_tool_calls=25, candidates_per_round=5,
+                               settings=dataclasses.replace(spec.settings, stall_rounds=99),
+                               objectives=[Objective(metric="tank_esr", kind="reduce", tolerance_pct=90.0)])
+    state = AgentRunState(id="m1", spec=spec, baseline_coilset=baseline)
+    sent = []
+
+    def fake_call_llm(messages, tools, **kwargs):
+        sent.append(messages)
+        n = len(sent)
+        return {"role": "assistant", "content": "", "tool_calls": [
+            _tool_call(f"t{n}_{i}", tank_center_r=round(72.0 - n * 0.1 - i * 0.01, 2), rationale="r") for i in range(5)]}
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    optimize.optimize_loop(state, _FakeJobRunner())
+
+    assert len(sent) == 25 and len([t for t in state.tried if t.label]) == 125
+    memory = [next((m["content"] for m in messages[2:] if m["role"] == "user"), "") for messages in sent]
+    notebook = [line for line in memory[-1].splitlines() if line.startswith(("  single", "  combined"))]
+    assert len(notebook) == NOTEBOOK_MAX_LINES and f"Newest {NOTEBOOK_MAX_LINES} of 120 lines." in memory[-1]
+    growth = [len(b) - len(a) for a, b in zip(memory[10:], memory[11:])]
+    assert max(growth) < 5 * 200, "about one short line per new design"
+    assert len(memory[-1]) < 30_000
+
+
+def test_the_default_search_prompt_renders_and_quotes_skin_depth_at_the_operating_frequency():
+    from agent.femm_agent.services.prompts import system_prompt
+    from agent.input_chat.models.variables import free_fields_for
+    from agent.settings.prompt_defs import PROMPT_DEFS
+    from agent.settings.templating import check_placeholders
+
+    definition = PROMPT_DEFS["search_system"]
+    assert check_placeholders(definition.default, definition.placeholders, definition.required) == []
+    baseline = get_coilset("base_coil")
+    spec = AgentSpec(baseline_config_id="base_coil", distances=[10.0])
+    prompt = system_prompt(baseline, free_fields_for(baseline, spec.variable_spec), spec, {10.0: _METRICS})
+    assert "{{" not in prompt and "}}" not in prompt
+    assert "0.025mm" in prompt and "6.78MHz" in prompt and "100kHz" not in prompt and "1MHz)" not in prompt
+    assert "## Starting design" in prompt and "lever notebook" in prompt

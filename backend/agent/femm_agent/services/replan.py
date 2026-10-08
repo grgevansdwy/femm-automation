@@ -130,11 +130,18 @@ def rebuild_memory(state, job_runner) -> None:
     plans = segment_plans(state)
     state.tried, state.best, state.winner = [], None, None
 
+    labelled = 0  # simulated designs seen so far, in stored order
     for round_state in state.rounds:
-        if round_state.round_num <= state.memory_from_round:
-            continue
         same_plan = plans.get(round_state.segment, 1) == state.plan
         for candidate in round_state.candidates:
+            if candidate.valid:
+                # A run saved before designs had labels gets them here, in stored order -
+                # the same numbers the search itself would have given. Every simulated
+                # design of the run counts, in memory or not: a label is never reused.
+                labelled += 1
+                candidate.label = candidate.label or f"C{labelled}"
+            if round_state.round_num <= state.memory_from_round:
+                continue
             if not candidate.valid:
                 # A proposal turned away unseen (over a limit) was never part of the memory.
                 never_evaluated = (candidate.error_code in NEVER_EVALUATED
@@ -142,13 +149,14 @@ def rebuild_memory(state, job_runner) -> None:
                 if not never_evaluated and (same_plan or _same_design_now(candidate, baseline, spec)):
                     state.tried.append(Tried(round_state.round_num, candidate.delta, None,
                                              candidate.rejection or {"valid": False, "error": candidate.error or ""},
-                                             round_state.segment))
+                                             round_state.segment, base_label=candidate.base_label, step=candidate.step))
                 continue
             coilset = CoilSet(**candidate.candidate_coilset)
             delta = candidate.delta
             if not same_plan:
                 problem = design_problem(coilset, baseline, spec)
                 if problem is not None:
+                    # No label: a design the plan does not allow cannot be a proposal's `base`.
                     state.tried.append(Tried(round_state.round_num, candidate.delta, None, _not_in_plan(problem),
                                              round_state.segment))
                     continue
@@ -161,7 +169,8 @@ def rebuild_memory(state, job_runner) -> None:
             result = tool_result(scored, spec)
             if same_plan:
                 candidate.tool_result = result  # the round's own record, re-derived rather than trusted
-            state.tried.append(Tried(round_state.round_num, delta, scored, result, round_state.segment))
+            state.tried.append(Tried(round_state.round_num, delta, scored, result, round_state.segment,
+                                     label=candidate.label, base_label=candidate.base_label, step=candidate.step))
 
     # The fragility checks already made under this plan: a design is never
     # checked twice, and the winner is the best design that survived one.

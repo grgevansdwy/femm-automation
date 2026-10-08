@@ -165,6 +165,8 @@ def run_context(run_state, pending_spec=None, show_plan_arguments: bool = False)
             continue
         for i, c in enumerate(candidates, start=1):
             label = f"  Round {r.round_num}" + (f" candidate {i}" if len(candidates) > 1 else "")
+            if c.label:  # the name the candidate cards show - what the user will ask about
+                label += f" [{c.label}" + (f", built on {c.base_label}]" if c.base_label else "]")
             if c.valid and c.tool_result:
                 lines.append(f"{label}: changes {c.delta} -> goal_met={c.tool_result.get('goal_met')}; "
                              f"{objective_summary(c.tool_result)}{earlier_plan}")
