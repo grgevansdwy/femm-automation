@@ -134,6 +134,12 @@ def coerce_delta(delta: dict, free_fields: dict, known_fields=()) -> dict:
 # which would otherwise reject it as an unknown field.
 RATIONALE_KEY = "rationale"
 
+# Not a CoilSet field either - the label of an earlier simulated design ("C7")
+# this proposal starts from, instead of the baseline. optimize.py pops it off
+# and resolves it; an unknown label is rejected there, not by the schema (the
+# schema is built once per run, and labels are added every round).
+BASE_KEY = "base"
+
 # The name of the one tool the search model is offered (build_tools()) - optimize.py
 # rejects a call to anything else.
 PROPOSE_TOOL_NAME = "propose_coilset"
@@ -141,7 +147,8 @@ PROPOSE_TOOL_NAME = "propose_coilset"
 
 def build_tools(free_fields: dict, baseline_config_id: str) -> list[dict]:
     """The only action the model can take: propose a delta shaped like
-    free_fields (plus an optional one-line rationale). additionalProperties:
+    free_fields (plus a one-line rationale and an optional starting design,
+    `base`). additionalProperties:
     False rejects any field not in that set. Built per-run, not once at
     import time, since free_fields is computed dynamically per baseline
     (agent/input_chat/models/variables.py)."""
@@ -153,18 +160,26 @@ def build_tools(free_fields: dict, baseline_config_id: str) -> list[dict]:
             "(if there was one) and why this change should move the objective. Plain words, no lists."
         ),
     }
+    properties[BASE_KEY] = {
+        "type": "string",
+        "description": (
+            "Optional. The label of an earlier simulated design to start from, e.g. \"C7\". The fields "
+            "you give are then the only changes from that design. Omit it to start from the baseline."
+        ),
+    }
     return [{
         "type": "function",
         "function": {
             "name": PROPOSE_TOOL_NAME,
             "description": (
-                f"Propose one candidate coilset as a delta from the {baseline_config_id} baseline. "
+                f"Propose one candidate coilset as a delta from a starting design: the {baseline_config_id} "
+                "baseline, or the earlier design named in `base`. "
                 "Call it several times in one reply to try several candidates at once - they're "
                 "simulated together, and each call gets its own result. "
-                "Only include fields you want to change from baseline - anything omitted keeps its "
-                "baseline value. You'll get back each objective's value and % change vs. baseline "
-                "(at every distance, for simulated quantities) with pass/fail and margin, and "
-                "whether it meets the goal."
+                "Only include fields you want to change from the starting design - anything omitted "
+                "keeps the starting design's value. You'll get back the design's label, each objective's "
+                "value and % change vs. the ORIGINAL baseline (at every distance, for simulated "
+                "quantities) with pass/fail and margin, and whether it meets the goal."
             ),
             # rationale is required, not optional: optional, the model sometimes
             # skipped it (seen live in a round-4 card), leaving that round

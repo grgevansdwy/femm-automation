@@ -21,9 +21,10 @@ import time
 from agent.services.llm_client import LLMError, call_llm
 from agent.femm_agent.services.prompts import system_prompt
 from agent.femm_agent.models.schema import (
-    NEVER_EVALUATED, PROPOSE_TOOL_NAME, RATIONALE_KEY, Rejection, build_tools, coerce_delta,
+    BASE_KEY, NEVER_EVALUATED, PROPOSE_TOOL_NAME, RATIONALE_KEY, Rejection, build_tools, coerce_delta,
 )
 from agent.femm_agent.services import fragility, progress
+from agent.femm_agent.services.notebook import fields_without_a_line, notebook_block
 from agent.femm_agent.services.scorer import (
     SimulationLimit, SolveFailed, evaluate_async, misses_summary, objective_summary, rank_key, score, tool_result,
     wait_for_jobs,
@@ -182,7 +183,8 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
     # by round 5 and timed out - see docs/Agent.md §6):
     # - the latest round, raw: its tool calls and every full tool result,
     # - the spec.keep_best_candidates best candidates so far, one line each,
-    # - every other candidate already tried, a shorter line each.
+    # - every other candidate already tried, a shorter line each,
+    # - the lever notebook (notebook.py): what each small step did.
     # After a resume or a "continue" there is no raw latest round, so every
     # candidate tried so far is in the one-line memory instead.
     tried = state.tried
@@ -270,7 +272,11 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
 
         # memory must be role "user" not "system" - the office server's chat
         # template hard-rejects a system message anywhere but the very first one.
-        memory = search_memory(tried, last_round_num, spec.keep_best_candidates, favourite)
+        notebook = notebook_block(tried, baseline, fixed_values)
+        # The nudge: only once code's verdict says the search has stopped improving.
+        untried = ([] if state.progress is None or state.progress.verdict == "improving"
+                   else fields_without_a_line(tried, baseline, fixed_values, free_fields))
+        memory = search_memory(tried, last_round_num, spec.keep_best_candidates, favourite, notebook, untried)
         send_messages = [system_message, user_message] + ([{"role": "user", "content": memory}] if memory else []) + last_round
 
         rounds_this_call += 1
@@ -355,11 +361,16 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
     by side; each is still waited on and scored in its own try/except,
     so one bad candidate never costs the others their results."""
     spec, budget = state.spec, state.budget
+    # Simulated designs by label - what a proposal's `base` may name. state.tried
+    # holds every design of the run, so a label stays usable after a resume or a
+    # "continue". This round's own designs are added as they are scored, so
+    # candidates of one round can't build on each other.
+    designs = {t.label: t for t in state.tried if t.label}
     round_state.status = RoundStatus.EVALUATING
     round_state.evaluating_started_at = now()
 
     proposals = [
-        _prepare(tc, i, spec.candidates_per_round, baseline, fixed_values, free_fields, allowed)
+        _prepare(tc, i, spec.candidates_per_round, baseline, fixed_values, free_fields, allowed, designs)
         for i, tc in enumerate(tool_calls)
     ]
     for p in proposals:
@@ -415,15 +426,19 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
                 metrics = wait_for_jobs(p.jobs, on_wait=drop_queued_when_time_is_up)
                 scored = score(p.candidate, metrics, baseline, baseline_metrics, spec)
                 scored.changed_fields = p.changed_fields
-                result = tool_result(scored, spec)
+                stored = tool_result(scored, spec)
+                label = f"C{len(designs) + 1}"  # run-wide, in the order results are collected
                 round_state.candidates.append(CandidateResult(
-                    delta=p.delta, valid=True, tool_result=result, candidate_coilset=p.candidate_dict,
-                    rationale=p.rationale,
+                    delta=p.delta, valid=True, tool_result=stored, candidate_coilset=p.candidate_dict,
+                    rationale=p.rationale, label=label, base_label=p.base_label, step=p.step,
                 ))
-                state.tried.append(Tried(round_state.round_num, p.delta, scored, result, state.segment))
+                designs[label] = Tried(round_state.round_num, p.delta, scored, stored, state.segment,
+                                       label=label, base_label=p.base_label, step=p.step)
+                state.tried.append(designs[label])
                 # Best across the whole run - every attempt and segment - among
                 # designs that have not failed a fragility check.
                 fragility.refresh_best(state)
+                result = {"label": label, **stored}  # what the model is sent: the label is how it names this design later
             except Exception as exc:
                 if any(id(job) in dropped for job in p.jobs.values()):
                     p.rejection = Rejection("time_limit")
@@ -438,9 +453,11 @@ def _evaluate_round(state, round_state, tool_calls, this_round, job_runner, base
             round_state.candidates.append(CandidateResult(
                 delta=p.delta, valid=False, error=p.rejection.text(), error_code=p.rejection.code,
                 rejection=result, candidate_coilset=p.candidate_dict, rationale=p.rationale,
+                base_label=p.base_label, step=p.step,
             ))
             if p.rejection.code not in NEVER_EVALUATED:  # else nothing to remember - it's only in this round's raw results
-                state.tried.append(Tried(round_state.round_num, p.delta, None, result, state.segment))
+                state.tried.append(Tried(round_state.round_num, p.delta, None, result, state.segment,
+                                         base_label=p.base_label, step=p.step))
 
         # Feedback for the next round. tool_call_id pairs this result with
         # the call that proposed it - with several calls in one reply,
@@ -457,8 +474,10 @@ class _Proposal:
     means turned down without a solve (or, after collection, a failed solve);
     `jobs` is set once its solves are queued (scorer.evaluate_async)."""
     tool_call_id: str | None
-    delta: dict
+    delta: dict  # every value changed from the baseline: the base design's changes + this call's step
     rationale: str
+    base_label: str | None = None  # the earlier design this call starts from; None = the baseline
+    step: dict = dataclasses.field(default_factory=dict)  # only the values this call itself gave
     candidate: object = None
     candidate_dict: dict | None = None  # set as soon as a CoilSet can be built, even if it later fails validation/solving
     changed_fields: dict | None = None
@@ -475,20 +494,26 @@ class _Proposal:
         return self.rejection.text() if self.rejection is not None else None
 
 
-def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed) -> _Proposal:
+def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed, designs=None) -> _Proposal:
     """Builds and validates one tool call's candidate - everything that can
     reject it before a FEMM solve is spent on it, in this order: over the
-    per-round limit, tool name, argument shape, each field (open in this
-    search, right type, inside its limit), the build, the audit against the
-    baseline, something actually changed, and the geometry (the same check
-    simulate() runs). Whatever shape the model's call has, this returns a
-    rejected _Proposal (schema.Rejection, fed back to the model in its fixed
-    format) rather than raising - one malformed call must not cost the
-    round's other candidates, or the run."""
+    per-round limit, tool name, argument shape, the `base` label, each field
+    (open in this search, right type, inside its limit), the build, the audit
+    against the baseline, something actually changed, and the geometry (the
+    same check simulate() runs). Whatever shape the model's call has, this
+    returns a rejected _Proposal (schema.Rejection, fed back to the model in
+    its fixed format) rather than raising - one malformed call must not cost
+    the round's other candidates, or the run.
+
+    `designs` maps a label to the simulated design it names (a state.Tried): a call
+    with `base` builds on that design's changes instead of on the bare baseline.
+    Allowed fields are still audited against the ORIGINAL baseline, so nothing
+    can enter through a base that a direct proposal couldn't make."""
     function = tc.get("function") or {}
     raw_args = function.get("arguments")
     delta = dict(raw_args) if isinstance(raw_args, dict) else {}
     rationale = str(delta.pop(RATIONALE_KEY, "") or "")  # not a CoilSet field - coerce_delta would reject it
+    raw_base = delta.pop(BASE_KEY, None)  # nor is this - resolved below
     p = _Proposal(tool_call_id=tc.get("id"), delta=delta, rationale=rationale)
     try:
         if index >= limit:
@@ -497,8 +522,16 @@ def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed) -> 
             raise Rejection("unknown_tool")
         if not isinstance(raw_args, dict):
             raise Rejection("bad_arguments")
-        p.delta = coerce_delta(delta, free_fields, NUMERIC_FIELDS)  # fix string-typed args before they hit real arithmetic
-        candidate = dataclasses.replace(baseline, **fixed_values, **p.delta)  # baseline + pins + just this delta
+        base = None
+        if raw_base not in (None, ""):
+            base = (designs or {}).get(str(raw_base).strip())
+            if base is None:
+                # Not the labels themselves: this rejection stays in memory, where a list would go stale.
+                raise Rejection("unknown_base", BASE_KEY, "a label shown in your results or memory, or no base")
+            p.base_label = base.label
+        p.step = coerce_delta(delta, free_fields, NUMERIC_FIELDS)  # fix string-typed args before they hit real arithmetic
+        p.delta = {**base.delta, **p.step} if base is not None else p.step
+        candidate = dataclasses.replace(baseline, **fixed_values, **p.delta)  # baseline + pins + base's changes + this step
         p.candidate_dict = dataclasses.asdict(candidate)
         # Checked before the solve, so a violation never costs a FEMM run.
         audit = audit_changed_fields(baseline, candidate, allowed)
@@ -507,6 +540,8 @@ def _prepare(tc, index, limit, baseline, fixed_values, free_fields, allowed) -> 
         # A candidate identical to the baseline is a wasted solve slot (and, when the baseline
         # already meets the goal, a false "goal met"). With pins the pinned start point is
         # itself a different design, so an empty delta stays a legitimate proposal then.
+        if base is not None and p.candidate_dict == dataclasses.asdict(base.scored.coilset):
+            raise Rejection("no_change", detail=f"This changes nothing from {base.label}. Change at least one field.")
         if not audit["changed_fields"]:
             raise Rejection("no_change")
         problems = validate_coilset(candidate)
@@ -527,15 +562,19 @@ def _geometry_detail(coil: str, reason: str) -> str:
     return f"The {coil} coil is not valid: {reason.strip().rstrip(',')}."
 
 
-def search_memory(tried: list[Tried], latest_round: int | None, keep_best: int, favourite: str | None = None) -> str:
+def search_memory(tried: list[Tried], latest_round: int | None, keep_best: int, favourite: str | None = None,
+                  notebook=(), untried=()) -> str:
     """Everything the model should remember besides its latest round (which
     it gets raw, full results and all): the `keep_best` best candidates so
     far, ranked by scorer.rank_key() and summarized per objective, then a
     shorter line for every other candidate already tried, so it doesn't
-    propose them again. Rebuilt from scratch each round, so the prompt stays
-    roughly flat instead of growing by every result ever sent. "" before
-    anything has been tried. `latest_round` None = no round is being sent
-    raw (the search just resumed), so every candidate is listed here."""
+    propose them again, then the lever notebook (`notebook`, from
+    notebook.notebook_block()) and - only when the caller found the search is
+    no longer improving - `untried`, the free fields with no notebook line.
+    Rebuilt from scratch each round, so the prompt stays roughly flat instead
+    of growing by every result ever sent. "" before anything has been tried.
+    `latest_round` None = no round is being sent raw (the search just
+    resumed), so every candidate is listed here."""
     valid = sorted((t for t in tried if t.scored is not None and not t.check_failed),
                    key=lambda t: rank_key(t.scored, favourite))
     top = valid[:keep_best]
@@ -543,24 +582,27 @@ def search_memory(tried: list[Tried], latest_round: int | None, keep_best: int, 
     # listed, whichever round they came from, so the model stops building on them.
     fragile = [t for t in tried if t.check_failed]
     others = [t for t in tried if t not in top and t not in fragile and t.round_num != latest_round]
-    if not top and not others and not fragile:
+    if not top and not others and not fragile and not notebook and not untried:
         return ""
 
     lines = []
     if top:
         lines.append(f"Best {len(top)} candidate(s) so far, best first (each = baseline + the listed changes):")
-        lines += [f"  #{i} round {t.round_num}: {t.delta} -> goal_met={t.result['goal_met']}: {objective_summary(t.result)}"
+        lines += [f"  #{i} {t.name}: {t.delta} -> goal_met={t.result['goal_met']}: {objective_summary(t.result)}"
                   + (" [survived the fragility check]" if t.check is not None else "")
                   for i, t in enumerate(top, start=1)]
     if fragile:
         lines.append("Met the goal but failed the fragility check (the goal must still be met with every dimension "
                      "changed together by -2% to +2%) - not winners:")
-        lines += [f"  round {t.round_num}: {t.delta} -> {t.check['summary']}" for t in fragile]
+        lines += [f"  {t.name}: {t.delta} -> {t.check['summary']}" for t in fragile]
     if others:
         lines.append("Other candidates already tried - don't propose these again:")
-        lines += [f"  round {t.round_num}: {t.delta} -> " +
+        lines += [f"  {t.name}: {t.delta} -> " +
                   (f"misses: {misses_summary(t.result)}" if t.scored is not None else f"rejected: {_rejection_summary(t.result)}")
                   for t in others]
+    lines += notebook
+    if untried:
+        lines.append(f"Fields with no notebook line yet: {', '.join(untried)}.")
     if latest_round is not None and any(t.round_num == latest_round for t in tried):
         lines.append("Your latest turn's full results follow.")
     return "\n".join(lines)
