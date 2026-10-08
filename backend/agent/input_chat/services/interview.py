@@ -186,21 +186,26 @@ def _interview_tools(max_distances: int) -> list[dict]:
     gracefully in free text - is what makes the redirect message below
     code-controlled rather than whatever the model happens to write; see
     docs/agent-skills.md."""
+    return finalize_spec_tool(max_distances) + FLAG_OFF_TOPIC_TOOL + PROPOSE_SEARCH_FIELDS_TOOL
+
+
+def finalize_spec_tool(max_distances: int) -> list[dict]:
+    """FINALIZE_SPEC_TOOL with its distances cap set to `max_distances`. The
+    follow-up chat offers it too once a search has ended, so the user can
+    change the goal there (agent/femm_agent/services/followup.py)."""
     tool = copy.deepcopy(FINALIZE_SPEC_TOOL)
     distances = tool[0]["function"]["parameters"]["properties"]["distances"]
     distances["maxItems"] = max_distances
     distances["description"] = distances["description"].replace(str(_DEFAULT_MAX_DISTANCES), str(max_distances))
-    return tool + FLAG_OFF_TOPIC_TOOL + PROPOSE_SEARCH_FIELDS_TOOL
+    return tool
 
 
-def interview_system_prompt(baseline_config_id: str, baseline, settings: AgentSettings | None = None) -> str:
-    """Scopes the model to FEMM-simulation objective-gathering only (a
-    prompt-level guardrail, not a hard filter), and tells it which fields the
-    search may change and within what limits - the Search fields table in
-    force for this conversation (`settings`). The model reads the table; it
-    cannot change it (propose_search_fields_change only shows a proposal).
-    """
-    settings = settings or AgentSettings()
+def quantity_lines(baseline, settings: AgentSettings) -> dict:
+    """What a prompt needs before the model can write a plan for `baseline`
+    under `settings`' Search fields table: the simulated quantities, the outer
+    diameters, the open design variables with their baseline values and
+    limits, and the names of the closed ones. Used by the interview prompt
+    and, once a search has ended, by the follow-up prompt."""
     sim_lines = "\n".join(f"  {m}: {QUANTITY_GLOSSES[m]}" for m in SIM_RESULT_METRICS)
     design = design_values(baseline)
     derived_lines = "\n".join(f"  {m}: {QUANTITY_GLOSSES[m]}, baseline {design[m]:.4g}" for m in DERIVED_QUANTITIES)
@@ -213,12 +218,21 @@ def interview_system_prompt(baseline_config_id: str, baseline, settings: AgentSe
 
     open_fields = free_fields_for(baseline, None, search_field_table(settings))
     variable_lines = "\n".join(_variable_line(f, s) for f, s in open_fields.items())
+    return {"sim_lines": sim_lines, "derived_lines": derived_lines, "variable_lines": variable_lines,
+            "closed_fields": ", ".join(n for n in NUMERIC_FIELDS if n not in open_fields) or "none"}
+
+
+def interview_system_prompt(baseline_config_id: str, baseline, settings: AgentSettings | None = None) -> str:
+    """Scopes the model to FEMM-simulation objective-gathering only (a
+    prompt-level guardrail, not a hard filter), and tells it which fields the
+    search may change and within what limits - the Search fields table in
+    force for this conversation (`settings`). The model reads the table; it
+    cannot change it (propose_search_fields_change only shows a proposal).
+    """
+    settings = settings or AgentSettings()
     return render(settings.prompt("interview_system"), {
         "baseline_config_id": baseline_config_id,
-        "closed_fields": ", ".join(n for n in NUMERIC_FIELDS if n not in open_fields) or "none",
-        "sim_lines": sim_lines,
-        "derived_lines": derived_lines,
-        "variable_lines": variable_lines,
+        **quantity_lines(baseline, settings),
         "default_distances": config.DISTANCES,
     })
 
@@ -344,6 +358,67 @@ def plan_problems(spec: AgentSpec, baseline) -> list[str]:
     return problems
 
 
+def spec_arguments(spec: AgentSpec) -> dict:
+    """`spec` written back as finalize_spec arguments - what the model is shown
+    as the plan in force when the user asks to change it, so it resends the
+    plan with only that change instead of rewriting it from memory."""
+    args = {
+        "objective_text": spec.objective_text,
+        "distances": list(spec.distances),
+        "objectives": [],
+    }
+    for o in spec.objectives:
+        entry = {"metric": o.metric, "kind": o.kind, "tolerance_pct": o.tolerance_pct, "required": o.required}
+        if o.target_pct:
+            entry["target_pct"] = o.target_pct
+        if o.target_value is not None:
+            entry["target_value"] = o.target_value
+        args["objectives"].append(entry)
+    variable_spec = spec.variable_spec
+    if variable_spec.excluded_fields:
+        args["excluded_fields"] = sorted(variable_spec.excluded_fields)
+    if variable_spec.fixed_values:
+        args["fixed_values"] = dict(variable_spec.fixed_values)
+    if spec.favourite_metric:
+        args["favourite_metric"] = spec.favourite_metric
+    return args
+
+
+def accept_finalize_call(function: dict, baseline_config_id: str, baseline, settings: AgentSettings,
+                         log=None, where: str = "run_interview_turn") -> tuple[AgentSpec | None, dict]:
+    """Checks one finalize_spec call: (the plan, an accepting tool result) or
+    (None, a rejecting one). Never raises - whatever shape the model's
+    arguments have (a string where a list belongs raises TypeError, a
+    missing key KeyError, ...), it is a rejected plan the user gets asked
+    about, never a dead turn. Shared by the interview and by the follow-up
+    chat, so a plan is held to the same rules whenever it is proposed."""
+    args = function.get("arguments")
+    try:
+        if not isinstance(args, dict):
+            raise ValueError(f"finalize_spec's arguments must be a JSON object, got {type(args).__name__}")
+        return _build_spec(args, baseline_config_id, baseline, settings), {"valid": True, "message": "Spec finalized."}
+    except Exception as exc:
+        if log is not None and not isinstance(exc, ValueError):
+            log.warning(where, "finalize_spec arguments could not be read", exc)
+        return None, {"valid": False,
+                      "error": f"{type(exc).__name__}: {exc}" if not isinstance(exc, ValueError) else str(exc)}
+
+
+def accept_field_change_call(function: dict) -> tuple[dict | None, dict]:
+    """Checks one propose_search_fields_change call: (the proposal to show the
+    user, an accepting tool result) or (None, a rejecting one). Nothing is
+    written anywhere: the Search fields table changes only on the user's own
+    click (agent.settings.settings.apply_search_field_changes)."""
+    args = function.get("arguments")
+    try:
+        changes = check_field_changes(args.get("changes") if isinstance(args, dict) else None)
+        return ({"changes": changes, "reason": str(args.get("reason") or "")},
+                {"valid": True, "message": "Shown to the user. Nothing has changed - the table changes only "
+                                           "if they click Apply."})
+    except (ValueError, KeyError, TypeError) as exc:
+        return None, {"valid": False, "error": str(exc)}
+
+
 def run_interview_turn(state: InterviewState, user_message: str | None = None, should_abort=None,
                        log=None) -> None:
     """One exchange, mutated in place - the same in-place-mutation
@@ -412,34 +487,19 @@ def run_interview_turn(state: InterviewState, user_message: str | None = None, s
         _toolless_followup()
         return
 
-    args = function.get("arguments")
     if function.get("name") == PROPOSE_FIELDS_TOOL_NAME:
-        # Shown to the user as a card with Apply / Dismiss (agent_panel.py). Nothing
-        # is written here: the table changes only on the user's own click.
-        try:
-            changes = check_field_changes(args.get("changes") if isinstance(args, dict) else None)
-            state.pending_field_change = {"changes": changes, "reason": str(args.get("reason") or "")}
-            result = {"valid": True, "message": "Shown to the user. Nothing has changed - the table changes only "
-                                                "if they click Apply."}
-        except (ValueError, KeyError, TypeError) as exc:
-            result = {"valid": False, "error": str(exc)}
+        # Shown to the user as a card with Apply / Dismiss (agent_panel.py).
+        proposal, result = accept_field_change_call(function)
+        if proposal is not None:
+            state.pending_field_change = proposal
         state.transcript.append({"role": "tool", "content": json.dumps(result)})
         _toolless_followup()
         return
 
-    try:
-        if not isinstance(args, dict):
-            raise ValueError(f"finalize_spec's arguments must be a JSON object, got {type(args).__name__}")
-        state.spec = _build_spec(args, state.baseline_config_id, baseline, state.settings)
+    spec, result = accept_finalize_call(function, state.baseline_config_id, baseline, state.settings, log)
+    if spec is not None:
+        state.spec = spec
         state.finalized = True
-        result = {"valid": True, "message": "Spec finalized."}
-    except Exception as exc:
-        # Whatever shape the model's arguments have (a string where a list
-        # belongs raises TypeError, a missing key KeyError, ...), it is a
-        # rejected plan the user gets asked about - never a dead turn.
-        result = {"valid": False, "error": f"{type(exc).__name__}: {exc}" if not isinstance(exc, ValueError) else str(exc)}
-        if log is not None and not isinstance(exc, ValueError):
-            log.warning("run_interview_turn", "finalize_spec arguments could not be read", exc)
     state.transcript.append({"role": "tool", "content": json.dumps(result)})
 
     if result["valid"]:

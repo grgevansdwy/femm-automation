@@ -198,7 +198,8 @@ def test_rounds_the_limit_counts_every_reply_text_only_included(monkeypatch):
     assert _ending(state, row) == ("budget_exhausted", "rounds", 3) and len(requests) == 3
     assert row["budget"] == [{"segment": 1, "max_rounds": 3, "time_limit_s": 5400.0, "max_simulations": 300,
                               "rounds_used": 3, "simulations_used": 2, "cache_hits": 0,
-                              "seconds_used": row["budget"][0]["seconds_used"]}]
+                              "seconds_used": row["budget"][0]["seconds_used"],
+                              "plan": 1, "memory_from_round": 0, "distances": [10.0]}]
 
 
 def test_model_stopped_two_text_only_replies_in_a_row(monkeypatch):

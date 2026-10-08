@@ -132,6 +132,18 @@ turns, search rounds, scoring) belong to `Agent.md`:
   it; once a search has ended, typing exactly "continue" or clicking **Continue** resumes
   the same run with a fresh budget (`continue_search()`), and a status line is drawn in
   the chat where each search segment started.
+  Changing the goal after a search has ended: any other message goes to the follow-up
+  model, which may answer with a revised plan (`Agent.md` §9). `ChatSession.revised_plan`
+  is that plan while it waits; the plan card is drawn for it under the title "Revised
+  plan", with code-written lines for each change from the plan the search ran under and
+  for what the new search starts from (`revised_plan_notes()`). **Start Search** is
+  disabled while the baseline is still being simulated at one of its distances, a reply
+  is in progress or another search runs (`revised_plan_blocked()`); clicking it calls
+  `AgentRunner.start_revised()`, a new segment of the same run, and the status line in
+  the chat says whether it kept the memory or started from the beginning. A chat reopened
+  with a revised plan still waiting shows the card without the list of changes (the plan
+  it replaces is not stored). While a search runs the chat only answers questions; a
+  Search fields proposal made after a search gets the same Apply / Dismiss card.
   Two more things come from the Search fields table (`Agent.md` §4). When the interview
   model proposes a change to it, a card under the chat lists the change with **Apply**
   and **Dismiss**; `apply_field_change()` is the only code here that writes the table, and

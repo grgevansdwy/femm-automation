@@ -316,6 +316,160 @@ def test_typing_continue_resumes_the_same_run_with_a_fresh_budget(monkeypatch):
     assert len(run_state.rounds) == 6 and state.interview_state.transcript[-1]["content"] == "It ran out of rounds."
 
 
+# --- changing the goal after a search (M5): the revised plan card and Start Search ---------------
+
+def _revised_plan_reply(tolerance=1.0, distances=(5.0,)):
+    return {"role": "assistant", "content": "", "tool_calls": [{"id": "p2", "type": "function", "function": {
+        "name": "finalize_spec", "arguments": {
+            "objective_text": "cut tank ESR a little", "distances": list(distances),
+            "objectives": [{"metric": "tank_esr", "kind": "reduce", "tolerance_pct": tolerance}]}}}]}
+
+
+def _finished_search(monkeypatch, followup_replies):
+    """A chat whose first search (tank 71.0 and 70.0 against a 50% cut) has
+    ended without meeting its goal. The follow-up AI answers from
+    `followup_replies`, in order; `asked` collects (messages, tools) per request."""
+    state, calls = _planned_state(monkeypatch, lambda n, kwargs: _proposal(n), max_rounds=2)
+    run_state = _start(state)
+    row = _finished(state)
+    assert (row["status"], len(run_state.rounds)) == ("budget_exhausted", 2)
+    asked = []
+
+    def followup_ai(messages, tools, **kwargs):
+        asked.append((messages, tools))
+        return followup_replies[len(asked) - 1]
+
+    monkeypatch.setattr("agent.femm_agent.services.followup.call_llm", followup_ai)
+    return state, run_state, calls, asked
+
+
+def _say(state, text):
+    state.chat_input = text
+    state.send_chat()
+    _poll_until(lambda: not state.interview_runner.busy and not state.chat.restoring, timeout=20)
+    state.poll()
+
+
+def test_a_goal_changed_after_the_search_waits_as_a_plan_card_and_then_runs_on_the_same_run(monkeypatch):
+    from agent.repositories.ai_run_repository import get_ai_run, list_ai_runs, list_messages
+    from frontend.screen_agent.agent_panel import _marker_text
+
+    state, run_state, calls, asked = _finished_search(monkeypatch, [_revised_plan_reply()])
+    assert not (state.interview_state.finalized and not state.plan_confirmed), "no plan card after a finished search"
+
+    _say(state, "1% is enough")
+
+    assert [tool["function"]["name"] for tool in asked[0][1]] == ["finalize_spec", "propose_search_fields_change"]
+    assert state.chat.revised_plan is state.interview_state.spec and state.chat.plan_in_force is run_state.spec
+    assert state.interview_state.finalized and not state.plan_confirmed, "the plan card is on screen"
+    assert get_ai_run(run_state.id)["status"] == "plan_ready" and len(run_state.rounds) == 2, "nothing searched yet"
+    notes = state.revised_plan_notes()
+    assert notes[0].startswith("Changed: Changed objective - tank_esr: required, >= 1% lower (was:")
+    assert notes[-1] == "Continues from the 2 design(s) already simulated, re-scored against this plan."
+    assert state.revised_plan_blocked() is None
+
+    state.confirm_plan()
+    state.poll()
+    assert state.run_state is run_state and state.plan_confirmed and state.chat.revised_plan is None
+    row = _finished(state)
+
+    assert row["status"] == "goal_met" and run_state.plan == 2 and run_state.segment == 2
+    assert len(list_ai_runs()) == 1 and len(run_state.rounds) > 2, "the same run, new rounds appended"
+    assert [m["payload"]["segment"] for m in list_messages(run_state.id, phase="optimize")][:3] == [1, 1, 2]
+    assert "'tank_center_r': 70.0} -> goal_met=True" in calls[2][2]["content"], "earlier designs re-scored in memory"
+    assert len(state.search_markers) == 2
+    assert _marker_text(state.chat, 1) == "Search started on the revised plan, with everything already tried re-scored against it."
+
+
+def test_a_revised_plan_with_a_new_distance_says_it_starts_over_and_does(monkeypatch):
+    from frontend.screen_agent.agent_panel import _marker_text
+
+    state, run_state, calls, asked = _finished_search(monkeypatch, [_revised_plan_reply(distances=(5.0, 8.0))])
+    _say(state, "also check 8 mm")
+
+    notes = state.revised_plan_notes()
+    assert "Changed: Distances: added 8 mm" in notes and "starts from the beginning" in notes[-1]
+    assert set(state.baseline_runs) == {5.0, 8.0}, "the baseline is simulated at the new distance before Start Search"
+    state.confirm_plan()
+    state.poll()
+    _finished(state)
+
+    assert run_state.memory_from_round == 2 and [m["role"] for m in calls[2]] == ["system", "user"], "no memory"
+    assert _marker_text(state.chat, 1).startswith("Search started on the revised plan, from the beginning")
+
+
+def test_start_search_on_a_revised_plan_waits_for_the_baseline_at_a_new_distance(monkeypatch):
+    state, run_state, calls, asked = _finished_search(monkeypatch, [_revised_plan_reply(distances=(5.0, 8.0))])
+    _say(state, "also check 8 mm")
+    del state.baseline_runs[8.0]  # as if that solve had not been queued yet
+
+    assert state.revised_plan_blocked() == "The baseline is still being simulated at 8 mm."
+    state.confirm_plan()
+    assert state.chat.error == "The baseline is still being simulated at 8 mm." and run_state.segment == 1
+
+
+def test_while_the_search_runs_the_chat_cannot_change_the_plan(monkeypatch):
+    state, calls = _planned_state(monkeypatch, _wait_for_abort)
+    run_state = _start(state)
+    asked = []
+    monkeypatch.setattr("agent.femm_agent.services.followup.call_llm",
+                        lambda messages, tools, **kwargs: asked.append(tools) or {"role": "assistant", "content": "Stop it first."})
+    _say(state, "make it 1% instead")
+
+    assert asked == [None], "no tools while a search is running"
+    assert state.chat.revised_plan is None and state.plan_confirmed
+    state.stop_search()
+    _finished(state)
+
+
+def test_a_revised_plan_left_waiting_can_be_started_after_the_chat_is_reopened(monkeypatch):
+    from agent.repositories.ai_run_repository import get_ai_run, list_messages
+
+    state, run_state, calls, asked = _finished_search(monkeypatch, [_revised_plan_reply()])
+    _say(state, "1% is enough")
+    run_id = run_state.id
+
+    reopened = AgentPanelState(state.job_runner)  # as after closing and starting the app again
+    reopened.open_chat(run_id)
+    reopened.poll()
+    chat = reopened.chat
+    assert chat.run_state is None and chat.revised_plan is not None and not reopened.plan_confirmed
+    notes = reopened.revised_plan_notes()
+    assert "reopened chat" in notes[0] and notes[1].startswith("Continues from the designs already simulated")
+
+    reopened.confirm_plan()
+    _poll_until(lambda: not chat.restoring and chat.run_state is not None, timeout=20)
+    reopened.poll()
+    _poll_until(lambda: get_ai_run(run_id)["status"] not in ("running", "plan_ready"), timeout=20)
+
+    assert get_ai_run(run_id)["status"] == "goal_met" and chat.error == ""
+    segments = [m["payload"]["segment"] for m in list_messages(run_id, phase="optimize")]
+    assert segments[:2] == [1, 1] and 2 in segments, "its rounds were appended to the stored run"
+    assert chat.run_state.plan == 2 and len(reopened.search_markers) == 2
+
+
+def test_a_search_fields_change_proposed_after_a_search_waits_for_apply(monkeypatch):
+    from agent.settings.settings import load_settings
+
+    propose = {"role": "assistant", "content": "", "tool_calls": [{"id": "f1", "type": "function", "function": {
+        "name": "propose_search_fields_change",
+        "arguments": {"changes": [{"field": "tank_ferrite_thickness", "enabled": True}], "reason": "you asked"}}}]}
+    state, run_state, calls, asked = _finished_search(monkeypatch, [
+        propose, {"role": "assistant", "content": "I proposed opening the tank ferrite thickness."},
+        {"role": "assistant", "content": "Applied. What should the plan do with it?"}])
+    before = dict(load_settings().search_fields)
+    _say(state, "let it change the tank ferrite too")
+
+    assert state.pending_field_change["changes"][0]["field"] == "tank_ferrite_thickness"
+    assert load_settings().search_fields == before and state.chat.revised_plan is None, "shown, nothing changed"
+
+    state.apply_field_change()
+    _poll_until(lambda: not state.interview_runner.busy, timeout=10)
+    assert load_settings().search_fields["tank_ferrite_thickness"]["enabled"] is True
+    assert state.pending_field_change is None and len(asked) == 3, "the follow-up model was told, not the interview"
+    assert state.interview_state.transcript[-1]["content"] == "Applied. What should the plan do with it?"
+
+
 def test_off_topic_shows_a_fixed_message_never_the_models_own_words():
     """_message_display_text() must catch flag_off_topic BEFORE its normal
     "content wins first" rule - a model can put real explanatory text in

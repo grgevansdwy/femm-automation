@@ -241,7 +241,7 @@ def test_the_default_followup_prompt_follows_whether_the_search_is_running():
     running = AgentRunState(id="r", spec=spec, baseline_coilset=get_coilset("base_coil"), status=AgentRunStatus.RUNNING)
     finished = dataclasses.replace(running, status=AgentRunStatus.GOAL_MET)
     text = followup_system_prompt(running)
-    assert "still running" in text and "inputs of a running search are locked" in text and "{{" not in text
+    assert "still running" in text and "plan of a running search is locked" in text and "{{" not in text
     text = followup_system_prompt(finished)
     assert "has finished" in text and "can't be changed" in text and "still running" not in text
 

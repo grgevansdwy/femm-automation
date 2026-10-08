@@ -304,6 +304,9 @@ def transition(ai_run_id, new_status, **fields) -> dict:
             raise IllegalTransition(f"ai_run {ai_run_id}: {record['status']} -> {new_status} is not an allowed change")
         if new_status == 'running':
             record.update(finished_at=None, stop_reason=None, error=None)
+            if fields.get('spec') is not None:
+                # A revised plan starts: the earlier plan's best design is not this plan's.
+                record.update(best_round=None, best_coilset=None, best_tool_result=None)
         record['status'] = new_status
         record.update({name: value for name, value in fields.items() if value is not None})
         _upsert_run(conn, record)
@@ -314,8 +317,21 @@ def finalize_spec(ai_run_id, spec) -> None:
     """The model proposed a plan and the code accepted it: stores the spec and
     moves the run to 'plan_ready'. Nothing is searched until the user clicks
     Start Search (AgentRunner.submit() moves it to 'running'). Called again
-    for a revised plan."""
-    transition(ai_run_id, 'plan_ready', spec=spec)
+    for a revised plan - also after a search has ended, which leaves the
+    finished search's rounds and best design in place.
+
+    The plan being replaced is gone once this returns, and restoring the run
+    later must know which distances its rounds were simulated at (a revised
+    plan that adds one starts the search over). So a finished segment whose
+    budget entry doesn't say - a run from before entries carried it - gets
+    the old plan's distances written in first."""
+    record = get_ai_run(ai_run_id)
+    budget = None
+    if record and record['status'] in TERMINAL_STATUSES and record.get('spec') and record.get('budget'):
+        if 'distances' not in record['budget'][-1]:
+            budget = [*record['budget'][:-1],
+                      {**record['budget'][-1], 'distances': list(record['spec'].get('distances') or [])}]
+    transition(ai_run_id, 'plan_ready', spec=spec, budget=budget)
 
 
 def reap_running() -> int:
