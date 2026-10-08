@@ -59,6 +59,8 @@ Edit the numbers in the middle and click **Save** to change a design. **Clone** 
 1. Pick the design to improve, then say what you want, for example
    *"Keep the mutual inductance the same but cut the resistance."*
 2. Click **Start Search** and watch it try designs. At the end you can compare the best one with the original.
+3. Want something different once it has finished? Say so in the same chat (*"5% is enough"*, *"also check 8 mm"*).
+   It shows the changed plan and what is different; click **Start Search** again to run it.
 
 Your designs and results are saved on your computer. **Backup All** / **Restore All** at the top of the
 window save or load everything as one file, which is how to move your work to another computer.

@@ -410,7 +410,7 @@ def test_start_search_on_a_revised_plan_waits_for_the_baseline_at_a_new_distance
 
 def test_while_the_search_runs_the_chat_cannot_change_the_plan(monkeypatch):
     state, calls = _planned_state(monkeypatch, _wait_for_abort)
-    run_state = _start(state)
+    _start(state)
     asked = []
     monkeypatch.setattr("agent.femm_agent.services.followup.call_llm",
                         lambda messages, tools, **kwargs: asked.append(tools) or {"role": "assistant", "content": "Stop it first."})
