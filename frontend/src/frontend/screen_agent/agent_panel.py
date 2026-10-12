@@ -616,7 +616,8 @@ class AgentPanelState:
 
     def continue_search(self) -> bool:
         """Searches on from where the finished search stopped: same goal, same
-        memory, a fresh budget, rounds appended to the same run
+        memory, rounds appended to the same run, the budget counting on from
+        what was already spent unless a limit ended that search
         (AgentRunner.continue_run()). False if there is nothing to continue.
         A chat reopened from the sidebar first has its run rebuilt from the
         database, in the background - True then means the continue is on its way."""
@@ -875,8 +876,9 @@ def _draw_chat_feed(state: AgentPanelState, size: imgui.ImVec2) -> None:
 
     transcript = state.interview_state.transcript
     for i, msg in enumerate(transcript):
-        if i in state.search_markers:
-            _draw_search_marker(state, width, i)
+        for index, marker in enumerate(state.search_markers):
+            if marker == i:
+                _draw_search_marker(state, width, index)
         if msg.get("role") == "tool":
             continue
         # A tool_calls message's outcome lives in the very next transcript
@@ -894,9 +896,9 @@ def _draw_chat_feed(state: AgentPanelState, size: imgui.ImVec2) -> None:
         if text:
             _draw_message_bubble(text, is_user=(msg.get("role") == "user"), width=width)
 
-    for marker in state.search_markers:
+    for index, marker in enumerate(state.search_markers):
         if marker >= len(transcript):
-            _draw_search_marker(state, width, marker)
+            _draw_search_marker(state, width, index)
 
     if state.chat.restoring:
         imgui.text_colored(_THINKING_COLOR, "Loading this run's results...")
@@ -1005,25 +1007,30 @@ def _marker_text(chat: ChatSession, index: int) -> str:
         return "Search started."
     run = chat.run_state
     entries = list(run.budget_history) if run is not None else list((chat.record or {}).get("budget") or [])
-    memory = next((e.get("memory") for e in entries if e.get("segment") == index + 1), None)
-    if memory is None and run is not None and run.segment == index + 1:
-        memory = run.segment_memory  # the segment in progress has no entry yet
+    entry = next((e for e in entries if e.get("segment") == index + 1), {})
+    memory, continues = entry.get("memory"), entry.get("continues")
+    if not entry and run is not None and run.segment == index + 1:
+        # the segment in progress has no entry yet
+        memory, continues = run.segment_memory, run.budget.continues if run.budget is not None else None
     if memory == "fresh":
         return "Search started on the revised plan, from the beginning (a distance was added)."
     if memory == "kept":
         return "Search started on the revised plan, with everything already tried re-scored against it."
+    if continues:
+        return "Search continued, counting on from the budget already used."
     return "Search continued with a fresh budget."
 
 
-def _draw_search_marker(state: AgentPanelState, width: float, marker: int) -> None:
-    """The point in the chat where a search segment was started (Start
-    Search, or a "continue"). For the latest one: while it runs the live
+def _draw_search_marker(state: AgentPanelState, width: float, index: int) -> None:
+    """The point in the chat where the `index`-th search segment was started
+    (Start Search, or a "continue" - two can share a place in the chat when
+    nothing was said between them). For the latest one: while it runs the live
     status is pinned above the input instead (always visible, even scrolled
     up); once it ends this line says how it ended and offers Continue."""
     imgui.separator()
     imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + width)
-    started_text = _marker_text(state.chat, state.search_markers.index(marker))
-    if marker != state.search_markers[-1]:
+    started_text = _marker_text(state.chat, index)
+    if index != len(state.search_markers) - 1:
         imgui.text_colored(_ACCENT_COLOR, started_text)
     elif state.phase == "finished":
         ending, report = _chat_ending(state.chat)
@@ -1042,12 +1049,13 @@ def _draw_search_marker(state: AgentPanelState, width: float, marker: int) -> No
         busy_elsewhere = state.search_busy_elsewhere
         chat = state.chat
         imgui.begin_disabled(bool(busy_elsewhere or chat.read_only_reason or chat.restoring or chat.interview_runner.busy))
-        if imgui.button(f"Continue##continue_{marker}"):
+        if imgui.button(f"Continue##continue_{index}"):
             state.continue_search()
         imgui.end_disabled()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
             imgui.set_tooltip(busy_elsewhere or
-                              "Keep searching: same goal, everything tried so far kept in memory, a fresh budget.")
+                              "Keep searching: same goal, everything tried so far kept in memory. The budget "
+                              "counts on from what was used (a fresh one if a limit ended the search).")
     else:
         imgui.text_colored(_ACCENT_COLOR, started_text)
         imgui.text_colored(_PLACEHOLDER_COLOR, "You can keep asking questions while it runs; the baseline and "

@@ -25,7 +25,7 @@ from typing import Protocol
 from agent.femm_agent.services import fragility, replan
 from agent.femm_agent.services.optimize import RoundFailed, optimize_loop
 from agent.femm_agent.services.outcome import outcome_report
-from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, Budget, now, status_for
+from agent.femm_agent.models.state import BUDGET_STOP_REASONS, AgentRunState, AgentRunStatus, Budget, now, status_for
 
 
 def _git_commit() -> str | None:
@@ -146,15 +146,17 @@ class AgentRunner:
 
     def continue_run(self, run_id: str) -> AgentRunState:
         """ "continue": searches on from where a finished search stopped, as a
-        new segment of the same run - a fresh budget (the run's own settings),
-        the same memory (everything tried so far), rounds appended after the
-        existing ones, candidates still compared with the original baseline.
+        new segment of the same run - the same memory (everything tried so
+        far), rounds appended after the existing ones, candidates still
+        compared with the original baseline. Its budget carries on from what
+        the search had already spent, unless that search ended at a budget
+        limit: then it is a fresh one (the run's own settings).
         Raises ValueError if that run isn't here or is still searching."""
         from agent.repositories.ai_run_repository import transition
         state = self._finished_run(run_id)
         self._check_imported_plan(state, state.spec)
         transition(run_id, "running")
-        self._begin_segment(state)
+        self._begin_segment(state, carry_budget=True)
         state.segment_memory = None
         self._start_thread(state)
         return state
@@ -215,10 +217,19 @@ class AgentRunner:
             raise ValueError("this imported plan can't search under this machine's Search fields: "
                              + "; ".join(problems))
 
-    def _begin_segment(self, state: AgentRunState) -> None:
+    def _begin_segment(self, state: AgentRunState, carry_budget: bool = False) -> None:
+        """`carry_budget`: the new segment's budget starts with what the one
+        before had spent, when that one was cut short before any limit."""
+        previous = state.budget
+        cut_short = (carry_budget and previous is not None and state.stop_reason not in BUDGET_STOP_REASONS
+                     and previous.exhausted() is None)
+        if cut_short:
+            state.budget = Budget.with_spend(state.spec, previous.as_dict(state.segment), self._clock)
+            state.budget.continues = state.segment
+        else:
+            state.budget = Budget.for_spec(state.spec, self._clock)
         state.segment += 1
         state.segment_start_round = len(state.rounds)
-        state.budget = Budget.for_spec(state.spec, self._clock)
         state.search_attempt = 1
         state.cancelled = False
         state.stalled_notice_sent = False
@@ -357,12 +368,15 @@ class AgentRunner:
     @staticmethod
     def _save_rounds(state: AgentRunState) -> None:
         """optimize_loop's on_round_done hook: saves the finished rounds not yet
-        in the database, so a crash mid-search loses at most the round in flight.
-        Never raises - a database hiccup here must not kill the search; _persist()
+        in the database, and what the segment has spent so far, so a crash
+        mid-search loses at most the round in flight and a "continue" after it
+        still counts from there. Never raises - a database hiccup here must not kill the search; _persist()
         below saves whatever this missed. A round is written at most once
         (state.rounds_persisted)."""
         try:
             AgentRunner._write_rounds(state, only_finished=True)
+            from agent.repositories.ai_run_repository import save_budget
+            save_budget(state.id, state.budget_history + [AgentRunner._budget_entry(state)])
         except Exception as exc:
             if state.log is not None:
                 state.log.warning("AgentRunner._save_rounds", "could not save a finished round", exc)

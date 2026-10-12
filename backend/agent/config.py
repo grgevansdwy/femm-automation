@@ -15,7 +15,8 @@ API_BASE_URL = os.environ.get("LLM_API_BASE", "http://192.168.1.74:8854")
 MODEL = os.environ.get("AGENT_MODEL", "Qwen3.8-Flash-Next-UD-Q4_K_XL")  # must support tool calling
 MAX_TOOL_CALLS = 25  # rounds (LLM replies) per search, counted across resumes; a text-only reply uses one too
 # The other two limits on one search (agent/femm_agent/models/state.py's Budget). Whichever
-# is reached first ends it; "continue" starts a new segment with a fresh budget.
+# is reached first ends it; "continue" then starts a new segment with a fresh budget
+# (after a search cut short before any limit, it counts on from what was spent).
 SEARCH_TIME_LIMIT_S = 5400.0  # wall clock for the whole search: AI requests and solves
 MAX_SIMULATIONS = 300  # fresh solves (one candidate at one distance); cache hits and the baseline are free
 # Stop rules judged by code (agent/femm_agent/services/progress.py). A round "improves" when the

@@ -140,7 +140,8 @@ turns, search rounds, scoring) belong to `Agent.md`:
   **Stop and keep the best** (shown while a
   search runs, with a confirmation) ends the search at its next checkpoint and stays on
   it; once a search has ended, typing exactly "continue" or clicking **Continue** resumes
-  the same run with a fresh budget (`continue_search()`), and a status line is drawn in
+  the same run (`continue_search()`; the budget counts on from what was used, or is a
+  fresh one if a limit ended the search), and a status line is drawn in
   the chat where each search segment started.
   Changing the goal after a search has ended: any other message goes to the follow-up
   model, which may answer with a revised plan (`Agent.md` §9). `ChatSession.revised_plan`

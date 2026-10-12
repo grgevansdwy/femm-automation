@@ -123,7 +123,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
 
     Resumable: everything the search has learned is on the state (state.tried,
     state.best, state.budget), so calling this again - after a failed round,
-    or for a "continue" segment with a fresh budget - carries on with the
+    or for a "continue" segment with its own budget - carries on with the
     model's memory intact. Rounds are appended to state.rounds with run-wide numbering.
 
     Stop rules, checked after every round, in this order:

@@ -11,7 +11,7 @@ the run's objectives. A solve that isn't cached any more is run again.
 import dataclasses
 from datetime import datetime
 
-from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, CandidateResult, RoundState, RoundStatus
+from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, Budget, CandidateResult, RoundState, RoundStatus
 from agent.femm_agent.services import replan
 from agent.input_chat.models.spec import spec_from_dict
 from agent.input_chat.services.interview import InterviewState
@@ -84,8 +84,9 @@ def restore_interview(record: dict, messages: list[dict]) -> InterviewState:
 def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     """The AgentRunState of a stored run: its plan, every saved round, the
     tried list (the model's memory, design labels included), the best design
-    and the progress verdict. The budget is not restored - what each segment spent is in the
-    row's `budget`; a continuation starts a new one. Raises RestoreError
+    and the progress verdict. The budget comes back as the last segment left
+    it (the row's `budget`, saved after every round, under this plan's limits),
+    so a "continue" counts on from there. Raises RestoreError
     when the run can't be rebuilt (no plan, baseline gone)."""
     from agent.repositories.ai_run_repository import get_ai_run, list_messages
 
@@ -133,6 +134,9 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     # a search holds a revised plan the user has not started yet: the state comes
     # back as that plan would start, so what is shown is what Start Search will use.
     last = state.budget_history[-1] if state.budget_history else {}
+    if last:
+        state.budget = Budget.with_spend(spec, last)
+        state.budget.continues = last.get("continues")
     state.plan = last.get("plan") or 1
     state.memory_from_round = last.get("memory_from_round") or 0
     if state.status == AgentRunStatus.PLAN_READY and state.budget_history:

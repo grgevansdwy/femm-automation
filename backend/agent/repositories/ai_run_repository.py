@@ -415,6 +415,15 @@ def finalize_spec(ai_run_id, spec) -> None:
     transition(ai_run_id, 'plan_ready', spec=spec, budget=budget)
 
 
+def save_budget(ai_run_id, budget) -> None:
+    """Writes a run's budget entries without touching its status: what the
+    segment in progress has spent so far, saved as each round finishes so a
+    search cut short (the app closed) still says where it was."""
+    with _connection() as conn:
+        conn.execute('UPDATE ai_runs SET budget_json = ? WHERE id = ?', (_dumps(budget), ai_run_id))
+        conn.commit()
+
+
 def reap_running() -> int:
     """Marks every 'running' row 'interrupted' - called once when the app
     starts, when no search can be running (a search lives in the app's own

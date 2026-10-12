@@ -63,12 +63,18 @@ def status_for(stop_reason: str, has_winner: bool) -> AgentRunStatus:
     return _STATUS_WITHOUT_A_WINNER.get(stop_reason, AgentRunStatus.FAILED)
 
 
+BUDGET_STOP_REASONS = ("rounds", "time", "simulations")  # what Budget.exhausted() can return
+
+
 @dataclasses.dataclass
 class Budget:
     """What one search segment may spend, and what it has spent: rounds, wall
-    clock, and fresh simulations. One per segment - the first search, then
-    each "continue" gets a new one - and it lives on the run state, so a
-    search that resumes after a failed round keeps counting where it was.
+    clock, and fresh simulations. One per segment, and it lives on the run
+    state, so a search that resumes after a failed round keeps counting where
+    it was. A "continue" after a search that was cut short before any limit
+    (stopped by the user, the app closed) starts its segment's budget with
+    what was already spent (with_spend()); only one that reached a limit gets
+    a budget that starts from zero.
 
     `clock` is read only through this object (default time.monotonic), so a
     test can drive time by hand instead of sleeping."""
@@ -89,6 +95,11 @@ class Budget:
     # search sees as left; neither changes the limits reported.
     reserved_simulations: int = 0
     reserved_s: float = 0.0
+    # Spent before this segment began, by the segment it carries on from
+    # (`continues`, None for a budget that started from zero). The counters
+    # above include that segment's; this is its share of the wall clock.
+    carried_s: float = 0.0
+    continues: int | None = None
     started: float | None = None  # clock() when the segment began
     ended: float | None = None    # clock() when it ended - the time used stops growing there
     clock: object = dataclasses.field(default=time.monotonic, repr=False, compare=False)
@@ -97,6 +108,15 @@ class Budget:
     def for_spec(cls, spec, clock=time.monotonic) -> "Budget":
         return cls(max_rounds=spec.max_tool_calls, time_limit_s=spec.settings.search_time_limit_s,
                    max_simulations=spec.settings.max_simulations, clock=clock)
+
+    @classmethod
+    def with_spend(cls, spec, entry: dict, clock=time.monotonic) -> "Budget":
+        """The plan's limits with what `entry` (a segment's as_dict()) says
+        that segment had spent - its clock not running until start()."""
+        return dataclasses.replace(
+            cls.for_spec(spec, clock), rounds_used=int(entry.get("rounds_used") or 0),
+            simulations_used=int(entry.get("simulations_used") or 0), cache_hits=int(entry.get("cache_hits") or 0),
+            carried_s=float(entry.get("seconds_used") or 0.0))
 
     def start(self) -> None:
         if self.started is None:
@@ -108,8 +128,8 @@ class Budget:
 
     def elapsed_s(self) -> float:
         if self.started is None:
-            return 0.0
-        return (self.clock() if self.ended is None else self.ended) - self.started
+            return self.carried_s
+        return self.carried_s + (self.clock() if self.ended is None else self.ended) - self.started
 
     def remaining_s(self) -> float:
         return self.time_limit_s - self.reserved_s - self.elapsed_s()
@@ -129,10 +149,13 @@ class Budget:
 
     def as_dict(self, segment: int) -> dict:
         """This segment's entry in ai_runs.budget_json."""
-        return {"segment": segment, "max_rounds": self.max_rounds, "time_limit_s": self.time_limit_s,
-                "max_simulations": self.max_simulations, "rounds_used": self.rounds_used,
-                "simulations_used": self.simulations_used, "cache_hits": self.cache_hits,
-                "seconds_used": round(self.elapsed_s(), 1)}
+        entry = {"segment": segment, "max_rounds": self.max_rounds, "time_limit_s": self.time_limit_s,
+                 "max_simulations": self.max_simulations, "rounds_used": self.rounds_used,
+                 "simulations_used": self.simulations_used, "cache_hits": self.cache_hits,
+                 "seconds_used": round(self.elapsed_s(), 1)}
+        if self.continues is not None:
+            entry["continues"] = self.continues  # its counts include that segment's
+        return entry
 
 
 @dataclasses.dataclass

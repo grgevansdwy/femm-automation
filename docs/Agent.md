@@ -310,9 +310,14 @@ declares a target impossible.
 
 **Continue.** At a limit with the verdict still `improving`, the report invites the user
 to reply "continue". `AgentRunner.continue_run()` starts a new *segment* of the same run:
-a fresh budget (the run's own settings), the same memory, rounds appended after the
-existing ones, candidates still compared with the original baseline. Each segment's
-limits and spend are one entry in `ai_runs.budget_json`.
+the same memory, rounds appended after the existing ones, candidates still compared with
+the original baseline. The segment's budget is a fresh one (the run's own settings) when
+the search before it ended at a budget limit. After any other ending - stopped by the
+user, the app closed mid-search, a plateau - it counts on from the rounds, minutes and
+simulations already spent (`Budget.with_spend()`), and its entry names the segment it
+carries on from (`continues`). Each segment's limits and spend are one entry in
+`ai_runs.budget_json`, written after every round (`save_budget()`), so a search cut short
+still says where it was.
 
 `propose_coilset`'s schema (`femm_agent/models/schema.py::build_tools()`) is built fresh
 per run from that run's actual free-field set, with `additionalProperties: false` so the

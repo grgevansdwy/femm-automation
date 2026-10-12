@@ -158,7 +158,7 @@ _OBJECTIVE_TYPES = {
 _OBJECTIVE_REQUIRED = ("metric", "kind", "requirement", "required", "passed", "tolerance_pct")
 _BUDGET_TYPES = {key: _opt(_is_number) for key in (
     "segment", "max_rounds", "time_limit_s", "max_simulations", "rounds_used", "simulations_used", "cache_hits",
-    "seconds_used")}
+    "seconds_used", "continues")}
 _CHAT_PAYLOAD_TYPES = {"role": _is_str, "content": _opt(_is_str), "tool_calls": _opt(_is_dict_list)}
 
 
@@ -579,7 +579,8 @@ def write_pdf(data: dict, path, chat_id: str | None = None, imported_at: str | N
         report.gap(0.5)
         report.table(
             ["Search segment", "Rounds used / limit", "Simulations used / limit", "Cache hits", "Minutes used / limit"],
-            [[_num(b.get("segment")), f"{_num(b.get('rounds_used'))} / {_num(b.get('max_rounds'))}",
+            [[_num(b.get("segment")) + (f" (counts on from {_num(b['continues'])})" if b.get("continues") else ""),
+              f"{_num(b.get('rounds_used'))} / {_num(b.get('max_rounds'))}",
               f"{_num(b.get('simulations_used'))} / {_num(b.get('max_simulations'))}", _num(b.get("cache_hits")),
               f"{(b.get('seconds_used') or 0) / 60:.1f} / {(b.get('time_limit_s') or 0) / 60:.0f}"]
              for b in run["budget"]],

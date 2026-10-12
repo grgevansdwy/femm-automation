@@ -7,7 +7,9 @@
 # - one scenario per stop reason, each checking status, stop_reason and the row,
 # - never-go-wrong N3: no AI request and no solve starts after the time limit,
 #   and the simulation limit turns proposals away in proposal order,
-# - "continue": a new segment, fresh budget, same memory, same run,
+# - "continue": a new segment, same memory, same run; a fresh budget after a
+#   limit, otherwise the budget counts on from what was spent (also after the
+#   app was closed mid-search),
 # - the progress verdict (services/progress.py) as a pure function,
 # - restore.py rebuilds a stored run without a single fresh solve.
 #     python3 -m pytest agent/femm_agent/tests/test_agent_budget.py  (run from backend/)
@@ -23,7 +25,7 @@ from agent.femm_agent.services.restore import RestoreError, restore_run
 from agent.femm_agent.services.runner import AgentRunner
 from agent.input_chat.models.objective import Objective
 from agent.input_chat.models.spec import AgentSpec
-from agent.repositories.ai_run_repository import create_ai_run, get_ai_run, list_messages
+from agent.repositories.ai_run_repository import create_ai_run, get_ai_run, list_ai_runs, list_messages
 from agent.services.llm_client import LLMError
 from agent.services.run_log import read_log
 from agent.settings.settings import AgentSettings
@@ -375,6 +377,48 @@ def test_continue_after_a_plateau_gets_its_own_two_rounds(monkeypatch):
     state.runner.continue_run(state.id)
     row = _wait(state)
     assert _ending(state, row) == ("goal_met", "plateau", before + 2), "the counter restarts with the segment"
+
+
+def test_continue_before_any_limit_counts_on_from_what_was_spent(monkeypatch):
+    clock = _Clock()
+    state, row, requests = _search(monkeypatch, [_propose(60.0)], _spec(max_tool_calls=10), clock=clock, request_s=10.0)
+    assert _ending(state, row)[:2] == ("goal_met", "plateau")
+    spent = row["budget"][0]
+    assert spent["rounds_used"] == len(state.rounds) and spent["seconds_used"] == 10.0 * len(state.rounds)
+
+    clock.t += 1000.0  # time between the two searches is nobody's
+    state.runner.continue_run(state.id)
+    row = _wait(state)
+
+    assert state.budget.rounds_used == spent["rounds_used"] + 2 and state.budget.continues == 1
+    assert state.budget.simulations_used >= spent["simulations_used"]
+    second = row["budget"][1]
+    assert (second["segment"], second["continues"], second["rounds_used"]) == (2, 1, spent["rounds_used"] + 2)
+    assert second["seconds_used"] == spent["seconds_used"] + 20.0
+
+
+def test_the_budget_is_saved_every_round_and_a_search_cut_short_continues_from_it(monkeypatch):
+    saved = []
+
+    def third_request(kwargs):
+        saved.append(list_ai_runs()[0]["budget"])
+        return _text()
+
+    jobs = _Jobs()
+    state, row, requests = _search(monkeypatch, [_propose(71.0), _propose(70.5), third_request, _text()],
+                                   _spec(cut_pct=15.0, max_tool_calls=10), jobs=jobs)
+    assert [(b["segment"], b["rounds_used"]) for b in saved[0]] == [(1, 2)], "on the row while the search still runs"
+    assert _ending(state, row)[:2] == ("stopped_by_model", "model_stopped")
+
+    # The app closed mid-search: the row keeps the spend of the last finished round.
+    later = AgentRunner(jobs)
+    restored = restore_run(state.id, jobs)
+    assert restored.budget.rounds_used == 4 and restored.budget.simulations_used == state.budget.simulations_used
+    later.adopt(restored)
+    later.continue_run(state.id)
+    row = _wait(restored)
+    assert restored.budget.continues == 1 and restored.budget.rounds_used == 4 + 2
+    assert [(b["segment"], b.get("continues"), b["rounds_used"]) for b in row["budget"]] == [(1, None, 4), (2, 1, 6)]
 
 
 # --- the progress verdict, as a pure function ----------------------------------------------------
