@@ -88,6 +88,10 @@ class ChatSession:
     # Why this chat can only be read (its baseline or plan can't be rebuilt), in one line.
     read_only_reason: str | None = None
     restoring: bool = False  # its run is being rebuilt from the database, for a question or a continue
+    # What this chat waits to start once the running search ends: "start"
+    # (Start Search), "revised" (Start Search on a revised plan) or "continue".
+    # None when it isn't in AgentPanelState's queue.
+    queued: str | None = None
 
     @property
     def ai_run_id(self) -> str | None:
@@ -164,6 +168,10 @@ class AgentPanelState:
         # returns the same object, so a running search is found as it is now.
         self._sessions: dict[str, ChatSession] = {}
         self._field_limits_cache: tuple | None = None
+        # Chats waiting for the running search to end, next to start first
+        # (ChatSession.queued says what each will start). Kept in memory only:
+        # closing the app empties it and each chat is left as it was.
+        self._queue: list[ChatSession] = []
         self.chat = self._empty_chat()  # the chat on screen
         self.refresh_configs()
 
@@ -191,9 +199,9 @@ class AgentPanelState:
 
     @property
     def running_chat(self) -> ChatSession | None:
-        """The chat whose search is running, or None. One search at a time:
-        searches share the AI server (which answers one request at a time)
-        and the solver."""
+        """The chat whose search is running, or None. One search at a time
+        (searches share the AI server and the solver); a search asked for in
+        another chat meanwhile waits in the queue (_start_next())."""
         for chat in self._all_chats():
             if chat.run_state is not None and chat.run_state.status.value == "running":
                 return chat
@@ -201,12 +209,88 @@ class AgentPanelState:
 
     @property
     def search_busy_elsewhere(self) -> str | None:
-        """Why this chat can't start or continue a search right now - another
-        chat's search is running - or None."""
+        """Why a search started or continued in this chat now would be queued
+        instead - another chat's search is running, or others are already
+        waiting - or None."""
+        return self._waits_behind(self.chat)
+
+    def _waits_behind(self, chat: ChatSession) -> str | None:
         other = self.running_chat
-        if other is None or other is self.chat:
-            return None
-        return f"Another search is running ({other.title}). Wait for it to end, or open it and stop it."
+        if other is not None and other is not chat:
+            title = self.sidebar.title_of(other.ai_run_id) or other.title
+            return f"Another search is running ({title}). This one starts when it ends."
+        if any(c is not chat for c in self._queue):
+            return "Other searches are queued. This one starts after them."
+        return None
+
+    def queue_position(self, run_id: str | None) -> int | None:
+        """1 for the chat that starts next, 2 for the one after... None when
+        that chat is not queued."""
+        return next((i for i, c in enumerate(self._queue, 1) if c.ai_run_id == run_id), None)
+
+    def _enqueue(self, chat: ChatSession, kind: str, front: bool = False) -> None:
+        if chat in self._queue:
+            self._queue.remove(chat)
+        self._queue.insert(0, chat) if front else self._queue.append(chat)
+        chat.queued = kind
+        chat.error = ""
+
+    def _unqueue(self, chat: ChatSession) -> None:
+        if chat in self._queue:
+            self._queue.remove(chat)
+        chat.queued = None
+
+    def unqueue(self) -> None:
+        """The "Remove from queue" button: the open chat stops waiting and is
+        left as it was before Start Search / Continue was clicked."""
+        self._unqueue(self.chat)
+
+    def _start_next(self) -> None:
+        """Once no search is running, starts the queued chat that is next in
+        line. Each is checked again first, as if clicked now (the Field Config
+        table or its baseline may have changed while it waited); one that can't
+        start leaves the queue with its reason and the next one is tried. A
+        chat with a reply in flight keeps its place and is passed over."""
+        if not self._queue or self.running_chat is not None or any(c.restoring for c in self._all_chats()):
+            return
+        for chat in list(self._queue):
+            if chat.interview_runner.busy:
+                continue
+            kind = chat.queued
+            self._unqueue(chat)
+            if self._checked(chat, kind) and self._begin(chat, kind):
+                return
+
+    def _checked(self, chat: ChatSession, kind: str) -> bool:
+        """Whether the search `kind` names may start in `chat` as things are
+        now. When not, the chat says why (its error, or the plan card's list)."""
+        if chat.read_only_reason:
+            return False
+        if kind == "continue":
+            return chat.phase == "finished"
+        if kind == "revised":
+            blocked = self._revised_blocked(chat)
+            if blocked:
+                chat.error = blocked
+                return False
+        elif self._baseline_error(chat) is not None:
+            return False  # the chat's baseline notice says why
+        chat.error = ""
+        return not self._recheck_plan(chat)  # problems are shown on the plan card, which stays
+
+    def _begin(self, chat: ChatSession, kind: str) -> bool:
+        """Starts the search `kind` names in `chat`; nothing else is running.
+        A chat reopened from the sidebar first has its run rebuilt from the
+        database, in the background - True then means the start is on its way."""
+        if kind == "start":
+            chat.plan_confirmed = True  # _poll_chat() hands it to the AgentRunner
+            chat.search_markers = [len(chat.interview_state.transcript)]
+            return True
+        action = (lambda: self._start_revised(chat)) if kind == "revised" else (lambda: self._continue(chat))
+        if chat.run_state is None:
+            self._restore_then(chat, action)
+            return True
+        return action()
 
     @property
     def baseline_locked(self) -> bool:
@@ -221,8 +305,12 @@ class AgentPanelState:
         is done or still going. Plain text for the chat's notice. Checked
         against baseline_runs, so it covers the 5 mm solve started on picking
         a config and, once a plan is finalized, each of the plan's distances."""
-        for distance in sorted(self.baseline_runs):
-            run = self.baseline_runs[distance]
+        return self._baseline_error(self.chat)
+
+    @staticmethod
+    def _baseline_error(chat: ChatSession) -> str | None:
+        for distance in sorted(chat.baseline_runs):
+            run = chat.baseline_runs[distance]
             if not isinstance(run, dict) and run.status.value == "failed":
                 return f"Solve failed at {distance:g} mm: {run.error or 'no reason given'}"
         return None
@@ -263,6 +351,7 @@ class AgentPanelState:
         chat still hands off to its search after the user has clicked away."""
         self.agent_runner.poll()
         self._keep_current()
+        self._start_next()
         for chat in self._all_chats():
             self._poll_chat(chat)
 
@@ -405,6 +494,8 @@ class AgentPanelState:
             return False
         if chat is not None:
             chat.interview_runner.discard()  # a reply still in flight writes nothing more
+        if chat is not None:
+            self._unqueue(chat)
         self._sessions.pop(run_id, None)
         self.agent_runner.runs.pop(run_id, None)
         delete_ai_run(run_id)
@@ -480,6 +571,8 @@ class AgentPanelState:
         self.error = ""
         self.interview_state.settings.search_fields = dict(saved.search_fields)
         self.interview_state.pending_field_change = None
+        if self.chat.queued != "continue":
+            self._unqueue(self.chat)  # the plan it was queued with is about to change
         if self.chat.search_started:
             # After a search: the same fixed message, answered by the follow-up
             # model, which may now send the revised plan (built on the saved table).
@@ -499,39 +592,48 @@ class AgentPanelState:
         may have been edited in Settings since the plan was proposed) and
         re-runs the plan's own checks against it. Returns, and remembers, why
         the plan can't start - empty when it can."""
+        return self._recheck_plan(self.chat)
+
+    def _recheck_plan(self, chat: ChatSession) -> list[str]:
         from agent.input_chat.services.interview import plan_problems
         from agent.repositories.ai_run_repository import finalize_spec
         from agent.settings.settings import load_settings
-        spec = self.interview_state.spec
+        spec = chat.interview_state.spec
         live = load_settings().search_fields
         if live != spec.settings.search_fields:
             spec.settings.search_fields = dict(live)
-            self.interview_state.settings.search_fields = dict(live)
-            if self.interview_runner.ai_run_id is not None:
-                finalize_spec(self.interview_runner.ai_run_id, dataclasses.asdict(spec))  # the stored plan carries the table it runs under
-        self.plan_problems = plan_problems(spec, self.baseline_coilset)
-        return self.plan_problems
+            chat.interview_state.settings.search_fields = dict(live)
+            if chat.ai_run_id is not None:
+                finalize_spec(chat.ai_run_id, dataclasses.asdict(spec))  # the stored plan carries the table it runs under
+        chat.plan_problems = plan_problems(spec, chat.baseline_coilset)
+        return chat.plan_problems
 
     def confirm_plan(self) -> None:
-        if self.planning_blocked or self.chat.read_only_reason:
+        """Start Search, on the first plan or a revised one. While another
+        search runs the chat is queued instead and starts when its turn comes."""
+        chat = self.chat
+        if self.planning_blocked or chat.read_only_reason:
             return  # the Start Search button is disabled too - this covers any other caller
-        busy = self.search_busy_elsewhere
-        if busy:
-            self.error = busy
-            return
-        if self.chat.search_started:
-            self._confirm_revised_plan()
-            return
-        self.error = ""
-        if self.recheck_plan():
-            return  # shown on the plan, which stays unconfirmed
-        self.plan_confirmed = True
-        self.search_markers = [len(self.interview_state.transcript)]
+        self._request(chat, "revised" if chat.search_started else "start")
+
+    def _request(self, chat: ChatSession, kind: str) -> bool:
+        """A search asked for by the user: started now, or queued behind the
+        one that is running. False if it can't start (the chat says why)."""
+        if not self._checked(chat, kind):
+            return False
+        if self._waits_behind(chat):
+            self._enqueue(chat, kind)
+            return True
+        self._unqueue(chat)
+        return self._begin(chat, kind)
 
     def revised_plan_blocked(self) -> str | None:
-        """Why a waiting revised plan can't be started this moment, in one line
-        - None when Start Search may be clicked."""
-        chat = self.chat
+        """Why a waiting revised plan can't be started (or queued) this moment,
+        in one line - None when Start Search may be clicked."""
+        return self._revised_blocked(self.chat)
+
+    @staticmethod
+    def _revised_blocked(chat: ChatSession) -> str | None:
         if chat.revised_plan is None:
             return "There is no revised plan to start."
         if chat.interview_runner.busy or chat.restoring:
@@ -542,7 +644,7 @@ class AgentPanelState:
                 return f"The baseline is still being simulated at {distance:g} mm."
             if not isinstance(run, dict) and run.status.value == "failed":
                 return f"The baseline could not be simulated at {distance:g} mm: {run.error or 'no reason given'}"
-        return self.search_busy_elsewhere
+        return None
 
     def revised_plan_notes(self) -> list[str]:
         """What the card of a waiting revised plan says besides the plan itself:
@@ -563,27 +665,12 @@ class AgentPanelState:
                 "A distance was added, so this search starts from the beginning." if fresh
                 else "Continues from the designs already simulated, re-scored against this plan."]
 
-    def _confirm_revised_plan(self) -> None:
-        """Start Search on a revised plan: a new segment of the same run
-        (AgentRunner.start_revised()). A chat reopened from the sidebar first
-        has its run rebuilt from the database, in the background."""
-        chat = self.chat
-        blocked = self.revised_plan_blocked()
-        if blocked:
-            chat.error = blocked
-            return
-        chat.error = ""
-        if self.recheck_plan():
-            return  # shown on the plan card, which stays
-        if chat.run_state is None:
-            self._restore_then(chat, lambda: self._start_revised(chat))
-        else:
-            self._start_revised(chat)
-
     def _start_revised(self, chat: ChatSession) -> bool:
+        """Start Search on a revised plan: a new segment of the same run
+        (AgentRunner.start_revised())."""
         other = self.running_chat
         if other is not None and other is not chat:
-            chat.error = "Another search started in the meantime - start this plan when it ends."
+            self._enqueue(chat, "revised", front=True)  # another search started while this run was rebuilt
             return False
         try:
             self.agent_runner.start_revised(chat.run_state.id, chat.interview_state.spec)
@@ -606,33 +693,22 @@ class AgentPanelState:
 
     def _can_continue(self) -> bool:
         chat = self.chat
-        if chat.phase != "finished" or chat.interview_runner.busy or chat.restoring or chat.read_only_reason:
-            return False
-        busy = self.search_busy_elsewhere
-        if busy:
-            chat.error = busy
-            return False
-        return True
+        return not (chat.phase != "finished" or chat.interview_runner.busy or chat.restoring or chat.read_only_reason)
 
     def continue_search(self) -> bool:
         """Searches on from where the finished search stopped: same goal, same
         memory, rounds appended to the same run, the budget counting on from
         what was already spent unless a limit ended that search
         (AgentRunner.continue_run()). False if there is nothing to continue.
-        A chat reopened from the sidebar first has its run rebuilt from the
-        database, in the background - True then means the continue is on its way."""
-        if not self._can_continue():
-            return False
-        chat = self.chat
-        if chat.run_state is None:
-            self._restore_then(chat, lambda: self._continue(chat))
-            return True
-        return self._continue(chat)
+        While another search runs the chat is queued instead. A chat reopened
+        from the sidebar first has its run rebuilt from the database, in the
+        background - True then means the continue is on its way."""
+        return self._can_continue() and self._request(self.chat, "continue")
 
     def _continue(self, chat: ChatSession) -> bool:
         other = self.running_chat
         if other is not None and other is not chat:
-            chat.error = "Another search started in the meantime - continue this one when it ends."
+            self._enqueue(chat, "continue", front=True)  # another search started while this run was rebuilt
             return False
         try:
             self.agent_runner.continue_run(chat.run_state.id)
@@ -698,6 +774,8 @@ class AgentPanelState:
             return
         chat.chat_input = ""
         chat.error = ""
+        if chat.queued != "continue":
+            self._unqueue(chat)  # the message may change the plan it was queued with
         if chat.search_started:
             self._send_followup(chat, text)
             return
@@ -999,6 +1077,14 @@ def _chat_ending(chat: ChatSession) -> tuple[str, str | None]:
             record["error"])
 
 
+def _queued_text(state: AgentPanelState) -> str:
+    """Where the open, queued chat stands in line."""
+    ahead = (state.queue_position(state.chat.ai_run_id) or 1) - 1
+    if ahead == 0:
+        return "Queued - starts when the running search ends"
+    return f"Queued - starts after {ahead} other queued search{'es' if ahead > 1 else ''}"
+
+
 def _marker_text(chat: ChatSession, index: int) -> str:
     """What began at the chat's `index`-th search marker: the first search, a
     "continue", or a revised plan (and whether it kept the memory) - read
@@ -1048,14 +1134,20 @@ def _draw_search_marker(state: AgentPanelState, width: float, index: int) -> Non
                                                "to change: the revised plan is shown here for you to start.")
         busy_elsewhere = state.search_busy_elsewhere
         chat = state.chat
-        imgui.begin_disabled(bool(busy_elsewhere or chat.read_only_reason or chat.restoring or chat.interview_runner.busy))
-        if imgui.button(f"Continue##continue_{index}"):
-            state.continue_search()
-        imgui.end_disabled()
-        if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-            imgui.set_tooltip(busy_elsewhere or
-                              "Keep searching: same goal, everything tried so far kept in memory. The budget "
-                              "counts on from what was used (a fresh one if a limit ended the search).")
+        if chat.queued == "continue":
+            if imgui.button(f"Remove from queue##continue_{index}"):
+                state.unqueue()
+            imgui.same_line()
+            imgui.text_disabled(_queued_text(state))
+        else:
+            imgui.begin_disabled(bool(chat.read_only_reason or chat.restoring or chat.interview_runner.busy))
+            if imgui.button(f"{'Queue Continue' if busy_elsewhere else 'Continue'}##continue_{index}"):
+                state.continue_search()
+            imgui.end_disabled()
+            if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+                imgui.set_tooltip((busy_elsewhere + "\n" if busy_elsewhere else "") +
+                                  "Keep searching: same goal, everything tried so far kept in memory. The budget "
+                                  "counts on from what was used (a fresh one if a limit ended the search).")
     else:
         imgui.text_colored(_ACCENT_COLOR, started_text)
         imgui.text_colored(_PLACEHOLDER_COLOR, "You can keep asking questions while it runs; the baseline and "
@@ -1235,11 +1327,16 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     imgui.push_style_color(imgui.Col_.button_hovered.value, _ACCENT_HOVER_COLOR)
     busy_elsewhere = state.search_busy_elsewhere
     revised_blocked = state.revised_plan_blocked() if revised else None
-    imgui.begin_disabled(state.planning_blocked or bool(busy_elsewhere) or bool(state.plan_problems)
-                         or bool(revised_blocked))
-    if imgui.button("Start Search", imgui.ImVec2(avail_width, _START_BUTTON_H)):
-        state.confirm_plan()
-    imgui.end_disabled()
+    queued = state.chat.queued in ("start", "revised")
+    if queued:
+        if imgui.button("Remove from queue", imgui.ImVec2(avail_width, _START_BUTTON_H)):
+            state.unqueue()
+    else:
+        # While another search runs the click queues this one (confirm_plan()).
+        imgui.begin_disabled(state.planning_blocked or bool(state.plan_problems) or bool(revised_blocked))
+        if imgui.button("Queue Search" if busy_elsewhere else "Start Search", imgui.ImVec2(avail_width, _START_BUTTON_H)):
+            state.confirm_plan()
+        imgui.end_disabled()
     imgui.pop_style_color(2)
     imgui.pop_style_var()
     if state.plan_problems:
@@ -1254,8 +1351,9 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
         imgui.same_line()
         imgui.text_disabled("after changing Settings > Field Config - or send a message to change the plan")
 
-    hint = ("Another search is running - one at a time" if busy_elsewhere
+    hint = (_queued_text(state) if queued
             else revised_blocked if revised_blocked
+            else "Another search is running - this one starts when it ends" if busy_elsewhere
             else "or send another message to adjust the plan first")
     hint_w = imgui.calc_text_size(hint).x
     imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((avail_width - hint_w) / 2.0, 0.0))

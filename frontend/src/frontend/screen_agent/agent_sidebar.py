@@ -225,6 +225,9 @@ def _draw_row(state: AgentSidebarState, panel, row: dict, config_names: dict, ro
     line_h = imgui.get_text_line_height_with_spacing()
     row_height = line_h * 2 + 8
     label, color = status_label(row["status"])
+    position = panel.queue_position(row["id"])
+    if position is not None:
+        label = f"Queued ({position})"  # waiting for the running search - not a stored status
     baseline = config_names.get(row["baseline_config_id"]) or row["baseline_config_id"] or "?"
 
     row_top = imgui.get_cursor_screen_pos()

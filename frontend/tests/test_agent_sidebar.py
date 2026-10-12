@@ -280,11 +280,12 @@ def test_one_search_at_a_time_and_a_running_search_survives_looking_elsewhere(mo
     state.poll()
     assert not run_state.cancelled and get_ai_run(first_id)["status"] == "running"
     assert state.running_chat is first_chat and state.phase == "interview"
-    # ...and that chat cannot start a second one.
+    # ...and Start Search in that chat queues it instead of starting a second one.
     assert "Another search is running" in state.search_busy_elsewhere
     state.confirm_plan()
     state.poll()
-    assert state.run_state is None and not state.plan_confirmed and "Another search is running" in state.error
+    assert state.run_state is None and not state.plan_confirmed and state.chat.queued == "start"
+    assert state.queue_position(second_id) == 1 and get_ai_run(second_id)["status"] == "plan_ready"
     assert not state.delete_chat(first_id) and get_ai_run(first_id) is not None, "a running search is never deleted"
 
     state.open_chat(first_id)
@@ -292,13 +293,80 @@ def test_one_search_at_a_time_and_a_running_search_survives_looking_elsewhere(mo
     state.stop_search()
     assert _finished(state)["status"] == "cancelled"
 
-    # Once it has ended, the other chat's Start Search works.
+    # Once it has ended the queued chat starts by itself, without being opened.
+    state.poll()
+    assert state.queue_position(second_id) is None and state.running_chat is not first_chat
     state.open_chat(second_id)
-    assert state.search_busy_elsewhere is None
-    second_run = _start(state)
-    assert second_run.id == second_id
+    assert state.phase == "running" and state.run_state.id == second_id and state.search_markers
     state.stop_search()
     _finished(state)
+
+
+def test_a_queued_continue_can_be_removed_and_otherwise_runs_when_the_other_search_ends(monkeypatch):
+    hang = {"on": False}
+
+    def search_ai(n, kwargs):
+        return _wait_for_abort(n, kwargs) if hang["on"] else _proposal(n)
+
+    state, _ = _planned_state(monkeypatch, search_ai, max_rounds=1)
+    first_run = _start(state)
+    first_id = _finished(state)["id"]
+    assert len(first_run.rounds) == 1
+
+    state.new_chat()
+    state.chat_input = "Cut tank ESR in half at 5 mm, again."
+    state.send_chat()
+    _poll_until(lambda: not state.interview_runner.busy, timeout=10)
+    state.poll()
+    second_id = state.interview_runner.ai_run_id
+    hang["on"] = True
+    _start(state)
+
+    state.open_chat(first_id)
+    assert state.continue_search() and state.chat.queued == "continue" and state.queue_position(first_id) == 1
+    state.poll()
+    assert state.phase == "finished" and len(state.search_markers) == 1, "nothing starts while the other search runs"
+    state.unqueue()
+    assert state.chat.queued is None and state.queue_position(first_id) is None
+    assert state.continue_search() and state.queue_position(first_id) == 1
+
+    hang["on"] = False
+    state.open_chat(second_id)
+    state.stop_search()
+    _finished(state)
+    state.poll()  # the queue moves on
+    state.open_chat(first_id)
+    assert state.chat.queued is None and len(state.search_markers) == 2
+    _finished(state)
+    assert len(first_run.rounds) == 2 and first_run.segment == 2
+
+
+def test_a_message_takes_a_queued_plan_out_of_the_queue(monkeypatch):
+    state, _ = _planned_state(monkeypatch, _wait_for_abort)
+    first_id = state.interview_runner.ai_run_id
+    state.new_chat()
+    state.chat_input = "Cut tank ESR in half at 5 mm, again."
+    state.send_chat()
+    _poll_until(lambda: not state.interview_runner.busy, timeout=10)
+    state.poll()
+    second_id = state.interview_runner.ai_run_id
+    state.open_chat(first_id)
+    _start(state)
+
+    state.open_chat(second_id)
+    state.confirm_plan()
+    assert state.queue_position(second_id) == 1
+    state.chat_input = "Make it 40% instead."
+    state.send_chat()
+    assert state.chat.queued is None and state.queue_position(second_id) is None
+    _poll_until(lambda: not state.interview_runner.busy, timeout=10)
+
+    state.open_chat(first_id)
+    state.stop_search()
+    _finished(state)
+    state.poll()
+    state.open_chat(second_id)
+    assert state.run_state is None, "the re-planned chat waits for its own Start Search"
 
 
 def test_delete_removes_the_chat_and_leaves_a_new_one_open(monkeypatch):

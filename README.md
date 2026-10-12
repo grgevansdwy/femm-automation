@@ -59,6 +59,8 @@ Edit the numbers in the middle and click **Save** to change a design. **Clone** 
 1. Pick the design to improve, then say what you want, for example
    *"Keep the mutual inductance the same but cut the resistance."*
 2. Click **Start Search** and watch it try designs. At the end you can compare the best one with the original.
+   Only one search runs at a time. Start another chat's search meanwhile and it waits in a queue, then starts
+   by itself when the running one ends (the queue is forgotten if you close the app).
 3. Want something different once it has finished? Say so in the same chat (*"5% is enough"*, *"also check 8 mm"*).
    It shows the changed plan and what is different; click **Start Search** again to run it.
 4. To share a chat, right-click it in the list on the left: **Export JSON...** saves the whole chat as a

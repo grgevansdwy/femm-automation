@@ -120,8 +120,16 @@ turns, search rounds, scoring) belong to `Agent.md`:
   is the one on screen; `state.interview_state`, `state.run_state` and the like forward to
   it. Sessions touched in this app session are kept by run id, and `poll()` polls all of
   them, so a search keeps running while another chat is open and switching back returns
-  the same live object. **One search at a time:** while one runs, Start Search and
-  Continue are disabled in every other chat (`search_busy_elsewhere`).
+  the same live object. **One search at a time, the rest queued:** while one runs, Start
+  Search and Continue in any other chat (labelled **Queue Search** / **Queue Continue**
+  then) put that chat in a queue (`_request()`), and `poll()` starts the next one in line
+  when no search is running (`_start_next()`), whichever chat is on screen. A queued chat
+  shows **Remove from queue** in place of the button and "Queued (n)" in its sidebar row.
+  It is checked again when its turn comes, as if clicked then; if it can no longer start
+  it leaves the queue with the reason and the next one is tried. Sending a message in a
+  chat queued with a plan takes it out of the queue (the message may change the plan); a
+  queued continue stays. The queue is in memory only: closing the app empties it and each
+  chat is left as it was (its stored status never says "queued").
   `open_chat()` rebuilds a chat that is not in memory from the database: transcript and
   plan through `restore_interview()`, the baseline from the copy stored in the run. A chat
   still planning (or with a plan never started) carries on where it was. For a chat whose
@@ -150,8 +158,8 @@ turns, search rounds, scoring) belong to `Agent.md`:
   is that plan while it waits; the plan card is drawn for it under the title "Revised
   plan", with code-written lines for each change from the plan the search ran under and
   for what the new search starts from (`revised_plan_notes()`). **Start Search** is
-  disabled while the baseline is still being simulated at one of its distances, a reply
-  is in progress or another search runs (`revised_plan_blocked()`); clicking it calls
+  disabled while the baseline is still being simulated at one of its distances or a reply
+  is in progress (`revised_plan_blocked()`); clicking it calls
   `AgentRunner.start_revised()`, a new segment of the same run, and the status line in
   the chat says whether it kept the memory or started from the beginning. A chat reopened
   with a revised plan still waiting shows the card without the list of changes (the plan
