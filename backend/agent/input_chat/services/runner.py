@@ -79,7 +79,11 @@ class InterviewRunner:
 
     def send(self, state: InterviewState, user_message: str) -> None:
         self._ensure_run(state.baseline_config_id)
-        self._run_turn_async(state, lambda: run_interview_turn(state, user_message, should_abort=lambda: self.discarded,
+        # The message is saved now, not when the reply lands: a chat is listed
+        # by its text, and the reply can be minutes away.
+        state.transcript.append({"role": "user", "content": user_message})
+        self._persist_new_messages(state)
+        self._run_turn_async(state, lambda: run_interview_turn(state, should_abort=lambda: self.discarded,
                                                                 log=self._phase_log("interview")))
 
     def send_followup(self, state: InterviewState, run_state, user_message: str, allow_replan: bool = False) -> None:
