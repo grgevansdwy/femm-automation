@@ -111,6 +111,8 @@ class AppState:
         self.runs_panel = runs_panel.RunsPanelState()
         self.backup_panel = BackupPanelState()
         self.agent_panel = agent_panel.AgentPanelState(self.runs_panel.job_runner)
+        from agent.services.chat_title import ChatTitler
+        self.agent_panel.sidebar.titler = ChatTitler()  # short AI-made titles for the chat list
         self.settings_panel = settings_panel.SettingsPanelState()
         self.mode = "manual"  # "manual" | "agent" | "settings" - toggled by _draw_mode_toggle()
 

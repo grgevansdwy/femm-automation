@@ -1,6 +1,6 @@
 ---
 owns: frontend/**
-last-verified: 2026-10-08
+last-verified: 2026-10-12
 ---
 
 # GUI: the desktop app
@@ -95,9 +95,12 @@ turns, search rounds, scoring) belong to `Agent.md`:
 
 - **`agent_sidebar.py`** — the left column: every saved chat whatever its status, newest
   first, from `ai_run_repository.list_chat_rows()` (re-read at most once a second). A row
-  is titled with the plan's goal text, else the user's first message; its second line is
+  is titled with the chat's short AI-made title (`Agent.md` §5, "Chat titles"; `main.py`
+  gives the sidebar its `ChatTitler`), and until it has one with the plan's goal text, else
+  the user's first message; hovering shows that full text. A chat appears as soon as its
+  first message is sent. Its second line is
   the baseline name, the status label (one per status) and the date. The search box matches
-  title, baseline name and run id. **+ New** opens an empty chat on the selected baseline;
+  title, full text, baseline name and run id. **+ New** opens an empty chat on the selected baseline;
   the column collapses to a strip. **Delete** (right-click a row, or the button in the chat
   header; always behind a confirmation) is the only way a chat leaves the list, and a
   search still running can't be deleted. Rows with neither a goal nor a message (blanks

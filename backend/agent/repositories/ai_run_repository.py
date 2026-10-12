@@ -22,8 +22,9 @@ from engine.repositories import db
 
 # The schema version this module writes, kept in SQLite's `PRAGMA user_version`
 # (0 = the ai_runs table as it was before run lifecycle states existed,
-# 1 = before a chat could be imported from a file).
-SCHEMA_VERSION = 2
+# 1 = before a chat could be imported from a file, 2 = before a chat had a
+# short title).
+SCHEMA_VERSION = 3
 
 # How a run moves: interviewing -> plan_ready (the model proposed a plan the code
 # accepted) -> running (the user clicked Start Search) -> one terminal status.
@@ -63,11 +64,14 @@ CREATE TABLE {name} (
     budget_json           TEXT,  -- list, one entry per search segment: limits in force and what was used
     fragility_json        TEXT,  -- list of fragility checks (filled from milestone M3b)
     baseline_coilset_json TEXT,  -- the baseline as it was at Start Search (a config can be edited later)
-    imported_at           TEXT   -- set on a chat that came from an exported file (agent/services/chat_export.py)
+    imported_at           TEXT,  -- set on a chat that came from an exported file (agent/services/chat_export.py)
+    title                 TEXT   -- a short name for the chat list (agent/services/chat_title.py); NULL until one is made
 )""" % ", ".join(f"'{s}'" for s in STATUSES)
 _RUNS_INDEX = "CREATE INDEX IF NOT EXISTS idx_ai_runs_created_at ON ai_runs (created_at)"
 _V0_COLUMNS = ("id, baseline_config_id, spec_json, status, created_at, started_at, finished_at, error, "
                "best_round, best_coilset_json, best_tool_result_json")
+# The column each later version added: {version that has it: column}.
+_ADDED_COLUMNS = {2: "imported_at", 3: "title"}
 
 PHASES = ('interview', 'optimize')
 ROLES = ('user', 'assistant', 'tool', 'system')
@@ -118,8 +122,8 @@ def _ensure_schema(conn) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             _migrate_v0(conn, Path(path))
-        elif version < 2:
-            _migrate_v1(conn, Path(path))
+        elif version < SCHEMA_VERSION:
+            _add_columns(conn, Path(path), version)
     conn.executescript(_MESSAGES_SCHEMA)
     _checked_paths.add(path)
 
@@ -157,12 +161,17 @@ def _migrate_v0(conn, path: Path) -> None:
         conn.isolation_level = previous_isolation
 
 
-def _migrate_v1(conn, path: Path) -> None:
-    """Version 1 -> 2: adds ai_runs.imported_at. No row is touched, but the
-    database file is still copied to backups/ first, like every migration."""
-    backup_path = _backup(conn, path, "v1")
+def _add_columns(conn, path: Path, version: int) -> None:
+    """Version 1 or later -> SCHEMA_VERSION: adds each column a later version
+    introduced (_ADDED_COLUMNS). No row is touched, but the database file is
+    still copied to backups/ first, like every migration. A column that is
+    already there is left alone, so a step cut short is finished by the next start."""
+    backup_path = _backup(conn, path, f"v{version}")
     try:
-        conn.execute("ALTER TABLE ai_runs ADD COLUMN imported_at TEXT")
+        present = {row[1] for row in conn.execute("PRAGMA table_info(ai_runs)")}
+        for added_in in sorted(v for v in _ADDED_COLUMNS if v > version):
+            if _ADDED_COLUMNS[added_in] not in present:
+                conn.execute(f"ALTER TABLE ai_runs ADD COLUMN {_ADDED_COLUMNS[added_in]} TEXT")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     except Exception as exc:
@@ -244,6 +253,7 @@ def _run_row_to_record(row) -> dict:
         'fragility': _loads(_column(row, 'fragility_json')),
         'baseline_coilset': _loads(_column(row, 'baseline_coilset_json')),
         'imported_at': _column(row, 'imported_at'),
+        'title': _column(row, 'title'),
     }
 
 
@@ -271,6 +281,8 @@ def _message_row_to_record(row) -> dict:
 
 _JSON_COLUMNS = {'spec': 'spec_json', 'best_coilset': 'best_coilset_json', 'best_tool_result': 'best_tool_result_json',
                  'budget': 'budget_json', 'fragility': 'fragility_json', 'baseline_coilset': 'baseline_coilset_json'}
+# `title` is deliberately not here: set_title() is its only writer, so a status
+# change racing with the titling thread can't write an older value back.
 _PLAIN_COLUMNS = ('id', 'baseline_config_id', 'status', 'created_at', 'started_at', 'finished_at', 'error',
                   'best_round', 'stop_reason', 'imported_at')
 
@@ -306,6 +318,7 @@ def create_ai_run(baseline_config_id) -> dict:
         'fragility': None,
         'baseline_coilset': None,
         'imported_at': None,
+        'title': None,
     }
     with _connection() as conn:
         _upsert_run(conn, record)
@@ -415,6 +428,13 @@ def reap_running() -> int:
         return cursor.rowcount
 
 
+def set_title(ai_run_id, title) -> None:
+    """Stores a chat's short title (agent/services/chat_title.py). No-op if the run is gone."""
+    with _connection() as conn:
+        conn.execute('UPDATE ai_runs SET title = ? WHERE id = ?', (title, ai_run_id))
+        conn.commit()
+
+
 def append_message(ai_run_id, phase, seq, role, round_num=None, content=None, payload=None) -> dict:
     record = {
         'id': uuid.uuid4().hex[:12],
@@ -452,12 +472,12 @@ def get_ai_run(ai_run_id) -> dict | None:
 
 def list_chat_rows() -> list[dict]:
     """One light row per ai_run, newest first, for a list of past chats: id,
-    baseline_config_id, status, created_at, and what to call it - the plan's
-    objective text and the user's first message (either may be None). Reads
-    none of the large JSON columns list_ai_runs() parses."""
+    baseline_config_id, status, created_at, and what to call it - its short
+    title, the plan's objective text and the user's first message (any may be
+    None). Reads none of the large JSON columns list_ai_runs() parses."""
     with _connection() as conn:
         rows = conn.execute(
-            """SELECT r.id, r.baseline_config_id, r.status, r.created_at, r.imported_at,
+            """SELECT r.id, r.baseline_config_id, r.status, r.created_at, r.imported_at, r.title,
                       json_extract(r.spec_json, '$.objective_text') AS objective_text,
                       (SELECT m.content FROM ai_run_messages m
                         WHERE m.ai_run_id = r.id AND m.phase = 'interview' AND m.role = 'user'

@@ -66,15 +66,25 @@ def _format_dt(iso: str, fmt: str = "%b %d, %Y - %H:%M UTC") -> str:
         return iso or ""
 
 
-def chat_title(row: dict) -> str:
-    """What a chat is called in the list: its plan's goal text, else the
-    user's first message - stored text, on one line. "" when it has neither."""
+def chat_text(row: dict) -> str:
+    """What a chat is about, in full: its plan's goal text, else the user's
+    first message - stored text, on one line. "" when it has neither."""
     return " ".join((row.get("objective_text") or row.get("first_message") or "").split())
+
+
+def chat_title(row: dict) -> str:
+    """What a chat is called in the list: its short title
+    (agent/services/chat_title.py) once it has one, else chat_text()."""
+    return " ".join((row.get("title") or "").split()) or chat_text(row)
 
 
 class AgentSidebarState:
     def __init__(self) -> None:
         self.rows: list[dict] = []
+        # agent.services.chat_title.ChatTitler, set by the app (main.py): asks
+        # the AI for a short title for each chat that has none. None = no
+        # titling, and no AI request ever leaves this list (tests).
+        self.titler = None
         self.search_text: str = ""
         self.collapsed: bool = False
         # The chat whose Delete is waiting on the confirmation popup.
@@ -93,6 +103,22 @@ class AgentSidebarState:
         from agent.repositories.ai_run_repository import list_chat_rows
         self.rows = list_chat_rows()
         self._refreshed_at = time.monotonic()
+        self._request_title()
+
+    def _request_title(self) -> None:
+        """Asks for one title: the newest chat that needs one. One at a time,
+        and none while a search runs - a title takes the AI server most of a
+        minute, and the search and the chat being typed in come first."""
+        if self.titler is None or not self.titler.idle or any(row["status"] == "running" for row in self.rows):
+            return
+        for row in self.rows:
+            # request() turns down short text and a chat that just failed; then the next one is tried.
+            if not row.get("title") and self.titler.request(row["id"], chat_text(row)):
+                return
+
+    def title_of(self, run_id: str | None) -> str:
+        """The listed title of this chat, "" if it isn't in the list."""
+        return next((chat_title(row) for row in self.rows if row["id"] == run_id), "")
 
     def refresh_if_stale(self) -> None:
         if self._refreshed_at is None or time.monotonic() - self._refreshed_at >= _REFRESH_S:
@@ -102,7 +128,7 @@ class AgentSidebarState:
         """The rows to list, newest first: every chat that has something to
         show (a row with neither a goal nor a message is a blank left by an
         older version), narrowed by search_text - matched against the title,
-        the baseline's name or id, and the run id."""
+        the full text behind it, the baseline's name or id, and the run id."""
         config_names = config_names or {}
         query = self.search_text.strip().lower()
         rows = []
@@ -112,7 +138,7 @@ class AgentSidebarState:
                 continue
             baseline = row["baseline_config_id"] or ""
             if query and not any(query in text.lower() for text in
-                                 (title, row["id"], baseline, config_names.get(baseline) or "")):
+                                 (title, chat_text(row), row["id"], baseline, config_names.get(baseline) or "")):
                 continue
             rows.append(row)
         return rows
@@ -178,8 +204,14 @@ def _draw_row(state: AgentSidebarState, panel, row: dict, config_names: dict, ro
     if clicked:
         panel.open_chat(row["id"])
     if imgui.is_item_hovered():
-        imgui.set_tooltip(f"{chat_title(row)}\n{baseline} - {label}\n{_format_dt(row['created_at'])}\n"
-                          f"ID: {row['id']}\nRight-click to export or delete")
+        # The full goal text, wrapped - the row itself shows only the short title.
+        imgui.begin_tooltip()
+        imgui.push_text_wrap_pos(imgui.get_font_size() * 30)
+        imgui.text(chat_text(row))
+        imgui.pop_text_wrap_pos()
+        imgui.text(f"{baseline} - {label}\n{_format_dt(row['created_at'])}\n"
+                   f"ID: {row['id']}\nRight-click to export or delete")
+        imgui.end_tooltip()
     if imgui.begin_popup_context_item(f"chat_menu_{row['id']}"):
         imgui.begin_disabled(row["status"] == "running")  # a running search's rows are still changing
         if imgui.menu_item_simple("Export JSON..."):

@@ -136,7 +136,8 @@ class ChatSession:
 
     @property
     def title(self) -> str:
-        """The same name the sidebar lists it under."""
+        """What this chat is about - the name the sidebar lists it under until
+        it has a short title (AgentSidebarState.title_of())."""
         state = self.interview_state
         if state is None:
             return "New chat"

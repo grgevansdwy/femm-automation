@@ -267,3 +267,37 @@ def test_the_interview_prompt_lists_open_fields_with_limits_and_names_the_closed
 def test_finalize_spec_no_longer_offers_enabled_groups():
     properties = interview.FINALIZE_SPEC_TOOL[0]["function"]["parameters"]["properties"]
     assert "enabled_groups" not in properties
+
+
+def test_the_first_message_is_saved_when_it_is_sent_not_when_the_reply_lands(monkeypatch):
+    import threading
+    import time
+
+    from agent.input_chat.services.runner import InterviewRunner
+    from agent.repositories.ai_run_repository import list_chat_rows, list_messages
+
+    release = threading.Event()
+
+    def slow_llm(messages, tools, **kwargs):
+        release.wait(5)
+        return _text("Which distances would you like?")
+
+    monkeypatch.setattr(interview, "call_llm", slow_llm)
+    runner = InterviewRunner()
+    state = runner.start("base_coil")
+    assert list_chat_rows() == [], "nothing is saved before the first message"
+
+    runner.send(state, "cut tank ESR")
+    assert runner.busy, "the reply is still on its way"
+    (row,) = list_chat_rows()
+    assert row["id"] == runner.ai_run_id and row["first_message"] == "cut tank ESR", "listed by its text at once"
+
+    release.set()
+    deadline = time.monotonic() + 5
+    while runner.busy and time.monotonic() < deadline:
+        time.sleep(0.01)
+    stored = list_messages(runner.ai_run_id, phase="interview")
+    assert [(m["seq"], m["role"], m["content"]) for m in stored] == [
+        (0, "user", "cut tank ESR"), (1, "assistant", "Which distances would you like?")], "each message saved once"
+    assert [m["role"] for m in state.transcript] == ["user", "assistant"]
+    print("  ok  a chat's first message is saved the moment it is sent")

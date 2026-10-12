@@ -79,6 +79,60 @@ def test_the_list_shows_every_status_names_each_chat_and_search_narrows_it():
         assert {r["id"] for r in sidebar.visible_rows(names)} == expected, query
 
 
+def test_a_short_title_names_the_row_and_the_full_text_stays_searchable():
+    from agent.repositories import ai_run_repository as ar
+
+    from agent.services.chat_title import needs_title
+
+    class _Titler:
+        idle = True
+
+        def __init__(self):
+            self.asked = []
+
+        def request(self, run_id, text):
+            if needs_title(text):
+                self.asked.append((run_id, text))
+            return needs_title(text)
+
+    goal = "cut the tank ESR by at least 10% against the baseline at 5 mm and 10 mm"
+    long_id = _stored_run("interviewing", said=goal)
+    titled_id = _stored_run("interviewing", said="another long goal that somebody typed in")
+    ar.set_title(titled_id, "Hold all M 5%")
+    _stored_run("interviewing", said="cut tank ESR")  # newest, and short: it is its own title
+
+    sidebar = agent_sidebar.AgentSidebarState()  # as tests build it: no titler, no AI request
+    assert sidebar.titler is None
+    assert sidebar.title_of(long_id) == goal, "no title yet: the full text"
+    sidebar.titler = _Titler()
+    sidebar.refresh()
+    assert sidebar.titler.asked == [(long_id, goal)], "asked only for the chat that needs a title"
+
+    sidebar.titler.asked.clear()
+    sidebar.titler.idle = False
+    sidebar.refresh()
+    assert sidebar.titler.asked == [], "one title at a time"
+    sidebar.titler.idle = True
+    searching = _stored_run("running", said="a long goal typed into the chat whose search is running now")
+    sidebar.refresh()
+    assert sidebar.titler.asked == [], "none while a search is running"
+    ar.transition(searching, "stalled", finished_at=ar._now_iso())
+    sidebar.refresh()
+    assert [run_id for run_id, _ in sidebar.titler.asked] == [searching], "the newest chat that needs one comes first"
+
+    ar.set_title(long_id, "Cut tank ESR 10%")
+    ar.set_title(searching, "Long goal")
+    sidebar.titler.asked.clear()
+    sidebar.refresh()
+    assert sidebar.titler.asked == [], "a titled chat is not asked for again"
+    assert sidebar.title_of(long_id) == "Cut tank ESR 10%" and sidebar.title_of("no_such_run") == ""
+    row = next(r for r in sidebar.rows if r["id"] == long_id)
+    assert agent_sidebar.chat_text(row) == goal, "the tooltip still has the whole goal"
+    for query, expected in [("cut tank esr 10%", {long_id}), ("against the baseline", {long_id}), ("hold all m", {titled_id})]:
+        sidebar.search_text = query
+        assert {r["id"] for r in sidebar.visible_rows()} == expected, query
+
+
 def test_new_saves_nothing_and_an_empty_chat_is_gone_once_another_is_opened():
     from agent.repositories.ai_run_repository import list_ai_runs
 

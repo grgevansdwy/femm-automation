@@ -1,6 +1,6 @@
 ---
 owns: backend/agent/**
-last-verified: 2026-10-08
+last-verified: 2026-10-12
 ---
 
 # Agent: the AI search agent
@@ -363,7 +363,9 @@ A stopped or cancelled run is kept with its plan and every finished round; delet
 separate, explicit user action. The app assumes **one instance per database**: the
 startup reaper would mark another instance's live search interrupted.
 
-**Saving a run.** Interview messages are saved as each turn lands; search rounds are saved
+**Saving a run.** The user's message in a planning turn is saved the moment it is sent
+(`InterviewRunner.send()`), so a new chat is listed at once; the reply and every other chat
+message are saved as each turn lands. Search rounds are saved
 as each one finishes (`AgentRunner._save_rounds`, called through `optimize_loop`'s
 `on_round_done` hook wherever a round ends), so a crash mid-search loses at most the round
 in flight. `AgentRunState.rounds_persisted` keeps each round to one write; a database error
@@ -385,13 +387,25 @@ they were written; `list_chat_rows()` is the light per-run query the sidebar lis
 segment ran under, that plan's distances and the round the model's memory begins after
 (§9, "Changing the goal").
 
-**Schema version.** `PRAGMA user_version` is 2. An older database is migrated the first
+**Schema version.** `PRAGMA user_version` is 3. An older database is migrated the first
 time it is opened (`_ensure_schema()`; the app also calls `migrate_if_needed()` at
 startup): the file is copied to `backend/data/backups/`, then, from version 0, `ai_runs` is
-rebuilt in one transaction with every row carried over unchanged; from version 1 the one
-new column (`imported_at`) is added. A failure rolls back and stops the app
+rebuilt in one transaction with every row carried over unchanged; from version 1 or 2 the
+columns added since (`imported_at`, then `title`) are added. A failure rolls back and stops the app
 with a message naming the backup. `python -m agent.cleanup_runs` (dry run by default) is
 the one-time, human-gated cleanup of rows left by the old lifecycle.
+
+**Chat titles.** `agent/services/chat_title.py` gives a chat a short name for the sidebar:
+`ChatTitler` (started by the app; the sidebar asks it for one title at a time, newest chat
+first, and for none while a search is running) sends the plan's
+goal text, or the first message while there is no plan, to the model with a fixed prompt
+and stores the cleaned reply in `ai_runs.title` through `set_title()`, that column's only
+writer. Code enforces the form (one line, at most 40 characters). Text that already fits is
+its own title and is never sent. A chat is titled once; a failed request is retried at
+most twice per app session, five minutes apart, and until then the chat is listed
+under its full text. A title is a label only: nothing reads it into a prompt, a plan or a
+score, and it is not part of an exported file (an imported chat is titled here). Each
+request is in the run's log as phase `title`.
 
 **A chat as a file.** `agent/services/chat_export.py` writes one stored chat as JSON
 (`{"format": "femm-agent-chat", "version": 1, "content_sha256", "run", "messages",
@@ -743,6 +757,7 @@ relying on any of these:
 | `agent/femm_agent/services/followup.py` | The chat after Start Search: questions about the run, and a revised plan once it has ended (§9) |
 | `agent/services/llm_client.py` | Raw HTTP to the LLM server (§8) |
 | `agent/services/run_log.py` | `RunLog` — the per-run JSON-lines log of every AI request and warning (§8) |
+| `agent/services/chat_title.py` | `ChatTitler` — short AI-made titles for the chat list (§5) |
 | `agent/input_chat/services/runner.py` | `InterviewRunner` — background-thread wrapper around the interview, for the GUI |
 | `agent/femm_agent/services/runner.py` | `AgentRunner` — background-thread wrapper around the search loop, for the GUI; runs on its own thread, never the solve pool (Engine.md §6) |
 | `agent/repositories/ai_run_repository.py` | CRUD for `ai_runs`/`ai_run_messages` — the agent's own two tables, referencing the engine's `configs` table; `transition()`, the schema version and its migrations, `insert_imported_run()` (§5) |

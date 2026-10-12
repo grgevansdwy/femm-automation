@@ -220,30 +220,32 @@ def test_a_migration_that_fails_half_way_changes_nothing_and_names_the_backup(tm
     print("  ok  an interrupted migration rolls back completely")
 
 
-def _v1_database(path):
-    """The ai_runs table as version 1 had it: today's, without imported_at."""
+def _older_database(path, version):
+    """The ai_runs table as version 1 or 2 had it: today's, without the columns added since."""
     import sqlite3
     conn = sqlite3.connect(path)
     conn.execute(ar._RUNS_TABLE.format(name="ai_runs"))
-    conn.execute("ALTER TABLE ai_runs DROP COLUMN imported_at")
+    for added_in, column in ar._ADDED_COLUMNS.items():
+        if added_in > version:
+            conn.execute(f"ALTER TABLE ai_runs DROP COLUMN {column}")
     conn.execute("INSERT INTO ai_runs (id, baseline_config_id, status, created_at, stop_reason, budget_json) "
                  "VALUES ('a', 'base_coil', 'stalled', '2026-10-01T00:00:00+00:00', 'stalled', '[{\"segment\": 1}]')")
-    conn.execute("PRAGMA user_version = 1")
+    conn.execute(f"PRAGMA user_version = {version}")
     conn.commit()
     conn.close()
 
 
-def test_migration_from_version_1_adds_imported_at_and_keeps_every_row(tmp_path, monkeypatch):
+def test_migration_from_version_1_adds_the_later_columns_and_keeps_every_row(tmp_path, monkeypatch):
     path = tmp_path / "v1" / "femm_automation.db"
     path.parent.mkdir()
-    _v1_database(path)
+    _older_database(path, 1)
     before = _raw(path, "SELECT * FROM ai_runs")
     monkeypatch.setattr(db, "DB_PATH", path)
 
     ar.migrate_if_needed()
 
-    assert _raw(path, "PRAGMA user_version") == [(2,)]
-    assert _raw(path, "SELECT * FROM ai_runs") == [row + (None,) for row in before], "rows unchanged, imported_at empty"
+    assert _raw(path, "PRAGMA user_version") == [(3,)]
+    assert _raw(path, "SELECT * FROM ai_runs") == [row + (None, None) for row in before], "rows unchanged, new columns empty"
     (backup,) = list((path.parent / "backups").glob("femm_automation-v1-*.db"))
     assert _raw(backup, "PRAGMA user_version") == [(1,)] and _raw(backup, "SELECT * FROM ai_runs") == before
     record = ar.get_ai_run('a')
@@ -252,7 +254,30 @@ def test_migration_from_version_1_adds_imported_at_and_keeps_every_row(tmp_path,
     assert ar.get_ai_run('a')['imported_at'] is None
     ar.migrate_if_needed()
     assert len(list((path.parent / "backups").glob("*.db"))) == 1, "an up-to-date database is not migrated again"
-    print("  ok  version 1 -> 2: imported_at added, rows unchanged, backup written")
+    print("  ok  version 1 -> 3: imported_at and title added, rows unchanged, backup written")
+
+
+def test_migration_from_version_2_adds_title_and_a_title_survives_a_status_change(tmp_path, monkeypatch):
+    path = tmp_path / "v2" / "femm_automation.db"
+    path.parent.mkdir()
+    _older_database(path, 2)
+    before = _raw(path, "SELECT * FROM ai_runs")
+    monkeypatch.setattr(db, "DB_PATH", path)
+
+    ar.migrate_if_needed()
+
+    assert _raw(path, "PRAGMA user_version") == [(3,)]
+    assert _raw(path, "SELECT * FROM ai_runs") == [row + (None,) for row in before], "rows unchanged, title empty"
+    (backup,) = list((path.parent / "backups").glob("femm_automation-v2-*.db"))
+    assert _raw(backup, "PRAGMA user_version") == [(2,)] and _raw(backup, "SELECT * FROM ai_runs") == before
+    assert ar.get_ai_run('a')['title'] is None and ar.list_chat_rows()[0]['title'] is None
+    ar.set_title('a', 'Cut tank ESR 10%')
+    ar.transition('a', 'running')  # a status change rewrites the row - not its title
+    assert ar.get_ai_run('a')['title'] == 'Cut tank ESR 10%' and ar.list_chat_rows()[0]['title'] == 'Cut tank ESR 10%'
+    ar.set_title('no_such_run', 'x')  # a chat deleted while its title was being made
+    ar.migrate_if_needed()
+    assert len(list((path.parent / "backups").glob("*.db"))) == 1, "an up-to-date database is not migrated again"
+    print("  ok  version 2 -> 3: title added, rows unchanged, backup written")
 
 
 def test_insert_imported_run_is_a_new_row_that_keeps_its_fields_through_later_changes():
@@ -362,8 +387,8 @@ def test_list_chat_rows_names_each_chat_by_its_goal_or_first_message():
     by_id = {r['id']: r for r in rows}
     assert by_id[planned['id']] == {
         'id': planned['id'], 'baseline_config_id': 'base_coil', 'status': 'plan_ready',
-        'created_at': planned['created_at'], 'imported_at': None, 'objective_text': 'cut tank ESR in half',
-        'first_message': 'make the tank better'}
+        'created_at': planned['created_at'], 'imported_at': None, 'title': None,
+        'objective_text': 'cut tank ESR in half', 'first_message': 'make the tank better'}
     assert (by_id[planning['id']]['objective_text'], by_id[planning['id']]['first_message']) == (None, 'reduce loop esr')
     assert (by_id[blank['id']]['objective_text'], by_id[blank['id']]['first_message']) == (None, None)
     print("  ok  list_chat_rows() returns the goal text and the first user message per run")
