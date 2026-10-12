@@ -146,9 +146,7 @@ def test_a_revised_goal_continues_the_same_run_with_earlier_designs_re_scored(mo
     state, first_budget, stored = search.state, search.state.budget, _payloads(search.state.id)
     solved = len(search.jobs.submits)
 
-    # A 1% cut: 71.0 (-2.3%) and 70.0 (-3.7%) both meet it now. 70.0 is the better
-    # one and survives its fragility check (+2% is still -1.8%), so it is the
-    # winner before any new round; 71.0 ranks below a winner and needs no check.
+    # A 1% cut: 71.0 (-2.3%) and 70.0 (-3.7%) both meet it now; 70.0 is the better one.
     revised = dataclasses.replace(state.spec, objectives=_cut(1.0))
     row = search.revise(revised, [_propose(tank_center_r=60.0)])
 
@@ -161,12 +159,10 @@ def test_a_revised_goal_continues_the_same_run_with_earlier_designs_re_scored(mo
     memory = first[2]["content"]
     assert "'tank_center_r': 71.0" in memory and "'tank_center_r': 70.0" in memory
     assert "{'tank_center_r': 70.0} -> goal_met=True" in memory, "re-scored: -3.7% meets the new 1% goal"
-    assert "[survived the fragility check]" in memory, "checked under the new plan before the first round"
     assert "{'tank_center_r': 71.0} -> goal_met=True" in memory
-    assert (state.fragility[0]["plan"], state.fragility[0]["round"], state.fragility[0]["passed"]) == (2, 2, True)
     new_solves = search.jobs.submits[solved:]
     assert (60.0, 10.0) in new_solves and not [s for s in new_solves if s[0] in (71.0, 70.0)], \
-        "re-scoring cost no solve: only the checks' copies and the new design were solved"
+        "re-scoring cost no solve: only the new design was solved"
     assert row["status"] == "goal_met" and state.best.coilset.tank_center_r == 60.0 and row["best_round"] == 3
     assert state.budget is not first_budget
     assert [(b["segment"], b["plan"], b.get("memory")) for b in row["budget"]] == [(1, 1, None), (2, 2, "kept")]
@@ -408,8 +404,8 @@ def test_an_accepted_revised_plan_waits_for_start_search_and_then_runs_on_the_sa
     search.first_request = len(search.requests)
     search.runner.start_revised(state.id, conversation.spec)
     row = _wait(state)
-    assert row["status"] == "goal_met" and state.winner.coilset.tank_center_r == 70.0, \
-        "the earlier design meets the new goal and survived its check under it"
+    assert row["status"] == "goal_met" and state.best.coilset.tank_center_r == 70.0, \
+        "the earlier design meets the new goal"
     assert [m["payload"]["segment"] for m in list_messages(state.id, phase="optimize")][2] == 2
 
 

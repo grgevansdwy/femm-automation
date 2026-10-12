@@ -154,20 +154,6 @@ def draw_result_table(table_id: str, tool_result: dict, spec_summary: dict) -> N
 
     goal_met = tool_result.get("goal_met", False)
     imgui.text_colored(_PASS_COLOR if goal_met else _FAIL_COLOR, f"Goal met: {'YES' if goal_met else 'no'}")
-    fragility = fragility_text(tool_result)
-    if fragility:
-        imgui.text_colored(_PASS_COLOR if tool_result.get("fragility") == "passed" else _FAIL_COLOR, fragility)
-
-
-def fragility_text(tool_result: dict) -> str:
-    """The design's fragility check, if it has had one, as a line for a person:
-    it only wins if it still meets the goal with every dimension 1-2% off."""
-    summary = tool_result.get("fragility")
-    if not summary:
-        return ""
-    if summary == "passed":
-        return "Fragility check: passed (still meets the goal with every dimension changed by 1-2%)"
-    return f"Fragility check: {_ascii(summary)} - not a winner"
 
 
 def draw_round_block(round_id: str, header: str, timing_text: str, reasoning: str, candidates: list[dict],
@@ -276,10 +262,7 @@ def _step_outcome(candidate: dict, spec_summary: dict) -> tuple[str, imgui.ImVec
         return f"Invalid: {_ascii(candidate.get('error') or 'unknown error')}", _FAIL_COLOR
     tool_result = candidate.get("tool_result") or {}
     if tool_result.get("goal_met"):
-        check = tool_result.get("fragility")
-        if check and check != "passed":
-            return "Met the goal, failed the fragility check", _FAIL_COLOR
-        return ("Goal met, survived the fragility check" if check else "Goal met"), _PASS_COLOR
+        return "Goal met", _PASS_COLOR
     # Only requirements count as "missed" - an unmet preference doesn't block the goal.
     missed = [row["metric"] for row in _metric_rows(tool_result, spec_summary)
               if not row["passed"] and row.get("required", True)]
@@ -415,11 +398,6 @@ def draw_full_output_table(table_id: str, best_tool_result: dict,
 
     goal_met = best_tool_result.get("goal_met", False)
     imgui.text_colored(_PASS_COLOR if goal_met else _FAIL_COLOR, f"Goal met: {'YES' if goal_met else 'no'}")
-    if goal_met:
-        # Meeting the goal is not yet winning: the run's status is 'goal met' only
-        # for a design that also survived the fragility check.
-        check = fragility_text(best_tool_result) or "Fragility check: not done - this design is not a winner yet"
-        imgui.text_colored(_PASS_COLOR if best_tool_result.get("fragility") == "passed" else _FAIL_COLOR, check)
 
 
 def draw_full_input_table(pane_id: str, baseline_buffer: dict, best_buffer: dict,

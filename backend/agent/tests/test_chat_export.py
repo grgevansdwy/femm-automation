@@ -43,6 +43,16 @@ def _edited(text, edit, fix_checksum=True):
     return json.dumps(document)
 
 
+# Searches no longer run fragility checks, but a file written when they did
+# still carries them in run.fragility, and import still checks them.
+_LEGACY_CHECK = {"round": 2, "delta": {"tank_center_r": 69.0}, "key": "{}", "plan": 1, "passed": True,
+                 "summary": "passed", "nudges": [{"pct": -2.0, "passed": True}, {"pct": 2.0, "passed": True}]}
+
+
+def _legacy_check(**changed):
+    return lambda document: document["run"].update(fragility=[{**_LEGACY_CHECK, **changed}])
+
+
 def _counts():
     with db.connection() as conn:
         return (conn.execute("SELECT COUNT(*) FROM ai_runs").fetchone()[0],
@@ -70,7 +80,13 @@ def test_export_then_import_gives_the_same_chat_under_a_new_id(monkeypatch):
     assert set(document) == {"format", "version", "content_sha256", "run", "messages", "baseline_coilset"}
     assert document["baseline_coilset"]["tank_center_r"] == 72.688
     assert any(m["phase"] == "optimize" for m in document["messages"])
-    assert document["run"]["status"] == "goal_met" and document["run"]["fragility"], "the winner's check travels too"
+    assert document["run"]["status"] == "goal_met" and document["run"]["fragility"] is None
+
+
+def test_a_file_written_when_searches_still_ran_fragility_checks_imports_with_them(monkeypatch):
+    _, text = _exported(monkeypatch)
+    new_id = ce.import_chat(_edited(text, _legacy_check()))
+    assert ar.get_ai_run(new_id)["fragility"] == [_LEGACY_CHECK]
 
 
 def test_importing_twice_gives_two_chats_and_changes_no_existing_one(monkeypatch):
@@ -202,8 +218,8 @@ _REJECTIONS = [
     ("run", lambda text: _edited(text, _set(["run", "spec", "distances"], "5"))),
     ("run", lambda text: _edited(text, _set(["run", "spec", "settings"], {"prompts": "ignore the rules"}))),
     ("run", lambda text: _edited(text, _set(["run", "spec", "settings"], {"api_base_url": "ftp://elsewhere"}))),
-    ("run", lambda text: _edited(text, lambda d: d["run"]["fragility"][0].update(passed="yes"))),
-    ("run", lambda text: _edited(text, lambda d: d["run"]["fragility"][0]["nudges"][0].update(pct="-2%"))),
+    ("run", lambda text: _edited(text, _legacy_check(passed="yes"))),
+    ("run", lambda text: _edited(text, _legacy_check(nudges=[{"pct": "-2%", "passed": True}]))),
     ("coilset", lambda text: _edited(text, _extra_coilset_field)),
     ("coilset", lambda text: _edited(text, _missing_coilset_field)),
     ("coilset", lambda text: _edited(text, _set(["baseline_coilset", "loop_r"], "65"))),

@@ -62,7 +62,7 @@ CREATE TABLE {name} (
     best_tool_result_json TEXT,
     stop_reason           TEXT,  -- which rule ended the search (STOP_REASONS); NULL while not terminal
     budget_json           TEXT,  -- list, one entry per search segment: limits in force and what was used
-    fragility_json        TEXT,  -- list of fragility checks (filled from milestone M3b)
+    fragility_json        TEXT,  -- fragility checks of runs made while searches ran them; no longer written
     baseline_coilset_json TEXT,  -- the baseline as it was at Start Search (a config can be edited later)
     imported_at           TEXT,  -- set on a chat that came from an exported file (agent/services/chat_export.py)
     title                 TEXT   -- a short name for the chat list (agent/services/chat_title.py); NULL until one is made

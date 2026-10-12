@@ -49,21 +49,6 @@ def test_legacy_runs_still_render_from_their_stored_spec():
     ]
 
 
-def test_a_candidates_fragility_check_is_shown_in_words():
-    from frontend.screen_agent.agent_candidate_card import _step_outcome, fragility_text
-    passing = {"goal_met": True, "objectives": []}
-    assert fragility_text(passing) == "" and _step_outcome({"valid": True, "tool_result": passing}, {})[0] == "Goal met"
-
-    survived = {**passing, "fragility": "passed"}
-    assert fragility_text(survived).startswith("Fragility check: passed")
-    assert _step_outcome({"valid": True, "tool_result": survived}, {})[0] == "Goal met, survived the fragility check"
-
-    fragile = {**passing, "fragility": "failed at -2%: tank_esr -9.1%"}
-    assert fragility_text(fragile) == "Fragility check: failed at -2%: tank_esr -9.1% - not a winner"
-    text, colour = _step_outcome({"valid": True, "tool_result": fragile}, {})
-    assert text == "Met the goal, failed the fragility check"
-
-
 def test_a_design_is_named_by_its_label_and_the_design_it_was_built_on():
     from frontend.screen_agent.agent_candidate_card import design_name
     assert design_name({"label": "C7", "base_label": "C3"}) == "C7, built on C3"

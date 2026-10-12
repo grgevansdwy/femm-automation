@@ -13,7 +13,6 @@ are never the model's call:
   scored against the plan now in force. A design the new plan does not allow
   (it changes a field that is no longer open, is outside a limit, or misses a
   pinned value) stays in the list as tried, but can never be the best design.
-  A fragility check counts only under the plan it was made for.
 - plan_diff(): what the new plan changes, in words, for the person who has
   to confirm it.
 
@@ -25,7 +24,7 @@ import dataclasses
 
 from agent.femm_agent.models.schema import NEVER_EVALUATED, Rejection, coerce_delta
 from agent.femm_agent.models.state import Tried
-from agent.femm_agent.services import fragility, progress
+from agent.femm_agent.services import progress
 from agent.femm_agent.services.scorer import evaluate_async, rank_key, score, tool_result, wait_for_jobs
 from agent.input_chat.models.variables import (
     NUMERIC_FIELDS, allowed_fields, audit_changed_fields, free_fields_for, search_field_table,
@@ -103,8 +102,7 @@ def segment_plans(state) -> dict[int, int]:
 
 
 def rebuild_memory(state, job_runner) -> None:
-    """Rebuilds state.tried, the fragility checks that count, state.winner,
-    state.best and state.progress from state.rounds for the plan in force
+    """Rebuilds state.tried, state.best and state.progress from state.rounds for the plan in force
     (state.spec): every stored design after state.memory_from_round, its
     solves requested again (cache hits - a miss is solved again, outside the
     budget) and scored against the current objectives. Nothing is trusted
@@ -114,12 +112,7 @@ def rebuild_memory(state, job_runner) -> None:
     them. From rounds run under an earlier plan: a simulated design the
     current plan does not allow is kept as tried but unscored (it cannot be
     the best design); a rejected proposal is kept only when the current plan
-    would build the same design again.
-
-    A fragility check is a verdict against the plan it was made under, so
-    only checks made under the current plan are attached. A design that
-    passed its check under an earlier plan is owed a new one - its copies are
-    cache hits when the distances have not changed."""
+    would build the same design again."""
     from engine.models.coilset import CoilSet
 
     spec, baseline = state.spec, state.baseline_coilset
@@ -128,7 +121,7 @@ def rebuild_memory(state, job_runner) -> None:
     table = search_field_table(spec.settings)  # the plan's own copy of the Field Config table
     allowed = allowed_fields(baseline, spec.variable_spec, table)
     plans = segment_plans(state)
-    state.tried, state.best, state.winner = [], None, None
+    state.tried, state.best = [], None
 
     labelled = 0  # simulated designs seen so far, in stored order
     for round_state in state.rounds:
@@ -172,16 +165,8 @@ def rebuild_memory(state, job_runner) -> None:
             state.tried.append(Tried(round_state.round_num, delta, scored, result, round_state.segment,
                                      label=candidate.label, base_label=candidate.base_label, step=candidate.step))
 
-    # The fragility checks already made under this plan: a design is never
-    # checked twice, and the winner is the best design that survived one.
-    for check in state.fragility:
-        if (check.get("plan") or 1) == state.plan:
-            fragility.record_check(state, check)
-    survivors = [t.scored for t in state.tried if t.check is not None and t.check["passed"]]
-    if survivors:
-        state.winner = min(survivors, key=lambda s: rank_key(s, spec.favourite_metric))
-    fragility.refresh_best(state)
-    state.unchecked_pass = state.winner is None and bool(fragility.unchecked_passing(state))
+    simulated = [t.scored for t in state.tried if t.scored is not None]
+    state.best = min(simulated, key=lambda s: rank_key(s, spec.favourite_metric)) if simulated else None
 
     state.progress = progress.assess(
         state.tried, [r.round_num for r in state.rounds if not r.no_reply], spec,

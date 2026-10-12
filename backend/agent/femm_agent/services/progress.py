@@ -59,9 +59,7 @@ def assess(tried, rounds, spec, free_fields=(), segment_start_round: int = 0) ->
     noise = spec.settings.noise_points
     by_round: dict[int, list] = {}
     for t in tried:
-        # A design that met the goal but failed its fragility check is not a
-        # pass and not progress: it is left out of the tracked number.
-        if t.scored is not None and not t.check_failed:
+        if t.scored is not None:
             by_round.setdefault(t.round_num, []).append(t.result)
 
     reference, since, passed = None, 0, False

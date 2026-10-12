@@ -246,41 +246,9 @@ order; the first that applies is recorded as the run's `stop_reason`:
 
 plus `llm_failed` (a round's AI request failed every try, `search_attempts` times) and
 `internal_error`. The run's **status** follows from it (`state.status_for()`): `goal_met`
-whenever the run has a winner (below), whichever rule ended the search; otherwise
+whenever the best design meets the goal, whichever rule ended the search; otherwise
 `budget_exhausted` (rules 2), `stopped_by_model` (6), `stalled` (5), `failed`, or
 `cancelled` (1).
-
-**Meeting the goal is not yet winning: the fragility check**
-(`femm_agent/services/fragility.py`). Fabrication and the solver's mesh both shift a
-result by a point or two, so when a stop rule fires (any but a stop by the user), code
-re-simulates the best passing design as four copies with every continuous dimension
-(every `float` field except permeability, loss angle and copper thickness; counts and
-flags are never touched) multiplied together by 0.98, 0.99, 1.01 and 1.02. All four must
-meet every required objective at every distance. The design that survives is the
-**winner** (`state.winner`), and only a winner makes a run `goal_met`.
-
-- A design that fails is never the winner; the next-ranked passing design is checked,
-  up to 5 failures in one go. A design is never checked twice, and a design ranked below
-  a winner that already survived is not checked at all.
-- If designs passed but none survived, and the rule that fired was not a budget limit,
-  the search carries on instead of stopping: the model is told which designs failed and
-  why, they are listed in its memory as "not winners", they stop counting as passes for
-  the progress verdict, and the no-improvement count starts again.
-- The check's solves count against the budget. So that one check can still be afforded,
-  the search stops short of the limits by a reserve: 4 x distances simulations always
-  (at most half the budget), and 240 s of the time limit once a design has passed (at
-  most a quarter of it). The limits shown and stored are the user's own.
-- If a passing design still cannot be checked (the budget ran out, or the user stopped
-  the search), the run ends without a winner and the report says so and invites
-  "continue", which starts with that check.
-- A copy models fabrication error, not a proposal: the Field Config limits do not
-  apply to it. A copy with invalid geometry, or whose solve fails, is a failed check.
-- The check needs no model: a search that loses the AI server after a pass still runs
-  it (`AgentRunner._run`) and can end `goal_met`.
-- Ending without a winner reads "Target not achieved" with the rule that ended the
-  search; one line is added when designs met the goal but none survived. A design that
-  never passed is never called fragile. Every check is stored in `ai_runs.fragility_json`
-  and shown on the design's card.
 
 The search prompt tells the model the same thing (`## After a candidate meets the goal`):
 keep proposing after a pass, how passing designs are compared (the score below, or the
@@ -648,14 +616,12 @@ fresh budget. What the search then remembers is decided in
   design is scored again against the new objectives (cache hits). A design the new plan
   does not allow — it changes a field that is no longer open, is outside a limit, or
   lacks a pinned value — stays listed as tried but unscored (`not_in_current_plan`), so
-  it can never be the best design. A fragility check counts only under the plan it was
-  made for (each check records its `plan`), so a design that meets the new goal is
-  checked again before it can win.
+  it can never be the best design.
 - a distance was added: the search starts from the beginning. Earlier rounds stay stored
   and visible, outside the model's memory (`AgentRunState.memory_from_round`).
 
-Stored rounds are never rewritten. A revised goal that an earlier design already meets
-and survives its check under, with nothing left to push, ends before any round. A plan
+Stored rounds are never rewritten. A revised goal that an earlier design already meets,
+with nothing left to push, ends before any round. A plan
 that changes nothing from the one in force is turned down, so a run is never left waiting
 on a plan it already has. `allow_replan` is off by default; the chat panel passes it for
 every message after Start Search (`AgentPanelState._send_followup()`), shows the revised

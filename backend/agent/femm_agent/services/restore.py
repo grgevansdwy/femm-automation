@@ -108,7 +108,6 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     state.budget_history = list(record.get("budget") or [])
     if record.get("finished_at"):
         state.finished_at = datetime.fromisoformat(record["finished_at"])
-    state.fragility = list(record.get("fragility") or [])
     candidate_fields = {f.name for f in dataclasses.fields(CandidateResult)}
 
     for message in sorted(list_messages(ai_run_id, phase="optimize"), key=lambda m: m["round_num"]):

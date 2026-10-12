@@ -213,9 +213,8 @@ def test_model_stopped_two_text_only_replies_in_a_row(monkeypatch):
 
 def test_simulations_proposals_launch_in_order_while_the_count_allows(monkeypatch):
     jobs = _Jobs()
-    # Two distances: every design costs 2 simulations. Limit 7, of which 3 are held back for a
-    # fragility check (services/fragility.py), leaves the search 4: the third design of round 2 does not fit.
-    spec = _spec(cut_pct=50.0, distances=(5.0, 10.0), per_round=3, max_simulations=7)
+    # Two distances: every design costs 2 simulations. Limit 5: the third design of round 2 does not fit.
+    spec = _spec(cut_pct=50.0, distances=(5.0, 10.0), per_round=3, max_simulations=5)
     state, row, requests = _search(monkeypatch, [_propose(71.0), _propose(71.0, 70.0, 69.0, 68.0)], spec, jobs=jobs)
 
     assert _ending(state, row) == ("budget_exhausted", "simulations", 2) and len(requests) == 2
@@ -227,7 +226,7 @@ def test_simulations_proposals_launch_in_order_while_the_count_allows(monkeypatc
     assert (state.budget.simulations_used, state.budget.cache_hits) == (4, 2), \
         "71 again in round 2 was a cache hit: free. The baseline's two solves are not counted either."
     assert len(jobs.submits) == 6
-    assert "its limit of 7 simulations" in state.outcome_report
+    assert "its limit of 5 simulations" in state.outcome_report
     assert [t.delta["tank_center_r"] for t in state.tried] == [71.0, 71.0, 70.0], "a proposal turned away is not remembered as tried"
 
 

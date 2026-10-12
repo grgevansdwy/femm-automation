@@ -22,9 +22,10 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from agent.femm_agent.services import fragility, replan
+from agent.femm_agent.services import replan
 from agent.femm_agent.services.optimize import RoundFailed, optimize_loop
 from agent.femm_agent.services.outcome import outcome_report
+from agent.femm_agent.services.scorer import tool_result
 from agent.femm_agent.models.state import BUDGET_STOP_REASONS, AgentRunState, AgentRunStatus, Budget, now, status_for
 
 
@@ -168,8 +169,7 @@ class AgentRunner:
         with a fresh budget from the plan's own settings. What the search
         remembers is decided by services/replan.py: everything already tried,
         re-scored against the new plan - or nothing, when the plan adds a
-        distance. No earlier fragility check counts under the new plan.
-        Candidates are still compared with the original baseline.
+        distance. Candidates are still compared with the original baseline.
         Raises ValueError if that run isn't here or is still searching."""
         from agent.repositories.ai_run_repository import get_ai_run, transition
         state = self._finished_run(run_id)
@@ -182,8 +182,7 @@ class AgentRunner:
         state.spec = spec
         self._begin_segment(state)
         state.rebuild_pending = True
-        state.tried, state.best, state.winner, state.progress = [], None, None, None
-        state.unchecked_pass = False
+        state.tried, state.best, state.progress = [], None, None
         # The row says from the start which plan this segment runs under and where
         # its memory begins, so a search cut short (the app closed) restores right.
         transition(run_id, "running", spec=dataclasses.asdict(spec),
@@ -260,8 +259,7 @@ class AgentRunner:
         other solve. Returns immediately - the background thread may still be
         waiting on an LLM reply (which is aborted) or a solve. The run is
         kept: its finished rounds, its best design, and an ending of
-        'cancelled' (or 'goal_met' if a design had already met the goal and
-        survived its fragility check - nothing is checked once the user stops)."""
+        'cancelled' (or 'goal_met' if a design already met the goal)."""
         state = self.runs.get(run_id)
         if state is None:
             return
@@ -308,12 +306,6 @@ class AgentRunner:
                     else:
                         state.stop_reason = state.budget.exhausted()
                     if state.stop_reason is not None:
-                        # The fragility check needs no AI: a design that passed before
-                        # the server was lost can still be checked, and win.
-                        if state.stop_reason != "user_stopped" and state.baseline_metrics is not None:
-                            fragility.run_episode(state, run_jobs)
-                        else:
-                            state.unchecked_pass = bool(fragility.unchecked_passing(state))
                         break
                     state.search_attempt += 1  # resume: everything tried so far is still in memory
         except Exception as exc:
@@ -324,8 +316,7 @@ class AgentRunner:
         finally:
             if state.stop_reason is None:  # can't happen unless the loop returned without saying why
                 state.stop_reason = "user_stopped" if state.cancelled else "internal_error"
-            # Only a design that met the goal and survived its fragility check is a winner.
-            status = status_for(state.stop_reason, state.winner is not None)
+            status = status_for(state.stop_reason, state.best is not None and state.best.goal_met)
             state.finished_at = now()
             state.budget.stop()
             state.budget_history.append(self._budget_entry(state))
@@ -428,9 +419,9 @@ class AgentRunner:
             # `error` holds the outcome report, so History can show how the
             # search ended (agent/femm_agent/services/outcome.py).
             state.id, state.status.value, error=state.outcome_report,
-            stop_reason=state.stop_reason, budget=state.budget_history, fragility=state.fragility or None,
+            stop_reason=state.stop_reason, budget=state.budget_history,
             finished_at=state.finished_at.isoformat() if state.finished_at else None,
             best_round=best_round,
             best_coilset=(dataclasses.asdict(best.coilset) if best is not None else None),
-            best_tool_result=fragility.best_result(state),
+            best_tool_result=(tool_result(best, state.spec) if best is not None else None),
         )

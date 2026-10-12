@@ -89,12 +89,6 @@ class Budget:
     # A candidate needing more fresh solves than were left was turned away:
     # the limit is reached even if a few simulations remain unspent.
     simulation_limit_hit: bool = False
-    # Held back from the search so a passing design can still be put through the
-    # fragility check (services/fragility.py): simulations always, time once a
-    # design has passed. The check itself spends them. Both shorten what the
-    # search sees as left; neither changes the limits reported.
-    reserved_simulations: int = 0
-    reserved_s: float = 0.0
     # Spent before this segment began, by the segment it carries on from
     # (`continues`, None for a budget that started from zero). The counters
     # above include that segment's; this is its share of the wall clock.
@@ -132,10 +126,10 @@ class Budget:
         return self.carried_s + (self.clock() if self.ended is None else self.ended) - self.started
 
     def remaining_s(self) -> float:
-        return self.time_limit_s - self.reserved_s - self.elapsed_s()
+        return self.time_limit_s - self.elapsed_s()
 
     def simulations_left(self) -> int:
-        return max(0, self.max_simulations - self.reserved_simulations - self.simulations_used)
+        return max(0, self.max_simulations - self.simulations_used)
 
     def exhausted(self) -> str | None:
         """The limit that has been reached ("rounds", "time" or "simulations"), or None."""
@@ -232,18 +226,9 @@ class Tried:
     scored: "Scored | None"
     result: dict
     segment: int = 1
-    # Its fragility check (services/fragility.py), once it has had one: only a
-    # design that met the goal is ever checked.
-    check: dict | None = None
     label: str | None = None  # "C7" - simulated designs only (see CandidateResult.label)
     base_label: str | None = None
     step: dict = dataclasses.field(default_factory=dict)
-
-    @property
-    def check_failed(self) -> bool:
-        """Met the goal but did not survive the check: never a winner, and no
-        longer counted as a pass."""
-        return self.check is not None and not self.check["passed"]
 
     @property
     def name(self) -> str:
@@ -306,13 +291,6 @@ class AgentRunState:
     # model's memory is rebuilt from it each round (optimize.search_memory()).
     tried: list[Tried] = dataclasses.field(default_factory=list)
     progress: "Progress | None" = None  # code's latest verdict (services/progress.py)
-    # The fragility check (services/fragility.py). `winner` is the best design
-    # that met the goal AND survived its check - the only thing that makes a
-    # run 'goal_met'. `fragility` is every check made (ai_runs.fragility_json).
-    winner: "Scored | None" = None
-    fragility: list[dict] = dataclasses.field(default_factory=list)
-    unchecked_pass: bool = False  # the search ended with a passing design it could not check
-    progress_reset_round: int = 0  # the no-improvement count restarts after this round (a failed check episode)
     stalled_notice_sent: bool = False   # the "you are stalled" message goes out once per segment
     llm_failures: list[dict] = dataclasses.field(default_factory=list)  # every failed AI try, run-wide
     # How and why the run ended, in plain words (agent/femm_agent/services/outcome.py) -

@@ -139,11 +139,6 @@ def run_context(run_state, pending_spec=None, show_plan_arguments: bool = False)
         lines += ["Changes from the plan above:"] + [f"  - {c}" for c in changes or ["none"]]
         lines.append(replan.memory_line(spec, pending_spec, run_state.tried))
 
-    failed_checks = [c for c in run_state.fragility if not c["passed"]]
-    if failed_checks:
-        lines.append("Designs that met the goal but failed the fragility check (never winners):")
-        lines += [f"  - round {c['round']}: {c['delta']} -> {c['summary']}" for c in failed_checks]
-
     lines += ["", f"BASELINE ({spec.baseline_config_id})"]
     if run_state.baseline_metrics:
         lines += _metrics_lines(run_state.baseline_metrics, "  ")
@@ -186,11 +181,6 @@ def run_context(run_state, pending_spec=None, show_plan_arguments: bool = False)
             lines.append(f"  Found in round {found_in}.")
         lines.append(f"  Changed from baseline: {best.changed_fields or '(unknown)'}")
         lines.append(f"  Goal met: {best.goal_met}")
-        if best.goal_met:
-            lines.append("  Fragility check (the goal must still be met with every dimension changed together by "
-                         "-2%, -1%, +1% and +2%): "
-                         + ("passed - this design is the winner." if run_state.winner is best
-                            else "not done yet - it is not a winner until it passes."))
         for o in tool_result(best, spec)["objectives"]:
             worst = (f", worst distance {max(o['change_pct_by_distance'], key=lambda d: abs(o['change_pct_by_distance'][d]))} mm"
                      if o["change_pct_by_distance"] else "")
