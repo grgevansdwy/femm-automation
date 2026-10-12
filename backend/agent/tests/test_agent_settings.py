@@ -246,7 +246,7 @@ def test_the_default_followup_prompt_follows_whether_the_search_is_running():
     assert "has finished" in text and "can't be changed" in text and "still running" not in text
 
 
-# ---- the Search fields table ---------------------------------------------------------------------
+# ---- the Field Config table ---------------------------------------------------------------------
 
 def test_search_fields_are_stored_only_where_they_differ_and_bad_rows_never_save():
     from agent.input_chat.models.variables import DEFAULT_SEARCH_FIELDS, search_field_table
@@ -268,7 +268,7 @@ def test_search_fields_are_stored_only_where_they_differ_and_bad_rows_never_save
     for bad in ({"tank_mu": {"enabled": "yes"}}, {"tank_mu": {"min": 5, "max": 1}}, {"tank_mu": {"max": "big"}},
                 {"tank_mu": 3}, ["tank_mu"]):
         problems = dataclasses.replace(AgentSettings(), search_fields=bad).validate()
-        assert problems and problems[0].startswith("Search fields"), (bad, problems)
+        assert problems and problems[0].startswith("Field Config"), (bad, problems)
         with pytest.raises(ValueError):
             save_settings(dataclasses.replace(AgentSettings(), search_fields=bad))
     with pytest.raises(ValueError):

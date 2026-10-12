@@ -26,6 +26,8 @@ from . import agent_candidate_card
 
 WIDTH = 260.0            # the same width as the Manual Runs config list
 COLLAPSED_WIDTH = 34.0
+MIN_WIDTH = 160.0        # how narrow the list can be dragged; narrower than this, collapse it instead
+SPLITTER_WIDTH = 8.0     # the draggable gap between the list and the chat
 _REFRESH_S = 1.0         # the list is re-read at most this often (and at once after a change made here)
 
 _GOAL_MET_COLOR = imgui.ImVec4(0.35, 0.8, 0.45, 1.0)
@@ -87,6 +89,7 @@ class AgentSidebarState:
         self.titler = None
         self.search_text: str = ""
         self.collapsed: bool = False
+        self.open_width: float = WIDTH  # the list's width while not collapsed; the splitter changes it
         # The chat whose Delete is waiting on the confirmation popup.
         self.pending_delete_id: str | None = None
         self._open_delete_popup: bool = False
@@ -189,7 +192,33 @@ class AgentSidebarState:
 
 
 def width(state: AgentSidebarState) -> float:
-    return COLLAPSED_WIDTH if state.collapsed else WIDTH
+    return COLLAPSED_WIDTH if state.collapsed else state.open_width
+
+
+def resize(state: AgentSidebarState, delta: float, max_width: float) -> None:
+    """Drags the list's right edge by `delta` pixels, kept between MIN_WIDTH
+    and `max_width` (what the chat next to it can give up)."""
+    if not state.collapsed:
+        state.open_width = max(MIN_WIDTH, min(state.open_width + delta, max(max_width, MIN_WIDTH)))
+
+
+def draw_splitter(state: AgentSidebarState, max_width: float) -> None:
+    """The gap between the list and the chat, as a handle: dragging it makes
+    the list narrower and the chat wider, or the other way round. Call between
+    the two with same_line(0, 0) on both sides."""
+    height = max(imgui.get_content_region_avail().y, 1.0)
+    pos = imgui.get_cursor_screen_pos()
+    imgui.invisible_button("##sidebar_splitter", imgui.ImVec2(SPLITTER_WIDTH, height))
+    if state.collapsed:
+        return
+    hovered, active = imgui.is_item_hovered(), imgui.is_item_active()
+    if hovered or active:
+        imgui.set_mouse_cursor(imgui.MouseCursor_.resize_ew.value)
+        color = imgui.get_color_u32((imgui.Col_.separator_active if active else imgui.Col_.separator_hovered).value)
+        x = pos.x + SPLITTER_WIDTH / 2.0
+        imgui.get_window_draw_list().add_line(imgui.ImVec2(x, pos.y), imgui.ImVec2(x, pos.y + height), color, 2.0)
+    if active:
+        resize(state, imgui.get_io().mouse_delta.x, max_width)
 
 
 def _draw_row(state: AgentSidebarState, panel, row: dict, config_names: dict, row_width: float) -> None:
@@ -372,7 +401,7 @@ def _audit(record: dict, baseline, best) -> dict | None:
     if baseline is None or best is None:
         return None
     try:
-        # The run's own copy of the Search fields table, or - for a run stored
+        # The run's own copy of the Field Config table, or - for a run stored
         # before the table existed - the rule in force then.
         return audit_changed_fields(baseline, best, stored_allowed_fields(baseline, record["spec"] or {}))
     except (KeyError, TypeError, AttributeError):

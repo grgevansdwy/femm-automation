@@ -64,7 +64,7 @@ class ChatSession:
     # (the "Start Search" button on the rendered plan); poll() only
     # hands off to AgentRunner once both are true.
     plan_confirmed: bool = False
-    # Why the proposed plan can't start under the Search fields table as it is
+    # Why the proposed plan can't start under the Field Config table as it is
     # now (checked when Start Search is clicked - see confirm_plan()).
     plan_problems: list = dataclasses.field(default_factory=list)
     chat_input: str = ""  # the unsent draft - each chat keeps its own
@@ -440,7 +440,7 @@ class AgentPanelState:
             if d not in chat.baseline_runs:
                 chat.baseline_runs[d] = self._solve_one(chat, d)
 
-    # ---- the Search fields table (Settings): which fields a search may change
+    # ---- the Field Config table (Settings): which fields a search may change
     def field_limits(self) -> dict[str, str]:
         """Open field -> its allowed values in words ("1 to 8"), under the table
         this conversation is planning with. Shown beside the baseline's values."""
@@ -456,7 +456,7 @@ class AgentPanelState:
 
     @property
     def pending_field_change(self) -> dict | None:
-        """A Search fields change the AI proposed and the user hasn't answered -
+        """A Field Config change the AI proposed and the user hasn't answered -
         while planning, or after a search has ended (for a revised plan). A
         running search's table is fixed."""
         if self.interview_state is None or self.chat.phase == "running" or self.chat.read_only_reason:
@@ -495,7 +495,7 @@ class AgentPanelState:
             self.interview_state.pending_field_change = None
 
     def recheck_plan(self) -> list[str]:
-        """Copies the Search fields table as saved right now into the plan (it
+        """Copies the Field Config table as saved right now into the plan (it
         may have been edited in Settings since the plan was proposed) and
         re-runs the plan's own checks against it. Returns, and remembers, why
         the plan can't start - empty when it can."""
@@ -1243,16 +1243,16 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     imgui.pop_style_color(2)
     imgui.pop_style_var()
     if state.plan_problems:
-        # Fixed, code-written text: the plan no longer fits the Search fields table.
+        # Fixed, code-written text: the plan no longer fits the Field Config table.
         imgui.push_text_wrap_pos(avail_width)
-        imgui.text_colored(_ERROR_COLOR, "This plan can't start with the Search fields as they are now:")
+        imgui.text_colored(_ERROR_COLOR, "This plan can't start with the Field Config as they are now:")
         for problem in state.plan_problems:
             imgui.bullet_text(problem)
         imgui.pop_text_wrap_pos()
         if imgui.small_button("Check again"):
             state.recheck_plan()
         imgui.same_line()
-        imgui.text_disabled("after changing Settings > Search fields - or send a message to change the plan")
+        imgui.text_disabled("after changing Settings > Field Config - or send a message to change the plan")
 
     hint = ("Another search is running - one at a time" if busy_elsewhere
             else revised_blocked if revised_blocked
@@ -1265,9 +1265,9 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
 
 _START_BUTTON_H = 38.0
 
-# What the model is told after the user clicks Apply on a proposed Search fields
+# What the model is told after the user clicks Apply on a proposed Field Config
 # change - fixed text, sent as the user's turn so the model re-plans.
-FIELD_CHANGE_APPLIED_MESSAGE = "I applied the Search fields change. Carry on with the plan."
+FIELD_CHANGE_APPLIED_MESSAGE = "I applied the Field Config change. Carry on with the plan."
 
 
 def _field_change_card_height(pending: dict) -> float:
@@ -1275,12 +1275,12 @@ def _field_change_card_height(pending: dict) -> float:
 
 
 def _draw_field_change_card(state: AgentPanelState, avail_width: float, pending: dict) -> None:
-    """A change to the Search fields table the AI proposed. It is only a
+    """A change to the Field Config table the AI proposed. It is only a
     proposal: nothing is written until the user clicks Apply. The change lines
     are built by code from the validated proposal; only `reason` is the model's."""
     from agent.input_chat.models.variables import describe_field_change
     imgui.separator()
-    imgui.text_colored(_ACCENT_COLOR, "Proposed change to Search fields")
+    imgui.text_colored(_ACCENT_COLOR, "Proposed change to Field Config")
     imgui.push_text_wrap_pos(avail_width)
     if pending.get("reason"):
         imgui.text_wrapped(agent_candidate_card.full_text(pending["reason"]))

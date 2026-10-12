@@ -168,7 +168,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
         config_id=spec.baseline_config_id, config_name=baseline.config_name))
     state.baseline_metrics = baseline_metrics
 
-    # The run's own copy of the Search fields table (spec.settings is the
+    # The run's own copy of the Field Config table (spec.settings is the
     # snapshot taken when the search started), never the live settings.
     table = search_field_table(spec.settings)
     free_fields = free_fields_for(baseline, spec.variable_spec, table)

@@ -186,7 +186,7 @@ def test_malformed_tool_arguments_end_in_a_question_not_a_dead_turn(monkeypatch)
     print("  ok  whatever shape finalize_spec's arguments have, the user gets a reply")
 
 
-# ---- the Search fields table: the model may propose a change, never apply one -------------------
+# ---- the Field Config table: the model may propose a change, never apply one -------------------
 
 def _propose_fields(changes, reason="you asked to tune the tank ferrite"):
     return {"role": "assistant", "content": "", "tool_calls": [

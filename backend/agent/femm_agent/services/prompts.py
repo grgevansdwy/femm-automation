@@ -73,7 +73,7 @@ def system_prompt(baseline, free_fields: dict, spec, baseline_metrics: dict) -> 
     start = dataclasses.replace(baseline, **fixed)
     values = dataclasses.asdict(baseline)
     # One line per open field: its baseline value and what it may be set to (the
-    # run's Search fields limits - the same schema entries coerce_delta() enforces).
+    # run's Field Config limits - the same schema entries coerce_delta() enforces).
     free_lines = "\n".join(f"  {name}: {values[name]:g}  (allowed: {limit_text(schema)})"
                            for name, schema in free_fields.items())
     objective_lines = "\n".join(

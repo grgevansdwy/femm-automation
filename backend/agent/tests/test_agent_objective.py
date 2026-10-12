@@ -394,7 +394,7 @@ def test_build_spec_blocks_a_plan_whose_baseline_or_pin_is_outside_a_limit():
     from agent.settings.settings import AgentSettings
     baseline = get_coilset('base_coil')
     tight = AgentSettings(search_fields={"tank_center_r": {"enabled": True, "min": None, "max": baseline.tank_center_r - 1}})
-    with pytest.raises(ValueError, match="tank_center_r is .* on the baseline, outside its Search fields limit"):
+    with pytest.raises(ValueError, match="tank_center_r is .* on the baseline, outside its Field Config limit"):
         _build_spec(_finalize_args(), "base_coil", baseline, tight)
     # Excluding the field keeps it at baseline, so its limit no longer blocks the plan.
     assert _build_spec(_finalize_args(excluded_fields=["tank_center_r"]), "base_coil", baseline, tight)
@@ -421,7 +421,7 @@ def test_system_prompt_is_computed_from_the_run_not_hardcoded():
     baseline = get_coilset('base_coil')
     # base_coil has ferrite fitted, but that alone does not open it (see
     # test_agent_variables.py) - the ferrite physics note only shows up once
-    # the run's own Search fields table has a ferrite field enabled.
+    # the run's own Field Config table has a ferrite field enabled.
     from agent.input_chat.models.variables import search_field_table
     from agent.settings.settings import AgentSettings
     settings = AgentSettings(search_fields={"tank_mu": {"enabled": True, "min": None, "max": 2000}})

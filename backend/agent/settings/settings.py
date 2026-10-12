@@ -73,7 +73,7 @@ class AgentSettings:
     round_llm_attempts: int = config.ROUND_LLM_ATTEMPTS
     search_attempts: int = config.SEARCH_ATTEMPTS
     max_distances: int = config.MAX_DISTANCES
-    # --- search fields: the rows of the Search fields table that differ from the shipped
+    # --- search fields: the rows of the Field Config table that differ from the shipped
     # defaults, field -> {"enabled", "min", "max"} (agent/input_chat/models/variables.py)
     search_fields: dict = dataclasses.field(default_factory=dict)
     # --- prompts: only the ones a person edited, key -> text (see prompt_defs.PROMPT_DEFS)
@@ -170,7 +170,7 @@ def save_settings(settings: AgentSettings) -> None:
 
 
 def apply_search_field_changes(changes: list[dict]) -> AgentSettings:
-    """Applies a change to the Search fields table ([{field, enabled?, min?,
+    """Applies a change to the Field Config table ([{field, enabled?, min?,
     max?}]) to the saved settings and returns them. Besides the Settings
     screen this is the only thing that writes the table, and it runs only on a
     person's click (the Apply button on a proposal in the chat) - never from a

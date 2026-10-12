@@ -3,7 +3,7 @@ schema.py owns the JSON-schema *format* of a field (the _num/_int/_thickness
 builders, coerce_delta, Rejection); this file owns *which fields are eligible*
 and why.
 
-Permission is one table the user controls - the "Search fields" page in
+Permission is one table the user controls - the "Field Config" page in
 Settings (AgentSettings.search_fields): per field an enabled flag, an optional
 minimum and an optional maximum. DEFAULT_SEARCH_FIELDS is what ships: the base
 winding geometry enabled, everything else (ferrite, shields, backplanes, PCB
@@ -75,7 +75,7 @@ FIELD_GROUPS = {
     },
 }
 
-# Groups a run stored before the Search fields table existed may list in
+# Groups a run stored before the Field Config table existed may list in
 # VariableSpec.enabled_groups (see legacy_allowed_fields()). rc_ferrite_y_offset
 # was always free then, so it is not part of the old rc_ferrite group.
 _LEGACY_GROUP_FIELDS = {
@@ -108,7 +108,7 @@ NUMERIC_FIELDS = tuple(name for name, kind in _FIELD_TYPES.items() if kind in (i
 
 @dataclasses.dataclass(frozen=True)
 class FieldRule:
-    """One row of the Search fields table. min/max are plain numbers in the
+    """One row of the Field Config table. min/max are plain numbers in the
     field's own unit; None = no limit on that side."""
     enabled: bool = False
     min: float | None = None
@@ -130,22 +130,22 @@ def search_field_problems(overrides) -> list[str]:
     messages a person can act on. An unknown field is not a problem here - it
     is ignored when the table is read (search_field_table())."""
     if not isinstance(overrides, dict):
-        return ["Search fields: must be a table of field -> {enabled, min, max}"]
+        return ["Field Config: must be a table of field -> {enabled, min, max}"]
     problems = []
     for name, row in overrides.items():
         if name not in DEFAULT_SEARCH_FIELDS:
             continue
         if not isinstance(row, dict):
-            problems.append(f"Search fields, {name}: must be {{enabled, min, max}}")
+            problems.append(f"Field Config, {name}: must be {{enabled, min, max}}")
             continue
         if "enabled" in row and not isinstance(row["enabled"], bool):
-            problems.append(f"Search fields, {name}: enabled must be on or off")
+            problems.append(f"Field Config, {name}: enabled must be on or off")
         low, high = row.get("min"), row.get("max")
         for side, value in (("minimum", low), ("maximum", high)):
             if value is not None and not _is_number(value):
-                problems.append(f"Search fields, {name}: {side} must be a number or left empty")
+                problems.append(f"Field Config, {name}: {side} must be a number or left empty")
         if _is_number(low) and _is_number(high) and low > high:
-            problems.append(f"Search fields, {name}: minimum {low:g} is above maximum {high:g}")
+            problems.append(f"Field Config, {name}: minimum {low:g} is above maximum {high:g}")
     return problems
 
 
@@ -202,7 +202,7 @@ def apply_field_changes(table: dict[str, FieldRule], changes: list[dict]) -> dic
         rule = table[change["field"]]
         rule = dataclasses.replace(rule, **{k: v for k, v in change.items() if k != "field"})
         if rule.min is not None and rule.max is not None and rule.min > rule.max:
-            raise ValueError(f"Search fields, {change['field']}: minimum {rule.min:g} is above maximum {rule.max:g}")
+            raise ValueError(f"Field Config, {change['field']}: minimum {rule.min:g} is above maximum {rule.max:g}")
         table[change["field"]] = rule
     return table
 
@@ -239,7 +239,7 @@ def _schema_for(field_name: str, rule: FieldRule | None = None) -> dict:
 @dataclasses.dataclass
 class VariableSpec:
     """What an interview gathered about which variables may move."""
-    # Read only: runs stored before the Search fields table existed may carry
+    # Read only: runs stored before the Field Config table existed may carry
     # it (see legacy_allowed_fields()). Nothing writes it any more.
     enabled_groups: set[str] = dataclasses.field(default_factory=set)
     excluded_fields: set[str] = dataclasses.field(default_factory=set)  # fields the user said to keep fixed
@@ -306,7 +306,7 @@ def allowed_fields(baseline: CoilSet, spec: VariableSpec, table: dict[str, Field
 
 
 def legacy_allowed_fields(spec: VariableSpec) -> set[str]:
-    """allowed_fields() by the rule in force before the Search fields table:
+    """allowed_fields() by the rule in force before the Field Config table:
     FREE_VARIABLES and rc_ferrite_y_offset always, a group's fields only if
     the interview listed it in enabled_groups. Only for auditing a run whose
     stored settings have no table."""
@@ -343,7 +343,7 @@ def limit_problems(baseline: CoilSet, spec: VariableSpec | None = None,
     for name in free_fields_for(baseline, spec, table):
         rule, value = table[name], getattr(baseline, name)
         if (rule.min is not None and value < rule.min) or (rule.max is not None and value > rule.max):
-            problems.append(f"{name} is {value:g} on the baseline, outside its Search fields limit "
+            problems.append(f"{name} is {value:g} on the baseline, outside its Field Config limit "
                             f"({limit_text(_schema_for(name, rule))})")
     return problems
 

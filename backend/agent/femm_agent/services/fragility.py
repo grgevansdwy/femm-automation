@@ -17,7 +17,7 @@ limits by a reserve: simulation_reserve() always, time_reserve() once a
 design has passed. If a passing design still cannot be checked, the run ends
 without a winner and says so - a "continue" starts with the check.
 
-A nudged copy models fabrication error, not a proposal: the Search fields
+A nudged copy models fabrication error, not a proposal: the Field Config
 limits do not apply to it. Geometry that is no longer valid, or a solve that
 fails, is a failed check for that design.
 """

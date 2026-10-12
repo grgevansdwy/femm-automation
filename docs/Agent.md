@@ -159,7 +159,7 @@ instead of a generic restart.
 
 `input_chat/models/variables.py`:
 
-Permission is one table the user owns: **Settings → Search fields**
+Permission is one table the user owns: **Settings → Field Config**
 (`AgentSettings.search_fields`), one row per numeric `CoilSet` field with an enabled flag,
 an optional minimum and an optional maximum. Only rows that differ from the shipped
 defaults are stored; the table is copied into the run with the rest of the settings when
@@ -273,7 +273,7 @@ meet every required objective at every distance. The design that survives is the
 - If a passing design still cannot be checked (the budget ran out, or the user stopped
   the search), the run ends without a winner and the report says so and invites
   "continue", which starts with that check.
-- A copy models fabrication error, not a proposal: the Search fields limits do not
+- A copy models fabrication error, not a proposal: the Field Config limits do not
   apply to it. A copy with invalid geometry, or whose solve fails, is a failed check.
 - The check needs no model: a search that loses the AI server after a pass still runs
   it (`AgentRunner._run`) and can end `goal_met`.
@@ -322,7 +322,7 @@ still says where it was.
 `propose_coilset`'s schema (`femm_agent/models/schema.py::build_tools()`) is built fresh
 per run from that run's actual free-field set, with `additionalProperties: false` so the
 server itself rejects any field outside it — a second, structural layer under the
-`_prepare()` check. Each field's entry carries its limits from the run's Search fields
+`_prepare()` check. Each field's entry carries its limits from the run's Field Config
 table (`minimum` / `maximum` / `enum`), and `coerce_delta()` enforces them: the schema is
 advice to the model, the code check is the one that counts.
 
@@ -433,7 +433,7 @@ a file its own `validate()` would reject.
 **An imported chat on this machine.** Opening it simulates nothing; its stored results are
 shown as imported. `restore.stored_spec()` keeps its goal, distances, objectives, pins and
 exclusions but replaces its settings with the local ones in full (prompts, server, budgets,
-the Search fields table), so the follow-up chat and a continued search never use a prompt
+the Field Config table), so the follow-up chat and a continued search never use a prompt
 or a field list from a file. `restore_run()` re-simulates and re-scores every stored design
 before either; `AgentRunner.continue_run()` first runs `plan_problems()` against the local
 table and refuses a plan that does not fit. `stored_baseline()` uses only the baseline the
@@ -637,7 +637,7 @@ message goes to the follow-up model.
 offers the model `finalize_spec` and `propose_search_fields_change` (and nothing else)
 once the search is no longer running. A plan is checked by the same code as an
 interview's (`interview.accept_finalize_call()`), against the baseline copied into the
-run and the Search fields table as saved now; a Search fields proposal is only shown to
+run and the Field Config table as saved now; a Field Config proposal is only shown to
 the user (`InterviewState.pending_field_change`), as in the interview. An
 accepted plan becomes the conversation's `spec` and the row moves to `plan_ready`; the
 finished search's rounds and best design stay. Nothing is searched until the user starts
@@ -669,14 +669,19 @@ plateau and stall lengths, the noise threshold `noise_points`, candidates per ro
 best-kept count, retry counts, max distances), and the three system prompts, each **one** template
 of plain text with `{{placeholder}}` fills and `{{#name}}...{{/name}}` conditional
 blocks (a batch-size-dependent paragraph, ferrite/metal notes that only appear if those
-fields are open, and so on) — `agent/settings/templating.py`. It also holds the Search
-fields table of §4 (`search_fields`: which fields a search may change, and their limits). Only values that differ
+fields are open, and so on) — `agent/settings/templating.py`. It also holds the Field
+Config table of §4 (`search_fields`: which fields a search may change, and their limits). Only values that differ
 from the code defaults (`agent/config.py`) are stored, in the `agent_settings` table. A
 run copies the settings in force when it starts, so editing them mid-run never changes
 that run, and History records which prompt text a given run actually used.
 
+The Settings screen has inputs for only some of these: the search prompt, the server
+URL and model, max rounds, the search time limit, max simulations, candidates per
+round, and the Field Config table. The rest keep their `agent/config.py` /
+`prompts/*.txt` defaults unless a value is already stored (`GUI.md`, "The Settings screen").
+
 **Deliberately not configurable:** the tool schemas and their validation, the code
-floors under the Search fields table (dimension ≥ 0, count ≥ 1, the allowed
+floors under the Field Config table (dimension ≥ 0, count ≥ 1, the allowed
 copper-thickness enum), the solver's geometry-validity checks, and the structural
 field-allowlist audit — the plain-code safety layer from §3's third principle.
 

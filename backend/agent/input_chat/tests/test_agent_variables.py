@@ -1,7 +1,7 @@
 # =============================================================================
 # test_agent_variables.py
 #
-# Checks agent/input_chat/models/variables.py: the Search fields table (which
+# Checks agent/input_chat/models/variables.py: the Field Config table (which
 # CoilSet fields the LLM may propose changing, and each one's limits), and
 # what an interview's constraints take away from it. Needs no FEMM, no LLM.
 #

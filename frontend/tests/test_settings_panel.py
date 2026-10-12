@@ -28,22 +28,35 @@ def test_editing_a_number_marks_it_changed_and_save_stores_only_that():
     assert not state.dirty and load_settings().candidates_per_round == 2 and "Saved" in state.message
 
 
-def test_sampling_is_editable_under_llm_connection():
+def test_the_screen_offers_one_prompt_and_six_numbers():
     from frontend.screen_settings import settings_panel
-    fields = settings_panel._SECTION_FIELDS["LLM connection"]
-    assert {"temperature", "top_p", "seed"} <= set(fields)
-    for name in fields:  # every row has a label, a help line and a known input type
+    assert settings_panel.SECTIONS == ("System Prompt", "LLM & Budget", "Field Config")
+    assert settings_panel.SHOWN_PROMPT == "search_system"
+    assert settings_panel.SHOWN_FIELDS == ("api_base_url", "model", "max_tool_calls", "search_time_limit_s",
+                                           "max_simulations", "candidates_per_round")
+    for name in settings_panel.SHOWN_FIELDS:  # every row has a label, a help line and an input of the right type
         assert name in settings_panel.FIELD_LABELS and name in settings_panel.FIELD_HELP
-    assert "seed" in settings_panel._INT_FIELDS and {"temperature", "top_p"} <= set(settings_panel._FLOAT_FIELDS)
+        default = getattr(AgentSettings(), name)
+        assert (name in settings_panel._INT_FIELDS) == isinstance(default, int), name
+        assert (name in settings_panel._FLOAT_FIELDS) == isinstance(default, float), name
 
+
+def test_a_changed_setting_the_screen_does_not_show_is_named_and_can_be_reset():
     state = SettingsPanelState()
-    state.set_field("temperature", 0.3)
-    state.set_field("seed", 7)
-    assert state.save() is True
-    assert agent_settings_repository.load_overrides() == {"temperature": 0.3, "seed": 7}
+    assert state.hidden_changes() == []
+    state.set_field("candidates_per_round", 2)  # shown: not a hidden change
+    state.set_prompt("search_system", "Search! {{objectives}} {{free_fields}}")
+    assert state.hidden_changes() == []
 
-    state.set_field("top_p", 0.0)
-    assert state.save() is False and any("Sampling top-p" in p for p in state.problems())
+    state.set_field("temperature", 0.3)
+    state.set_prompt("followup_system", "One at a time. {{run_data}}")
+    assert state.save() is True
+    state = SettingsPanelState()  # reopened: still in force, and the screen says so
+    assert state.hidden_changes() == ["Sampling temperature", "Follow up chat prompt"]
+
+    state.reset_hidden()
+    assert state.hidden_changes() == [] and state.save() is True
+    assert set(agent_settings_repository.load_overrides()) == {"candidates_per_round", "prompt:search_system"}
 
 
 def test_invalid_input_blocks_save_and_names_the_field():
@@ -108,13 +121,13 @@ def test_discard_and_reset_all():
     assert state.save() and agent_settings_repository.load_overrides() == {}
 
 
-# ---- the Search fields page ----------------------------------------------------------------------
+# ---- the Field Config page ----------------------------------------------------------------------
 
 def test_search_fields_page_lists_every_numeric_field_once_in_the_forms_groups():
     from agent.input_chat.models.variables import DEFAULT_SEARCH_FIELDS
     from frontend.screen_settings import settings_panel
 
-    assert "Search fields" in settings_panel.SECTIONS
+    assert "Field Config" in settings_panel.SECTIONS
     groups = settings_panel.search_field_groups()
     listed = [name for _, names in groups for name in names]
     assert sorted(listed) == sorted(DEFAULT_SEARCH_FIELDS) and len(listed) == len(set(listed))

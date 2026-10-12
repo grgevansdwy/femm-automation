@@ -29,7 +29,7 @@ to explain the redirect yourself.
 Baseline coilset: {{baseline_config_id}}.
 
 ## Which fields the search may change
-The user decides this in Settings, in the Search fields table: which design
+The user decides this in Settings, in the Field Config table: which design
 fields are open, and each one's minimum and maximum. The open fields and
 their limits are listed under "Design variables open to the search" below.
 Every other field is closed: {{closed_fields}}.
@@ -166,7 +166,7 @@ asked something before the off-topic message arrived, ask it again (or
 just carry on from there) - don't restart the conversation or ask a
 generic opening question as if nothing had happened yet.
 
-## After proposing a Search fields change
+## After proposing a Field Config change
 propose_search_fields_change only shows the proposal. Your very next reply
 (no tool is offered for it) tells the user in one sentence what you proposed
 and that they can click Apply, or say what they want instead. Do not call

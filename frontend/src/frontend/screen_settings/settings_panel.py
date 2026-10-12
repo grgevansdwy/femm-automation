@@ -25,24 +25,20 @@ _STATUS_COLOR = imgui.ImVec4(0.35, 0.8, 0.45, 1.0)
 _MODIFIED_COLOR = imgui.ImVec4(0.9, 0.75, 0.2, 1.0)
 _MUTED_COLOR = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
 
-SECTIONS = ("System prompts", "LLM connection", "Search budget", "Search fields")
-_SECTION_FIELDS = {
-    "LLM connection": ("api_base_url", "model", "llm_time_limit_s", "llm_max_tokens",
-                       "temperature", "top_p", "seed"),
-    "Search budget": ("max_tool_calls", "search_time_limit_s", "max_simulations", "plateau_rounds", "stall_rounds",
-                      "noise_points", "candidates_per_round", "keep_best_candidates", "round_llm_attempts",
-                      "search_attempts", "max_distances"),
-}
-_INT_FIELDS = ("seed", "llm_max_tokens", "max_tool_calls", "candidates_per_round", "keep_best_candidates",
-               "round_llm_attempts", "search_attempts", "max_distances", "max_simulations", "plateau_rounds",
-               "stall_rounds")
-_FLOAT_FIELDS = ("llm_time_limit_s", "temperature", "top_p", "search_time_limit_s", "noise_points")
+SECTIONS = ("System Prompt", "LLM & Budget", "Field Config")
+# The one prompt and the few numbers this screen offers. Every other AgentSettings
+# value (the interview and follow-up prompts, sampling, per-request limits, stop
+# rules, retries) stays at its default in agent/config.py and settings/prompts/.
+SHOWN_PROMPT = "search_system"
+SHOWN_FIELDS = ("api_base_url", "model", "max_tool_calls", "search_time_limit_s", "max_simulations",
+                "candidates_per_round")
+_INT_FIELDS = ("max_tool_calls", "candidates_per_round", "max_simulations")
+_FLOAT_FIELDS = ("search_time_limit_s",)
 
 
 class SettingsPanelState:
     def __init__(self) -> None:
         self.section = SECTIONS[0]
-        self.selected_prompt = "search_system"
         self.message = ""
         self.reload()
 
@@ -61,7 +57,7 @@ class SettingsPanelState:
         return self.draft != self.saved
 
     def problems(self) -> list[str]:
-        typing = [f"Search fields, {name}: {'minimum' if side == 'min' else 'maximum'} must be a number or left empty"
+        typing = [f"Field Config, {name}: {'minimum' if side == 'min' else 'maximum'} must be a number or left empty"
                   for (name, side) in self._limit_typing]
         return self.draft.validate() + typing
 
@@ -85,7 +81,27 @@ class SettingsPanelState:
         self._limit_typing = {}
         self.message = ""
 
-    # ---- search fields: which design fields a search may change, and their limits
+    # ---- settings this screen has no input for
+    def hidden_changes(self) -> list[str]:
+        """Names of the settings that differ from their default but are not shown
+        here (saved by an earlier version, or written straight to the database).
+        They are still in force, so the screen says so rather than hiding them."""
+        defaults = AgentSettings()
+        names = [FIELD_LABELS[name] for name in FIELD_LABELS
+                 if name not in SHOWN_FIELDS and getattr(self.draft, name) != getattr(defaults, name)]
+        return names + [f"{PROMPT_DEFS[key].title} prompt" if key in PROMPT_DEFS else f"prompt '{key}'"
+                        for key in self.draft.prompts if key != SHOWN_PROMPT]
+
+    def reset_hidden(self) -> None:
+        """Puts every setting not shown here back to its default in the draft (still needs Save)."""
+        defaults = AgentSettings()
+        for name in FIELD_LABELS:
+            if name not in SHOWN_FIELDS:
+                setattr(self.draft, name, getattr(defaults, name))
+        self.draft.prompts = {key: text for key, text in self.draft.prompts.items() if key == SHOWN_PROMPT}
+        self.message = ""
+
+    # ---- field config: which design fields a search may change, and their limits
     def search_rule(self, name: str) -> variables.FieldRule:
         return variables.search_field_table(self.draft)[name]
 
@@ -215,12 +231,12 @@ def _field_row(state: SettingsPanelState, name: str) -> None:
 
 
 def _draw_fields(state: SettingsPanelState) -> None:
-    for name in _SECTION_FIELDS[state.section]:
+    for name in SHOWN_FIELDS:
         _field_row(state, name)
 
 
 def search_field_groups() -> list[tuple[str, list[str]]]:
-    """The Search fields page's sections: the config form's own grouping
+    """The Field Config page's sections: the config form's own grouping
     (field_layout), minus fields that aren't numeric design fields."""
     groups = [(group, names) for group, names in field_layout.FIELD_GROUPS.items()]
     groups.append(("Advanced", list(field_layout.ADVANCED_FIELDS)))
@@ -286,15 +302,6 @@ def _draw_search_fields(state: SettingsPanelState) -> None:
         imgui.end_table()
 
 
-def _draw_prompt_list(state: SettingsPanelState, width: float) -> None:
-    imgui.begin_child("prompt_list", imgui.ImVec2(width, 0), imgui.ChildFlags_.borders.value)
-    for key, definition in PROMPT_DEFS.items():
-        label = definition.title + ("  *" if state.is_prompt_modified(key) else "")
-        if imgui.selectable(f"{label}##prompt_{key}", state.selected_prompt == key)[0]:
-            state.selected_prompt = key
-    imgui.end_child()
-
-
 def _draw_placeholder_help(definition) -> None:
     """The values the app fills in, folded away so the prompt itself gets the room."""
     if not definition.placeholders:
@@ -316,7 +323,7 @@ def _draw_placeholder_help(definition) -> None:
 
 
 def _draw_prompt_editor(state: SettingsPanelState) -> None:
-    key = state.selected_prompt
+    key = SHOWN_PROMPT
     definition = PROMPT_DEFS[key]
     imgui.text(definition.title)
     if state.is_prompt_modified(key):
@@ -372,6 +379,14 @@ def draw(state: SettingsPanelState, size: imgui.ImVec2) -> None:
         imgui.text_colored(_ERROR_COLOR, f"Can't save yet - {len(problems)} problem(s):")
         for problem in problems[:6]:
             imgui.bullet_text(problem)
+    hidden = state.hidden_changes()
+    if hidden:
+        imgui.push_text_wrap_pos(0.0)
+        imgui.text_colored(_MODIFIED_COLOR, "Also in force, changed earlier and not shown on this screen: "
+                           + ", ".join(hidden) + ".")
+        imgui.pop_text_wrap_pos()
+        if imgui.small_button("Reset those to defaults"):
+            state.reset_hidden()
     imgui.separator()
 
     avail = imgui.get_content_region_avail()
@@ -383,13 +398,9 @@ def draw(state: SettingsPanelState, size: imgui.ImVec2) -> None:
     imgui.same_line()
 
     imgui.begin_child("settings_body", imgui.ImVec2(0, avail.y), 0)
-    if state.section == SECTIONS[0]:
-        _draw_prompt_list(state, 200)
-        imgui.same_line()
-        imgui.begin_child("prompt_editor", imgui.ImVec2(0, 0), 0)
+    if state.section == "System Prompt":
         _draw_prompt_editor(state)
-        imgui.end_child()
-    elif state.section == "Search fields":
+    elif state.section == "Field Config":
         _draw_search_fields(state)
     else:
         _draw_fields(state)

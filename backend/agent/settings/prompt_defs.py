@@ -62,7 +62,7 @@ PROMPT_DEFS = {d.key: d for d in [
               "Sent to the AI at the start of the chat where it turns your request into an objective. "
               "It tells the AI what it may ask about and what a finished objective looks like.",
               {"baseline_config_id": "the baseline's name",
-               "closed_fields": "the design fields closed in Settings > Search fields",
+               "closed_fields": "the design fields closed in Settings > Field Config",
                "sim_lines": "the simulated quantities you can ask about, one per line",
                "derived_lines": "outer-diameter quantities with their baseline values",
                "variable_lines": "the design variables open to the search, with baseline value and limit",
@@ -81,8 +81,8 @@ PROMPT_DEFS = {d.key: d for d in [
                            "best candidate",
                "sim_lines": "the simulated quantities an objective can be set on, one per line",
                "derived_lines": "outer-diameter quantities with their baseline values",
-               "variable_lines": "the design variables open in Search fields, with baseline values and limits",
-               "closed_fields": "the fields that are closed in Search fields"},
+               "variable_lines": "the design variables open in Field Config, with baseline values and limits",
+               "closed_fields": "the fields that are closed in Field Config"},
               required=("run_data",),
               switches=("running", "can_replan", "locked")),
 ]}

@@ -14,7 +14,7 @@ Once a search has ended, a caller may let the user change the goal here
 propose_search_fields_change, and nothing else. Each call is a proposal - code
 checks a plan exactly as it checks an interview's
 (interview.accept_finalize_call), against the baseline the run was started
-with, and a Search fields change is only ever shown to the user. An accepted plan is left on the conversation as its `spec` and nothing
+with, and a Field Config change is only ever shown to the user. An accepted plan is left on the conversation as its `spec` and nothing
 is searched: the user confirms it with Start Search
 (AgentRunner.start_revised()). The model still never proposes a design.
 
@@ -206,7 +206,7 @@ def followup_system_prompt(run_state, pending_spec=None, can_replan: bool = Fals
     search has ended and the caller allows a revised plan) - the prompt then
     explains how to revise the plan instead of pointing at Restart.
     `plan_settings`: the settings a revised plan would be built with - their
-    Search fields table is the one the prompt lists (default: the run's own)."""
+    Field Config table is the one the prompt lists (default: the run's own)."""
     from agent.input_chat.services.interview import quantity_lines
 
     settings = run_state.spec.settings
@@ -253,7 +253,7 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
       conversation.pending_field_change for the user to Apply or Dismiss.
       Nothing is written here.
     `settings`: the settings a revised plan is built with - the saved ones
-    as they are now by default (so a Search fields change the user applied
+    as they are now by default (so a Field Config change the user applied
     counts), like a first plan."""
     from agent.input_chat.services.interview import (
         PROPOSE_FIELDS_TOOL_NAME, PROPOSE_SEARCH_FIELDS_TOOL, accept_field_change_call, accept_finalize_call,
@@ -316,7 +316,7 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
         conversation.spec, conversation.finalized = spec, True
         return
 
-    # A rejection is a raw validation string, and a Search fields proposal needs a
+    # A rejection is a raw validation string, and a Field Config proposal needs a
     # sentence to go with its card: one more call, with no tools, puts either into
     # words for the user - the same way the interview does it, so the model cannot
     # quietly try a second plan nobody saw.

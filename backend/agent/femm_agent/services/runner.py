@@ -208,13 +208,13 @@ class AgentRunner:
     def _check_imported_plan(state: AgentRunState, spec) -> None:
         """A chat that came from a file was planned on another machine: it runs
         under this one's settings (restore.stored_spec()), and only if its plan
-        fits this machine's Search fields table. Raises ValueError if not."""
+        fits this machine's Field Config table. Raises ValueError if not."""
         if not state.imported:
             return
         from agent.input_chat.services.interview import plan_problems
         problems = plan_problems(spec, state.baseline_coilset)
         if problems:
-            raise ValueError("this imported plan can't search under this machine's Search fields: "
+            raise ValueError("this imported plan can't search under this machine's Field Config: "
                              + "; ".join(problems))
 
     def _begin_segment(self, state: AgentRunState, carry_budget: bool = False) -> None:

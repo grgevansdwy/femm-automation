@@ -44,6 +44,7 @@ from frontend.visualization import coil_diagram, femm_open
 from imgui_bundle import imgui, immapp, portable_file_dialogs as pfd
 
 _LEFT_WIDTH = 260.0
+_MIN_CHAT_WIDTH = 320.0  # the AI Agent chat column never gets narrower than this
 _DIAGRAM_HEIGHT = 330.0
 _CONTROLS_HEIGHT = 130.0
 
@@ -193,15 +194,22 @@ def _draw_manual_mode(state: AppState) -> None:
 
 def _draw_agent_mode(state: AppState) -> None:
     sidebar = state.agent_panel.sidebar
+    gap = agent_sidebar.SPLITTER_WIDTH
+    # The results column is sized from the window alone (as if the chat list
+    # were at its default width), so dragging the splitter - or collapsing the
+    # list - only trades width between the list and the chat.
+    rest = imgui.get_content_region_avail().x - agent_sidebar.WIDTH - gap
+    right_w = max(rest - max(420.0, rest * 0.35) - 8.0, 300.0)
+    most_sidebar_w = imgui.get_content_region_avail().x - right_w - gap - 8.0 - _MIN_CHAT_WIDTH
+    agent_sidebar.resize(sidebar, 0.0, most_sidebar_w)  # a smaller window squeezes the list before the chat
+
     sidebar_w = agent_sidebar.width(sidebar)
     agent_sidebar.draw(sidebar, state.agent_panel, imgui.ImVec2(sidebar_w, 0))
-    imgui.same_line()
+    imgui.same_line(0.0, 0.0)
+    agent_sidebar.draw_splitter(sidebar, most_sidebar_w)
+    imgui.same_line(0.0, 0.0)
 
-    # The chat and the results share what the sidebar leaves.
-    avail = imgui.get_content_region_avail()
-    left_w = max(420.0, avail.x * 0.35)
-    right_w = max(avail.x - left_w - 8.0, 300.0)
-
+    left_w = max(imgui.get_content_region_avail().x - right_w - 8.0, _MIN_CHAT_WIDTH)
     agent_panel.draw_chat(state.agent_panel, imgui.ImVec2(left_w, 0))
     imgui.same_line()
 

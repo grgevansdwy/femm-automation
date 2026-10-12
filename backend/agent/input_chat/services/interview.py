@@ -148,7 +148,7 @@ PROPOSE_SEARCH_FIELDS_TOOL = [{
     "function": {
         "name": PROPOSE_FIELDS_TOOL_NAME,
         "description": (
-            "Propose a change to the Search fields table in Settings - which design fields a search "
+            "Propose a change to the Field Config table in Settings - which design fields a search "
             "may change, and each one's minimum and maximum. Call this INSTEAD of finalize_spec when "
             "the user wants the search to change a field that is closed, or when a limit does not fit "
             "what they asked for. This only SHOWS the proposal to the user with an Apply button: you "
@@ -202,7 +202,7 @@ def finalize_spec_tool(max_distances: int) -> list[dict]:
 
 def quantity_lines(baseline, settings: AgentSettings) -> dict:
     """What a prompt needs before the model can write a plan for `baseline`
-    under `settings`' Search fields table: the simulated quantities, the outer
+    under `settings`' Field Config table: the simulated quantities, the outer
     diameters, the open design variables with their baseline values and
     limits, and the names of the closed ones. Used by the interview prompt
     and, once a search has ended, by the follow-up prompt."""
@@ -225,7 +225,7 @@ def quantity_lines(baseline, settings: AgentSettings) -> dict:
 def interview_system_prompt(baseline_config_id: str, baseline, settings: AgentSettings | None = None) -> str:
     """Scopes the model to FEMM-simulation objective-gathering only (a
     prompt-level guardrail, not a hard filter), and tells it which fields the
-    search may change and within what limits - the Search fields table in
+    search may change and within what limits - the Field Config table in
     force for this conversation (`settings`). The model reads the table; it
     cannot change it (propose_search_fields_change only shows a proposal).
     """
@@ -252,7 +252,7 @@ class InterviewState:
     # The settings this conversation runs under (prompt wording, LLM limits) -
     # fixed when the conversation starts, and handed on to the AgentSpec it produces.
     settings: AgentSettings = dataclasses.field(default_factory=AgentSettings)
-    # A change to the Search fields table the model proposed and the user has
+    # A change to the Field Config table the model proposed and the user has
     # not yet applied or dismissed: {"changes": [{field, enabled?, min?, max?}],
     # "reason": str}. Only shown - applying it is the user's click
     # (agent.settings.settings.apply_search_field_changes), never this module's.
@@ -275,7 +275,7 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
         raise ValueError(f"distances: at most {settings.max_distances} allowed, got {len(distances)} - "
                           "ask the user which ones matter most")
 
-    # Which fields are open, and their limits, come from the Search fields table
+    # Which fields are open, and their limits, come from the Field Config table
     # alone - nothing in the model's arguments can open a field or widen a limit.
     table = search_field_table(settings)
     variable_spec = VariableSpec(
@@ -316,7 +316,7 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
             raise ValueError(f"{o.metric} is pinned by fixed_values, so it can't also be an objective")
         if not is_per_distance(o.metric) and o.metric not in DERIVED_QUANTITIES and o.metric not in free_fields:
             raise ValueError(f"{o.metric} isn't free in this search, so no candidate could ever change it - "
-                             "propose enabling it in Search fields / stop excluding it, or drop the objective")
+                             "propose enabling it in Field Config / stop excluding it, or drop the objective")
         if o.target_value is None and not is_per_distance(o.metric) and design[o.metric] == 0:
             raise ValueError(f"{o.metric} is 0 on the baseline, so a % change is undefined - use target_value")
 
@@ -337,7 +337,7 @@ def _build_spec(args: dict, baseline_config_id: str, baseline, settings: AgentSe
 
 
 def plan_problems(spec: AgentSpec, baseline) -> list[str]:
-    """Why an already-built plan can't start under the Search fields table its
+    """Why an already-built plan can't start under the Field Config table its
     settings now carry - the same checks _build_spec() makes, re-run when the
     table is copied into the plan again at Start Search (it may have been
     edited in Settings since the plan was proposed). Empty list = it can start."""
@@ -352,7 +352,7 @@ def plan_problems(spec: AgentSpec, baseline) -> list[str]:
     if not free_fields:
         problems.append("No field is left open for the search to change")
     problems += limit_problems(baseline, vs, table)
-    problems += [f"{o.metric} has an objective but is closed in Search fields"
+    problems += [f"{o.metric} has an objective but is closed in Field Config"
                  for o in spec.objectives
                  if not is_per_distance(o.metric) and o.metric not in DERIVED_QUANTITIES and o.metric not in free_fields]
     return problems
@@ -407,7 +407,7 @@ def accept_finalize_call(function: dict, baseline_config_id: str, baseline, sett
 def accept_field_change_call(function: dict) -> tuple[dict | None, dict]:
     """Checks one propose_search_fields_change call: (the proposal to show the
     user, an accepting tool result) or (None, a rejecting one). Nothing is
-    written anywhere: the Search fields table changes only on the user's own
+    written anywhere: the Field Config table changes only on the user's own
     click (agent.settings.settings.apply_search_field_changes)."""
     args = function.get("arguments")
     try:

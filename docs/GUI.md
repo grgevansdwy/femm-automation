@@ -101,7 +101,9 @@ turns, search rounds, scoring) belong to `Agent.md`:
   first message is sent. Its second line is
   the baseline name, the status label (one per status) and the date. The search box matches
   title, full text, baseline name and run id. **+ New** opens an empty chat on the selected baseline;
-  the column collapses to a strip. **Delete** (right-click a row, or the button in the chat
+  the column collapses to a strip, and the gap between it and the chat is a drag handle
+  (`draw_splitter()`) that trades width between the list and the chat only — the results
+  column keeps its size. **Delete** (right-click a row, or the button in the chat
   header; always behind a confirmation) is the only way a chat leaves the list, and a
   search still running can't be deleted. Rows with neither a goal nor a message (blanks
   from before the run lifecycle) are not listed. The file also holds `draw_stored_run()`:
@@ -154,8 +156,8 @@ turns, search rounds, scoring) belong to `Agent.md`:
   the chat says whether it kept the memory or started from the beginning. A chat reopened
   with a revised plan still waiting shows the card without the list of changes (the plan
   it replaces is not stored). While a search runs the chat only answers questions; a
-  Search fields proposal made after a search gets the same Apply / Dismiss card.
-  Two more things come from the Search fields table (`Agent.md` §4). When the interview
+  Field Config proposal made after a search gets the same Apply / Dismiss card.
+  Two more things come from the Field Config table (`Agent.md` §4). When the interview
   model proposes a change to it, a card under the chat lists the change with **Apply**
   and **Dismiss**; `apply_field_change()` is the only code here that writes the table, and
   it then sends one fixed message so the model re-plans. **Start Search** first copies
@@ -179,10 +181,12 @@ view and the finished summary call `draw()` directly.
 ### The Settings screen
 
 `screen_settings/settings_panel.py`, opened from the AI Agent view, edits the agent's
-`AgentSettings`: the three system prompts, the LLM connection (URL, model, limits, and the sampling
-values sent with every request: temperature, top-p, seed), and
-the search budget (rounds, total time, simulations, plateau and stall lengths, the noise
-threshold, candidates per round, retries), and the **Search fields** page:
+`AgentSettings` in three pages: **System Prompt** (the FEMM agent's search prompt only),
+**LLM & Budget** (server URL, model, max rounds, time limit and max simulations per search,
+candidates per round) and **Field Config**. Every other setting — the interview and follow-up
+prompts, sampling, per-request limits, stop rules, retries — has no input here and stays at its
+code default; one that is stored with another value is named above the pages with a
+"Reset those to defaults" button (`SettingsPanelState.hidden_changes()`). The **Field Config** page:
 one row per numeric design field, grouped like the config form, with a checkbox (the
 search may change it), a minimum and a maximum (empty = no limit) and a per-row Reset.
 Text in a limit box that is not a number is kept as typed and blocks Save. This is the second — and

@@ -256,7 +256,7 @@ def test_a_pinned_value_an_earlier_design_lacks_makes_it_not_allowed():
     assert problem(design, excluded) == ("not_enabled", "tank_center_r")
     thick = dataclasses.replace(baseline, tank_trace_thickness=0.05)
     assert problem(thick, free) == ("not_allowed_value", "tank_trace_thickness"), "a value no proposal could carry"
-    # The Search fields table the plan carries: a closed field, and a limit.
+    # The Field Config table the plan carries: a closed field, and a limit.
     closed = _spec(search_fields={"tank_center_r": {"enabled": False}})
     assert problem(design, closed) == ("not_enabled", "tank_center_r")
     limited = _spec(search_fields={"tank_center_r": {"min": 70.5}})

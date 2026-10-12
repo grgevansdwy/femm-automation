@@ -589,7 +589,7 @@ def test_a_failed_baseline_does_not_block_once_the_search_has_started():
     assert not state.planning_blocked, "follow-up questions stay available during and after a search"
 
 
-# ---- the Search fields table: a proposal is applied only by the user's click ---------------------
+# ---- the Field Config table: a proposal is applied only by the user's click ---------------------
 
 def _planning_state(monkeypatch):
     """A state mid-interview on a solvable baseline, with the LLM turn replaced

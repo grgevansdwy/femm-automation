@@ -428,7 +428,7 @@ def test_an_imported_chat_is_asked_and_continued_under_this_machines_settings(mo
     assert kwargs["settings"].api_base_url == load_settings().api_base_url
     offered = tools[0]["function"]["parameters"]["properties"]
     assert "tank_center_r" in offered and "tank_ferrite_thickness" not in offered, \
-        "a field the file opened stays closed: the local Search fields table decides"
+        "a field the file opened stays closed: the local Field Config table decides"
     assert get_ai_run(row["id"])["imported_at"] is not None
 
 
@@ -449,7 +449,7 @@ def test_an_imported_plan_that_does_not_fit_local_limits_is_not_continued(monkey
 
     assert state.continue_search()
     _poll_until(lambda: not chat.restoring, timeout=10)
-    assert "Search fields" in chat.error and not chat.live
+    assert "Field Config" in chat.error and not chat.live
     assert state.run_state.status.value != "running"
     from agent.repositories.ai_run_repository import list_messages
     assert len(list_messages(chat.ai_run_id, phase="optimize")) == rounds_before, "no round was added"
@@ -484,3 +484,25 @@ def test_imported_chats_that_cannot_search_here_open_read_only(tmp_path):
         "base_coil exists here, but a local config is never taken for an imported chat's baseline"
     before = solver.submitted
     assert not state.continue_search() and solver.submitted == before
+
+
+# ---- the splitter between the chat list and the chat ---------------------------------------------
+
+def test_dragging_the_splitter_resizes_the_list_within_its_limits():
+    sidebar = agent_sidebar.AgentSidebarState()
+    assert agent_sidebar.width(sidebar) == agent_sidebar.WIDTH
+
+    agent_sidebar.resize(sidebar, -60.0, max_width=500.0)
+    assert agent_sidebar.width(sidebar) == agent_sidebar.WIDTH - 60.0
+    agent_sidebar.resize(sidebar, -1000.0, max_width=500.0)
+    assert agent_sidebar.width(sidebar) == agent_sidebar.MIN_WIDTH, "it never drags shut - the < button collapses it"
+    agent_sidebar.resize(sidebar, 1000.0, max_width=500.0)
+    assert agent_sidebar.width(sidebar) == 500.0, "it stops where the chat would get too narrow"
+    agent_sidebar.resize(sidebar, 0.0, max_width=100.0)
+    assert agent_sidebar.width(sidebar) == agent_sidebar.MIN_WIDTH, "a too-small window still leaves a usable list"
+
+    sidebar.collapsed = True
+    agent_sidebar.resize(sidebar, 50.0, max_width=500.0)
+    assert agent_sidebar.width(sidebar) == agent_sidebar.COLLAPSED_WIDTH
+    sidebar.collapsed = False
+    assert agent_sidebar.width(sidebar) == agent_sidebar.MIN_WIDTH, "expanding brings back the dragged width"

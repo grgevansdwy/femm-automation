@@ -44,7 +44,7 @@ def stored_baseline(record):
 def stored_spec(record: dict):
     """A stored run's plan. An imported chat keeps its goal, distances,
     objectives, pins and exclusions, but runs under THIS machine's settings
-    in full - prompts, server, budgets and the Search fields table: what a
+    in full - prompts, server, budgets and the Field Config table: what a
     file carries is shown, and never decides what a search here may do."""
     from agent.settings.settings import load_settings
     spec = spec_from_dict(record["spec"])

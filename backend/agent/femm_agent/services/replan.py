@@ -52,7 +52,7 @@ def memory_mode(old_distances, new_distances) -> str:
 def design_problem(coilset, baseline, spec) -> Rejection | None:
     """Why `coilset` could not be proposed under `spec`, or None when it could -
     the checks optimize._prepare() makes on a new proposal (the field is open
-    in the plan's Search fields table and not excluded, the value is inside
+    in the plan's Field Config table and not excluded, the value is inside
     its limit, the audit against the baseline), applied to a design that
     already exists, plus: every pinned value must be the pin."""
     variable_spec = spec.variable_spec
@@ -125,7 +125,7 @@ def rebuild_memory(state, job_runner) -> None:
     spec, baseline = state.spec, state.baseline_coilset
     state.baseline_metrics = wait_for_jobs(evaluate_async(
         baseline, spec.distances, job_runner, config_id=spec.baseline_config_id, config_name=baseline.config_name))
-    table = search_field_table(spec.settings)  # the plan's own copy of the Search fields table
+    table = search_field_table(spec.settings)  # the plan's own copy of the Field Config table
     allowed = allowed_fields(baseline, spec.variable_spec, table)
     plans = segment_plans(state)
     state.tried, state.best, state.winner = [], None, None
@@ -248,17 +248,17 @@ def plan_diff(old, new) -> list[str]:
         lines.append(f"Now kept fixed: {', '.join(newly_fixed)}")
     if released:
         lines.append(f"No longer kept fixed: {', '.join(released)}")
-    # The Search fields table each plan carries (the user's Settings at the time).
+    # The Field Config table each plan carries (the user's Settings at the time).
     old_table, new_table = search_field_table(old.settings), search_field_table(new.settings)
     for field in sorted(set(old_table) | set(new_table)):
         before, after = old_table.get(field), new_table.get(field)
         if before == after or before is None or after is None:
             continue
         if before.enabled != after.enabled:
-            lines.append(f"Search fields: {field} is now {'open' if after.enabled else 'closed'}")
+            lines.append(f"Field Config: {field} is now {'open' if after.enabled else 'closed'}")
         elif after.enabled:
             limits = " to ".join("no limit" if v is None else f"{v:g}" for v in (after.min, after.max))
-            lines.append(f"Search fields: {field} limits are now {limits}")
+            lines.append(f"Field Config: {field} limits are now {limits}")
     return lines
 
 
