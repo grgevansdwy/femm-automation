@@ -1,6 +1,6 @@
 """Benchmark for the search loop: a fixed set of goals, each run several times
 against the real LLM server, so a change to the prompt or the loop can be judged
-by numbers instead of by watching one run (SPEC.md, concern 9 / milestone M1).
+by numbers instead of by watching one run.
 
 Run:     cd backend && uv run python -m agent.benchmark            # every goal x REPEATS
          cd backend && uv run python -m agent.benchmark --report   # rewrite docs/summarize_result.md
@@ -47,7 +47,7 @@ REPORT_PATH = _BACKEND.parent / "docs" / "summarize_result.md"
 NOTES_MARKER = "<!-- hand-written from here down; kept when the tables above are regenerated -->"
 
 REPEATS = 5
-# SPEC.md's decided budget, set here rather than read from Settings so every
+# The decided budget, set here rather than read from Settings so every
 # result set compares like for like. The search enforces both itself
 # (state.Budget); the baseline set, measured before it could, had the time
 # limit enforced by this script and reports it as status "time_limit".
@@ -243,7 +243,7 @@ def report(label: str) -> str:
     lines += ["", "## Summary per goal", "",
               "Medians are over the finished repeats. \"Weakest points past the bar\" and \"Score\" are for searches "
               "that met the goal: how far the winning design's weakest reduce objective got past its target, and "
-              "SPEC.md's 50/50 blended score.", "",
+              "the 50/50 blended score (half the weakest objective, half their average).", "",
               "| Goal | Met goal | Rounds | Candidates | Rejected | Simulations | Minutes | AI share of time | "
               "Weakest points past the bar | Score |",
               "|---|---|---|---|---|---|---|---|---|---|"]

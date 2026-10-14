@@ -36,7 +36,7 @@ FluxLinkage = GetVoltageDrop(circnum) / (I*2.*PI*Frequency);
 
 **Validated**: after the fix, all 12 self/mutual inductance and resistance
 terms match real FEMM under Wine to ~10⁻⁸% (machine precision) on all three
-test configs above - see `docs/Engine.md` for the full writeup.
+test configs above - see `DESIGN.md` ("The solver") for the summary.
 
 **Not yet done:** reporting this upstream to https://github.com/crobarcro/xfemm.
 This patch is only applied to this repo's vendored copy.

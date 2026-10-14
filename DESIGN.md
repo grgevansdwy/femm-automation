@@ -20,7 +20,67 @@ On top of that sit two ways to use it:
 
 Everything runs locally and offline. The only network call is to an OpenAI-compatible LLM server you point it at.
 
-## 2. The shape of the code
+## 2. The big picture
+
+```
+                              FEMM COIL AUTOMATION
+                                        |
+     +------------------+---------------+----------------+------------------+
+     |                  |                                |                  |
+  FRONTEND            AGENT                            ENGINE             DATA / EXTERNAL
+  (what you see)      (the AI search)                  (the physics)      (outside the code)
+     |                  |                                |                  |
+ Manual Runs        1 INTERVIEW                      CoilSet (a design)   SQLite file (local)
+  - config list       chat -> plan                    SimResult (12 nums)   - configs, runs
+  - edit form         - one question at a time              |               - ai_runs, messages
+  - live diagram      - finalize_spec tool            simulate()          13 starter designs
+  - run + history     - code validates it              1 validate           (loaded on 1st run)
+     |                - you click Start Search          2 build Lua script  Backup All / Restore
+ AI Agent                   |                           3 run femmcli          |
+  - chat sidebar      2 SEARCH LOOP                     4 read L, M, ESR, k  LLM SERVER
+  - chat + plan card    repeat:                            |                (any OpenAI-style)
+  - results + baseline   - model proposes up to 5    xfemm (bundled)         - office box by default
+  - toasts               - code checks each one       - native Linux           - only network call
+     |                   - solve them in parallel     - no Wine                    |
+ Settings                - score, rank, remember     - one patch fixes        Optional: Wine + FEMM
+  - Field Config         - code decides when to stop    the 90 degree M bug     for "Open in FEMM"
+  - prompt, LLM, budget      |                            |
+  - saved default      3 FOLLOW-UP CHAT            JobRunner (threads + cache)
+                         - answers questions        - parallel solves
+                         - stop_search tool          - same design = no re-solve
+                         - revised plan
+                         - "continue"
+```
+
+**A request, start to finish**
+
+```
+"cut tank ESR 20%, hold M within 5%"
+   -> INTERVIEW turns it into objectives, a table of requirements, distances
+   -> you check the table, click Start Search
+   -> LOOP: AI proposes 5 designs -> code rejects invalid ones
+            -> engine solves the rest in parallel at every distance
+            -> scorer: worst distance decides, margins ranked
+            -> memory rebuilt (best 10 + what each small step did)
+            -> stop rules: budget, no better design for 2 rounds, ...
+   -> chat gets a plain summary: best design found, what changed, why it stopped
+   -> you ask questions, say "continue", or ask to change the goal
+```
+
+**What the user controls, and where**
+
+| You decide | Where |
+|---|---|
+| The goal, and what must stay put | The chat. A quantity the goal doesn't name has no requirement and is free to change |
+| Which geometry fields the AI may touch, and their min/max | Settings > Field Config (the AI can propose a change; only the user's click applies it) |
+| Budget, server, prompt | Settings > LLM & Budget / System Prompt |
+| Whether a search runs or stops | Start Search; asking the chat to stop |
+
+**The one rule that shapes everything:** plain code decides, the model proposes. Validity, which fields may
+change, scoring and when a search ends are ordinary code. Dependencies run one way: frontend calls agent, agent
+calls engine, engine knows nothing above it.
+
+## 3. The shape of the code
 
 ```
 frontend/   desktop app (Dear ImGui)             renders state, never reimplements logic
@@ -50,7 +110,7 @@ frontend/src/frontend/
 .pi/           extension + skill for the `pi` terminal agent (same simulations, no window)
 ```
 
-## 3. Engine: physics and simulation
+## 4. Engine: physics and simulation
 
 ### Data model
 `CoilSet` is a flat dataclass (~55 fields): per-coil radius, turns, parallel traces, layers, spacing, trace
@@ -96,7 +156,7 @@ hold saved designs (`configs`) and every solve (`runs`, each row carrying the ex
 The agent owns `ai_runs` and `ai_run_messages`. On first launch the 13 designs in `data/starter_configs/` are
 loaded. **Backup All / Restore All** moves everything between machines as one file.
 
-## 4. Agent: from a sentence to a better coil
+## 5. Agent: from a sentence to a better coil
 
 ### Principles
 1. The objective comes from the user, per session, in their own words.
@@ -182,7 +242,7 @@ templates with `{{placeholders}}`. Only values that differ from the defaults in 
 A run copies the settings in force when it starts, so editing them never changes a run in progress. The user can
 also save the current settings as their own default and reset to it.
 
-## 5. Frontend: the desktop app
+## 6. Frontend: the desktop app
 
 Dear ImGui through `imgui-bundle`; one window. `main.py` polls the job runner and the agent each frame, then
 draws the active mode.
@@ -198,7 +258,7 @@ draws the active mode.
 The UI only renders state it is handed. The boundary into the agent is deliberately small, so "the chat isn't
 updating" is almost always an agent-side question.
 
-## 6. Other entry points
+## 7. Other entry points
 
 - `cd backend && uv run python -m agent`: run a search headless, without the interview.
 - `python -m agent.benchmark`: a fixed set of goals run repeatedly against the real LLM server, to judge a change
@@ -206,22 +266,36 @@ updating" is almost always an agent-side question.
 - `python -m agent.report`: summarise runs from the database and per-run request logs.
 - `pi` (terminal agent): `.pi/` exposes the same simulations and designs as tools.
 
-## 7. Testing
+## 8. Testing
 
 `uv run --package frontend --group test pytest backend` runs in seconds with no LLM server: every test gets its
 own empty database, and the LLM is replaced by a script. Frontend tests are slower and one uses the real server.
 Unit tests with a scripted LLM prove the plumbing, not that a prompt or loop change makes the search better; that
 needs the benchmark against a real model.
 
-## 8. Known limits
+## 9. Design decisions and known limits
 
-- The xfemm fix exists only in this repo's vendored binary; it has not been reported upstream, and the xfemm fork
-  has no declared licence. Check before distributing outside the team.
+**Decisions**
+
+- **A quantity the goal does not name is free to move.** This is intentional. The inputs are guarded first: the
+  EE team sets the Field Config limits before any search, so a search can only try geometries inside them. The
+  outputs are only checked where the goal names them, so name what matters ("keep every inductance within 10%").
+  There is no hidden default requirement.
+- **Sleeping does not use up time.** Budgets and request limits are measured on a clock that stops while the
+  computer sleeps, so a search that was running when the lid closed has lost nothing on waking. One caveat: a
+  request that was in flight during the sleep may have been dropped by the server, and then it waits out its own
+  limit (up to 15 minutes by default) before the search retries it.
+- **Run-to-run variation is expected and handled by searching on.** The model samples, so two runs of the same
+  goal differ. The search does not stop at the first passing design: it keeps going until nothing better turns up
+  and reports the best one found, which narrows the spread between runs. It does not remove it.
+
+**Known limits**
+
+- **The xfemm fix lives only in this repo.** The bundled solver has a one-line patch (see "The solver"). A fresh
+  download of xfemm does not have it, and without it every mutual inductance comes out wrong without any error.
+  It has not been reported upstream, and the xfemm fork declares no licence. Check both before distributing outside
+  the team.
 - `femmcli` has no automated accuracy regression test here; accuracy was validated by comparison with real FEMM.
 - Every solve remeshes from scratch; fine at this scale.
 - The Lua script generator mirrors FEMM's API by hand, so a new geometry feature needs a matching port.
-- Time limits use a clock that does not advance while the computer is asleep, so a suspended machine can stretch
-  a limit. Keep it awake during a long search.
-- A goal that names only some quantities lets the others move freely. A search can win "cut tank ESR" by making a
-  coil that no longer resonates. Name inductances and couplings in the goal to hold them.
-- The search is only as good as the model behind it; results vary run to run (sampling is on by default).
+- The search is only as good as the model behind it.

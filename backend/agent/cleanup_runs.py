@@ -1,5 +1,5 @@
 """One-time cleanup of ai_runs rows left behind before runs had a lifecycle
-(SPEC.md section 4, "One-time cleanup of existing rows"). Nothing with content
+(the one-time cleanup of existing rows). Nothing with content
 is removed.
 
 Run:  cd backend && uv run python -m agent.cleanup_runs            # dry run: prints what would change

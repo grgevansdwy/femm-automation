@@ -362,7 +362,7 @@ def test_a_log_that_cannot_be_written_does_not_fail_the_request(serve, monkeypat
 
 
 def test_a_search_request_can_be_rebuilt_from_the_log_byte_for_byte(serve):
-    """SPEC.md N5: the exact request the model saw can be replayed from the log."""
+    """The exact request the model saw can be replayed from the log."""
     server = serve(lambda h: h.sse([_chunk({"content": "OK"}, finish="stop")]))
     tools = build_tools({"tank_center_r": {"type": "number"}, "num_tank_turns": {"type": "integer"}}, "base_coil")
     settings = AgentSettings(api_base_url=server.url, model="m", llm_max_tokens=777, temperature=0.3, seed=11)
