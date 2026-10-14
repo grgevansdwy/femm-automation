@@ -8,14 +8,7 @@ shows you the best design next to your original.
 
 How it is built: [`DESIGN.md`](DESIGN.md).
 
-## What you need
-
-| | |
-|---|---|
-| **Computer** | Linux with a desktop (steps below are for Ubuntu / Debian) |
-| **Internet** | For the first install only |
-| **For the AI agent** | A reachable LLM server (see [AI server](#ai-server)). Manual runs need no AI |
-| **Wine and FEMM 4.2** | Installed in step 3. They power the **Open in FEMM** button; the simulations themselves run natively on Linux |
+You need a Linux desktop running Debian or Ubuntu.
 
 ## Install (about 5 minutes)
 
