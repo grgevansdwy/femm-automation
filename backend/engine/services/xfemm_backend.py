@@ -20,7 +20,7 @@
 # term now matches to ~1e-8%.
 #
 # Wiring this back into engine/core.py is a deliberate decision, not a technical
-# blocker anymore - see docs/Engine.md.
+# blocker anymore - see DESIGN.md.
 #
 # Everything below this notice is otherwise a working implementation:
 # replaces "real FEMM.exe under Wine, driven live over pyfemm/COM" with
@@ -35,7 +35,7 @@
 # that math has to be re-expressed as generated Lua instead, since results
 # aren't available until the whole script finishes.
 #
-# See docs/archive/xfemm_spike_notes.md for the accuracy/performance validation this is
+# See docs/archive/xfemm_spike_notes.md in git history for the accuracy/performance validation this is
 # built on (single-coil cases only - that's where this bug wasn't visible),
 # and git history (legacy/wine_backend/ at commit 321b8d7) for the restored implementation.
 # =============================================================================
@@ -140,7 +140,7 @@ class LuaScript:
     def mi_makeABC(self, *a):
         raise NotImplementedError(
             "mi_makeABC is broken under femmcli (mesh-time 'invalid block type "
-            "index' error - see docs/archive/xfemm_spike_notes.md). Use far_field_boundary() "
+            "index' error - see docs/archive/xfemm_spike_notes.md in git history). Use far_field_boundary() "
             "instead."
         )
 
@@ -148,7 +148,7 @@ class LuaScript:
         """Replaces init_femm()'s mi_makeABC(4, 400, 0, 0) - broken under
         femmcli. A plain far-field Dirichlet A=0 box at the same ~400mm scale
         production already used, validated to ~10^-7% agreement against real
-        FEMM's mi_makeABC in the spike (docs/archive/xfemm_spike_notes.md)."""
+        FEMM's mi_makeABC in the spike (docs/archive/xfemm_spike_notes.md in git history)."""
         self.mi_drawrectangle(0, -400, 400, 400)
         self._call('mi_selectsegment', 200, 400)
         self._call('mi_selectsegment', 200, -400)
@@ -228,7 +228,7 @@ class LuaScript:
 def parse_femm_number(text):
     """Parses FEMM/femmcli's stringified numbers, e.g. '6.98e-08-I*6.09e-08'
     or a plain real '1.0' with no imaginary part (matches the format observed
-    from both femmcli and real FEMM in docs/archive/xfemm_spike_notes.md). Shared with
+    from both femmcli and real FEMM in docs/archive/xfemm_spike_notes.md in git history). Shared with
     engine/tests/wine_femm_backend.py, which parses the identical result.txt
     format written by the same generated Lua script running through real
     FEMM under Wine instead of femmcli."""

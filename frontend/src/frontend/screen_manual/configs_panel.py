@@ -15,7 +15,7 @@ from pathlib import Path
 from imgui_bundle import imgui, portable_file_dialogs as pfd
 
 from ..files_backup import config_io
-from ..services import field_layout
+from ..services import field_layout, toast
 
 _ERROR_COLOR = imgui.ImVec4(0.9, 0.35, 0.35, 1.0)
 _STATUS_COLOR = imgui.ImVec4(0.35, 0.8, 0.45, 1.0)
@@ -123,13 +123,12 @@ class ConfigsPanelState:
 
     def export(self, path) -> None:
         if not self.selected_id:
-            self.error = "Select a config to export first."
+            toast.error("Export failed: select a config first.")
             return
         from engine.repositories.coilset_repository import get_config
 
         Path(path).write_text(config_io.export_record(get_config(self.selected_id)))
-        self.status = f"Exported to {path}"
-        self.error = ""
+        toast.success(f"Exported successfully to {path}")
 
     def import_from(self, path) -> None:
         from engine.repositories.coilset_repository import save_config
@@ -137,31 +136,30 @@ class ConfigsPanelState:
         try:
             text = Path(path).read_text()
         except OSError as exc:
-            self.error, self.status = f"Couldn't read {path}: {exc}", ""
+            toast.error(f"Import failed: couldn't read {path}: {exc}")
             return
         try:
             coilset, name = config_io.parse_import(text)
         except ValueError as exc:
-            self.error, self.status = str(exc), ""
+            toast.error(f"Import failed: {exc}")
             return
         # Imports run through the same geometry validation Save does - no
         # special-cased leniency for imported data.
         error = self._validate(coilset)
         if error:
-            self.error, self.status = f"Imported config failed validation: {error}", ""
+            toast.error(f"Import failed: the config does not pass validation: {error}")
             return
         deduped = config_io.dedupe_name(name)
         # The CoilSet's own config_name field is renamed to match too, not
         # just the record's name - same reasoning as clone() below: otherwise
         # the list/left panel says "X (imported)" while the form's
         # config_name field still shows whatever name was baked into the
-        # imported file, which reads like a bug (and did - see docs/GUI.md).
+        # imported file, which reads like a bug (and did - see DESIGN.md).
         coilset.config_name = deduped
         record = save_config(coilset, name=deduped, config_id=None)  # always a fresh id, never overwrites
         self.refresh()
-        self.load(record["id"])  # load() resets error/status - set them after, not before
-        self.status = f"Imported {record['name']!r}" + (f" (renamed from {name!r})" if deduped != name else "")
-        self.error = ""
+        self.load(record["id"])
+        toast.success(f"Imported {record['name']!r} successfully" + (f" (renamed from {name!r})" if deduped != name else ""))
 
     def delete(self) -> None:
         """Deletes any config, including built-ins - unlike

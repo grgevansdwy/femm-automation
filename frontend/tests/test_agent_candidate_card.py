@@ -47,11 +47,3 @@ def test_legacy_runs_still_render_from_their_stored_spec():
     assert [(r["metric"], r["passed"]) for r in rows] == [
         ("M23", True), ("loop_esr", True), ("tank_esr", False), ("rc_esr", True),
     ]
-
-
-def test_a_design_is_named_by_its_label_and_the_design_it_was_built_on():
-    from frontend.screen_agent.agent_candidate_card import design_name
-    assert design_name({"label": "C7", "base_label": "C3"}) == "C7, built on C3"
-    assert design_name({"label": "C1", "base_label": None}) == "C1"
-    assert design_name({"valid": False, "base_label": "C3"}) == "built on C3", "a rejected proposal has no label"
-    assert design_name({"delta": {}}) == "", "runs saved before designs had labels"

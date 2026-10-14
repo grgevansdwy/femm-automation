@@ -22,6 +22,7 @@ from pathlib import Path
 from imgui_bundle import imgui, imspinner, portable_file_dialogs as pfd
 
 from ..files_backup import chat_io
+from ..services import toast
 from . import agent_candidate_card
 
 WIDTH = 260.0            # the same width as the Manual Runs config list
@@ -98,8 +99,6 @@ class AgentSidebarState:
         # handle, run id, "json" or "pdf") - None while none is open.
         self._import_dialog = None
         self._export_dialog: tuple | None = None
-        self.io_message: str = ""  # the last import/export, in one line
-        self.io_error: str = ""
         self.refresh()
 
     def refresh(self) -> None:
@@ -152,23 +151,21 @@ class AgentSidebarState:
 
     def export(self, run_id: str, kind: str, path) -> None:
         """Writes one chat to `path` as "json" (complete) or "pdf" (a report)."""
-        self.io_message = self.io_error = ""
         try:
             (chat_io.export_pdf if kind == "pdf" else chat_io.export_json)(run_id, path)
         except chat_io.ChatIOError as exc:
-            self.io_error = str(exc)
+            toast.error(f"Export failed: {exc}")
             return
-        self.io_message = f"Exported to {Path(path).name}"
+        toast.success(f"Exported successfully to {Path(path).name}")
 
     def import_from(self, path, panel) -> None:
         """Brings the chat file at `path` in as a new chat and opens it."""
-        self.io_message = self.io_error = ""
         try:
             new_id = chat_io.import_json(path)
         except chat_io.ChatIOError as exc:
-            self.io_error = str(exc)
+            toast.error(f"Import failed: {exc}")
             return
-        self.io_message = f"Imported {Path(path).name}"
+        toast.success(f"Imported {Path(path).name} successfully")
         self.refresh()
         panel.open_chat(new_id)
 
@@ -340,11 +337,6 @@ def draw(state: AgentSidebarState, panel, size: imgui.ImVec2) -> None:
     if imgui.is_item_hovered():
         imgui.set_tooltip("Open a chat exported to a JSON file, as a new chat.\n"
                           "To export one, right-click it in the list.")
-    for text, color in ((state.io_error, _REJECTED_COLOR), (state.io_message, _MUTED_COLOR)):
-        if text:
-            imgui.push_text_wrap_pos(0.0)
-            imgui.text_colored(color, text)
-            imgui.pop_text_wrap_pos()
     imgui.set_next_item_width(imgui.get_content_region_avail().x)
     changed, text = imgui.input_text_with_hint("##chat_search", "Search chats...", state.search_text)
     if changed:
@@ -457,7 +449,7 @@ def draw_stored_run(record: dict, messages: list[dict], summary_distance: float 
     imgui.same_line()
     imgui.text_disabled(_format_dt(record["created_at"]))
     label, color = status_label(record["status"])
-    imgui.text_colored(color, f"Status: {label}" + (f" - ended by: {record['stop_reason']}" if record.get("stop_reason") else ""))
+    imgui.text_colored(color, f"Status: {label}")
     if record.get("imported_at"):
         imgui.push_text_wrap_pos(0.0)
         imgui.text_colored(_MUTED_COLOR, f"Imported {_format_dt(record['imported_at'])}. These results come from the "
@@ -472,7 +464,7 @@ def draw_stored_run(record: dict, messages: list[dict], summary_distance: float 
             [(m["round_num"], (m["payload"] or {}).get("candidates") or []) for m in optimize],
             _total_timing_text(optimize), baseline_buffer, record["best_coilset"], record["best_tool_result"],
             spec, distances, summary_distance, _audit(record, baseline_coilset, best_coilset),
-            baseline_coilset=baseline_coilset, best_coilset=best_coilset, report=record["error"],
+            baseline_coilset=baseline_coilset, best_coilset=best_coilset,
         )
         imgui.spacing()
         show_rounds = imgui.tree_node_ex(f"Round-by-round details##stored_{record['id']}_rounds", 0)

@@ -115,10 +115,40 @@ class FieldRule:
     max: float | None = None
 
 
-DEFAULT_SEARCH_FIELDS = {
-    name: FieldRule(enabled=name in FREE_VARIABLES, max=DEFAULT_MAX_LAYERS if name in LAYER_FIELDS else None)
-    for name in NUMERIC_FIELDS
+# Limits every search starts with: (minimum, maximum) in the field's own unit, None = no limit
+# on that side. They keep a search out of degenerate coils (a one-turn tank, a tank a few mm wide)
+# and out of sizes no board would use. PLACEHOLDER numbers, not engineering advice: each is the
+# range the starter configs span, widened by a margin, so every starter config still opens (the
+# baseline must be inside its limits). Change them per field in Settings > Field Config.
+DEFAULT_LIMITS = {
+    "loop_offset": (0, 20),
+    "loop_r": (25, 100),
+    "num_loop_turns": (1, 3),
+    "num_parallel_loop_traces": (1, 10),
+    "loop_trace_spacing": (0, 10),
+    "loop_turn_spacing": (0, 30),
+    "loop_trace_width": (None, 6),
+    "tank_center_r": (50, 120),
+    "num_tank_turns": (3, 12),
+    "num_parallel_tank_traces": (1, 4),
+    "tank_trace_spacing": (0, 8),
+    "tank_turn_spacing": (2.5, 16),
+    "tank_trace_width": (None, 10),
+    "rc_radius": (15, 80),
+    "num_rc_turns": (2, 8),
+    "num_parallel_rc_traces": (1, 4),
+    "rc_trace_spacing": (0, 8),
+    "rc_turn_spacing": (1.5, 12),
+    "rc_trace_width": (None, 6),
 }
+
+
+def _default_rule(name: str) -> FieldRule:
+    low, high = DEFAULT_LIMITS.get(name, (None, None))
+    return FieldRule(enabled=name in FREE_VARIABLES, min=low, max=DEFAULT_MAX_LAYERS if name in LAYER_FIELDS else high)
+
+
+DEFAULT_SEARCH_FIELDS = {name: _default_rule(name) for name in NUMERIC_FIELDS}
 
 
 def _is_number(value) -> bool:

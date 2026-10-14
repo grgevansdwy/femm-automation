@@ -3,7 +3,7 @@ straight to backend's engine and repositories.
 
 Mutually exclusive layouts, swapped by a toolbar toggle
 (_draw_mode_toggle()) rather than a tab bar or docking system (see
-docs/GUI.md for why no docking) - each is a fixed set of bordered panels,
+DESIGN.md for why no docking) - each is a fixed set of bordered panels,
 sized each frame from the window's available content region:
 
 Manual Runs mode (_draw_manual_mode(), 3 columns):
@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from frontend import _sim_path  # noqa: F401 - _sim_path must run before any backend import
 from frontend.screen_agent import agent_panel, agent_sidebar
 from frontend.files_backup import backup_io
+from frontend.services import toast
 from frontend.screen_manual import configs_panel, runs_panel
 from frontend.screen_settings import settings_panel
 from frontend.visualization import coil_diagram, femm_open
@@ -48,38 +49,30 @@ _MIN_CHAT_WIDTH = 320.0  # the AI Agent chat column never gets narrower than thi
 _DIAGRAM_HEIGHT = 330.0
 _CONTROLS_HEIGHT = 130.0
 
-_STATUS_COLOR = imgui.ImVec4(0.35, 0.8, 0.45, 1.0)
-_ERROR_COLOR = imgui.ImVec4(0.9, 0.35, 0.35, 1.0)
-
-
 class BackupPanelState:
     """Bulk export-all/import-all - a single toolbar row above the 3-column
     dashboard rather than a whole panel, since it's just two buttons."""
 
     def __init__(self) -> None:
-        self.error: str = ""
-        self.status: str = ""
         self._export_dialog = None
         self._import_dialog = None
 
     def export_all(self, path) -> None:
         Path(path).write_text(backup_io.export_all())
-        self.status = f"Backed up to {path}"
-        self.error = ""
+        toast.success(f"Backup saved to {path}")
 
     def import_all(self, path, configs_panel_state) -> None:
         try:
             text = Path(path).read_text()
         except OSError as exc:
-            self.error, self.status = f"Couldn't read {path}: {exc}", ""
+            toast.error(f"Restore failed: couldn't read {path}: {exc}")
             return
         try:
             n_configs, n_runs = backup_io.import_all(text)
         except ValueError as exc:
-            self.error, self.status = str(exc), ""
+            toast.error(f"Restore failed: {exc}")
             return
-        self.status = f"Restored {n_configs} config(s) and {n_runs} run(s) from {path}"
-        self.error = ""
+        toast.success(f"Restored {n_configs} config(s) and {n_runs} run(s) from {path}")
         # Restore writes straight to the database, but configs_panel's own
         # list/buffer are only refreshed by its own actions (Save/Clone/
         # Import/Delete/New) - left untouched here, Restore All would report
@@ -130,13 +123,6 @@ def _draw_toolbar(state: BackupPanelState, configs_panel_state) -> None:
     if imgui.button("Restore All"):
         state._import_dialog = pfd.open_file("Restore from backup", filters=["JSON files", "*.json"])
 
-    if state.error:
-        imgui.same_line()
-        imgui.text_colored(_ERROR_COLOR, state.error)
-    elif state.status:
-        imgui.same_line()
-        imgui.text_colored(_STATUS_COLOR, state.status)
-
 
 def _draw_mode_toggle(state: AppState) -> None:
     """Two toolbar buttons swap the WHOLE dashboard between the manual-run
@@ -165,7 +151,8 @@ def _draw_mode_toggle(state: AppState) -> None:
                 state.settings_panel.reload()  # pick up anything changed elsewhere since it was last open
                 state.mode = "settings"
         elif imgui.button("Back", imgui.ImVec2(btn_w, 0)):
-            state.mode = "agent"
+            if state.settings_panel.request_leave():
+                state.mode = "agent"
 
 
 def _draw_manual_mode(state: AppState) -> None:
@@ -223,15 +210,23 @@ def _gui(state: AppState) -> None:
     state.agent_panel.poll()
     femm_open.poll()
 
-    _draw_toolbar(state.backup_panel, state.configs_panel)
-    _draw_mode_toggle(state)
+    if state.mode == "settings":
+        # The Settings screen draws its own top row (title, buttons, Back): no backup, no mode switch.
+        state.backup_panel.poll_dialogs(state.configs_panel)
+    else:
+        _draw_toolbar(state.backup_panel, state.configs_panel)
+        _draw_mode_toggle(state)
 
     if state.mode == "agent":
         _draw_agent_mode(state)
     elif state.mode == "settings":
         settings_panel.draw(state.settings_panel, imgui.get_content_region_avail())
+        if state.settings_panel.take_leave():
+            state.mode = "agent"
     else:
         _draw_manual_mode(state)
+
+    toast.draw()
 
 
 def main() -> None:

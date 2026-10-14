@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frontend._sim_path  # noqa: F401 - adds backend to sys.path
 
 from frontend.screen_agent import agent_sidebar
-from frontend.screen_agent.agent_panel import AgentPanelState, _chat_ending
+from frontend.services import toast
+from frontend.screen_agent.agent_panel import AgentPanelState, _finished_message
 from test_agent_panel import _InstantSolver, _finished, _planned_state, _poll_until, _proposal, _start, _wait_for_abort
 
 
@@ -173,8 +174,7 @@ def test_a_finished_chat_reopens_without_a_solve_and_can_be_asked_and_continued(
     assert state.interview_state.transcript == first.interview_state.transcript
     assert state.search_markers == first.search_markers, "the search line sits where Start Search was clicked"
     assert state.phase == "finished" and state.run_state is None and not chat.live and state.baseline_locked
-    assert _chat_ending(chat) == ("Search finished: target not achieved within the budget after 2 round(s) (round limit).",
-                                  row["error"])
+    assert _finished_message(chat).startswith("Search finished.") and "used all its rounds" in _finished_message(chat)
     assert [m["round_num"] for m in agent_sidebar.stored_rounds(chat.messages)] == [1, 2]
     assert agent_sidebar.has_stored_summary(chat.record, chat.messages), "its best design and summary are there to draw"
 
@@ -215,7 +215,7 @@ def test_a_plan_that_was_never_started_reopens_with_its_start_search(monkeypatch
     state = AgentPanelState(_InstantSolver())
     state.open_chat(run_id)
     assert state.phase == "interview" and state.interview_state.finalized and not state.plan_confirmed
-    assert state.interview_state.spec.objective_text == "cut tank ESR in half" and not state.baseline_locked
+    assert state.interview_state.spec.objective_text == "cut tank ESR in half" and state.baseline_locked, "a plan was made in it, so its baseline is locked"
     assert get_ai_run(run_id)["status"] == "plan_ready", "opening it changed nothing"
 
     _start(state)
@@ -225,12 +225,11 @@ def test_a_plan_that_was_never_started_reopens_with_its_start_search(monkeypatch
 
 def test_cancelled_and_interrupted_chats_open_with_their_finished_rounds():
     state = AgentPanelState(_InstantSolver())
-    for status, ending in [("cancelled", "Search finished: stopped by you after 2 round(s)."),
-                           ("interrupted", "Search finished: interrupted after 2 round(s).")]:
+    for status in ("cancelled", "interrupted"):
         run_id = _stored_run(status, rounds=2)
         state.open_chat(run_id)
         assert state.phase == "finished" and state.chat.read_only_reason is None, status
-        assert _chat_ending(state.chat)[0] == ending
+        assert _finished_message(state.chat).startswith("Search finished"), status
         assert [m["content"] for m in agent_sidebar.stored_rounds(state.chat.messages)] == ["round 1", "round 2"]
         assert state.search_markers == [1], "after the one message that came before Start Search"
 
@@ -418,16 +417,19 @@ def test_export_and_import_from_the_sidebar(monkeypatch, tmp_path):
     folder = tmp_path / "files"
     folder.mkdir()
 
+    toast.clear()
     sidebar.export(run_id, "json", folder / "chat.json")
-    assert sidebar.io_message == "Exported to chat.json" and not sidebar.io_error
+    assert toast.active() == [("Exported successfully to chat.json", False)]
     sidebar.export(run_id, "pdf", folder / "chat.pdf")
     assert (folder / "chat.pdf").read_bytes().startswith(b"%PDF")
     sidebar.export("no-such-chat", "json", folder / "nothing.json")
-    assert "no longer exists" in sidebar.io_error and not (folder / "nothing.json").exists()
+    (text, is_error), = toast.active()[-1:]
+    assert is_error and "Export failed" in text and "no longer exists" in text
+    assert not (folder / "nothing.json").exists()
 
     sidebar.import_from(folder / "chat.json", first)
     new_id = first.chat.ai_run_id
-    assert new_id != run_id and sidebar.io_message == "Imported chat.json", "the imported chat is opened"
+    assert new_id != run_id and toast.active()[-1] == ("Imported chat.json successfully", False), "the imported chat is opened"
     assert get_ai_run(new_id)["imported_at"] is not None
     rows = {row["id"]: row for row in sidebar.visible_rows()}
     assert rows[new_id]["imported_at"] and not rows[run_id]["imported_at"]
@@ -438,7 +440,9 @@ def test_export_and_import_from_the_sidebar(monkeypatch, tmp_path):
     before = len(sidebar.rows)
     sidebar.import_from(folder / "bad.json", first)
     sidebar.refresh()
-    assert "check" in sidebar.io_error and len(sidebar.rows) == before, "a rejected file adds no chat"
+    (text, is_error), = toast.active()[-1:]
+    assert is_error and text.startswith("Import failed") and "check" in text
+    assert len(sidebar.rows) == before, "a rejected file adds no chat"
 
 
 def test_an_imported_chat_is_asked_and_continued_under_this_machines_settings(monkeypatch, tmp_path):
@@ -469,7 +473,7 @@ def test_an_imported_chat_is_asked_and_continued_under_this_machines_settings(mo
     state = AgentPanelState(solver)
     state.sidebar.import_from(path, state)
     chat = state.chat
-    assert state.sidebar.io_error == "" and chat.read_only_reason is None and state.phase == "finished"
+    assert chat.read_only_reason is None and state.phase == "finished"
     assert solver.submitted == 0, "opening an imported chat simulates nothing"
     assert chat.baseline_coilset.tank_center_r == 72.688, "the baseline is the one the file carried"
     assert state.interview_state.settings == load_settings(), "the chat runs under local settings"

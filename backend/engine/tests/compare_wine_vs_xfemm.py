@@ -5,15 +5,15 @@
 # under Wine (engine/tests/wine_femm_backend.py) and xfemm's femmcli (production,
 # engine/services/xfemm_backend.py) - using the exact same generated Lua script for
 # both (engine.build_script()), and writes a go/no-go + timing report to
-# docs/archive/wine_vs_xfemm_validation.md.
+# docs/archive/wine_vs_xfemm_validation.md in git history.
 #
 # This is the same "one script, two backends, diff" methodology already used
-# to find and fix the mutual-inductance bug (docs/Engine.md), now run across
+# to find and fix the mutual-inductance bug (DESIGN.md), now run across
 # all 16 configs instead of the 3 checked by hand at the time - closing the
-# gap docs/archive/xfemm.md itself flagged ("Only 3 of 16 production configs were
+# gap docs/archive/xfemm.md in git history itself flagged ("Only 3 of 16 production configs were
 # individually validated").
 #
-# Needs real FEMM under Wine installed (docs/Engine.md) - each config
+# Needs real FEMM under Wine installed (DESIGN.md) - each config
 # pops up FEMM's window briefly, same as any other Wine-driven run.
 #
 #     cd backend && uv run --package backend python3 -m engine.tests.compare_wine_vs_xfemm
@@ -193,6 +193,7 @@ def main():
 
     report = render_report(outcomes)
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)  # docs/ is not in the repo
     REPORT_PATH.write_text(report)
 
     go_count = sum(1 for o in outcomes if not o.setup_error and is_go(o))

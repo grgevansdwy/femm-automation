@@ -3,8 +3,8 @@
 #
 # Runs a generated Lua script (from engine/services/xfemm_backend.LuaScript.render())
 # through real FEMM.exe under Wine, headlessly - the same "-lua-script=" CLI
-# mode documented in docs/Engine.md, and the same mechanism used to
-# find and fix the mutual-inductance bug (docs/Engine.md). This is NOT a
+# mode documented in DESIGN.md, and the same mechanism used to
+# find and fix the mutual-inductance bug (DESIGN.md). This is NOT a
 # production backend - it lives in tests/, not services/, because it exists
 # only so compare_wine_vs_xfemm.py can run the exact same script through both
 # engines and diff the results.

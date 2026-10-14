@@ -19,6 +19,7 @@ from agent.settings.templating import check_placeholders
 FIELD_LABELS = {
     "api_base_url": "LLM server URL", "model": "Model name",
     "llm_time_limit_s": "Time limit per AI request (s)", "llm_max_tokens": "Max tokens per AI reply",
+    "llm_thinking_limit_s": "Thinking limit per search request (s)",
     "temperature": "Sampling temperature", "top_p": "Sampling top-p", "seed": "Sampling seed",
     "max_tool_calls": "Max rounds per search", "candidates_per_round": "Candidates per round",
     "keep_best_candidates": "Best candidates remembered", "round_llm_attempts": "Tries per round's AI request",
@@ -34,6 +35,7 @@ FIELD_HELP = {
     "model": "Must support tool calling. Also settable with AGENT_MODEL (changes this default).",
     "llm_time_limit_s": "Hard wall-clock limit for one request, including waiting in the server's queue.",
     "llm_max_tokens": "Cap on one reply's length, thinking included. A runaway reply that hits it counts as a failed try.",
+    "llm_thinking_limit_s": "A search round's AI request still thinking after this long is stopped and asked for its proposal straight away, with thinking switched off. At or above the request time limit = never.",
     "temperature": "Sent with every AI request. Higher = more varied replies; 0 = always the likeliest token.",
     "top_p": "Sent with every AI request. Only the most likely tokens adding up to this probability are considered.",
     "seed": "Sent with every AI request. -1 = a new random seed each time, so repeated searches differ.",
@@ -58,6 +60,7 @@ class AgentSettings:
     model: str = config.MODEL
     llm_time_limit_s: float = config.LLM_TIME_LIMIT_S
     llm_max_tokens: int = config.LLM_MAX_TOKENS
+    llm_thinking_limit_s: float = config.LLM_THINKING_LIMIT_S
     temperature: float = config.TEMPERATURE
     top_p: float = config.TOP_P
     seed: int = config.SEED
@@ -100,6 +103,7 @@ class AgentSettings:
         need(isinstance(self.model, str) and self.model.strip(), "model", "can't be empty")
         need(number(self.llm_time_limit_s) and self.llm_time_limit_s >= 1, "llm_time_limit_s", "must be at least 1")
         need(isinstance(self.llm_max_tokens, int) and self.llm_max_tokens >= 1, "llm_max_tokens", "must be a whole number, at least 1")
+        need(number(self.llm_thinking_limit_s) and self.llm_thinking_limit_s >= 1, "llm_thinking_limit_s", "must be at least 1")
         need(number(self.temperature) and 0 <= self.temperature <= 2, "temperature", "must be between 0 and 2")
         need(number(self.top_p) and 0 < self.top_p <= 1, "top_p", "must be above 0 and at most 1")
         need(isinstance(self.seed, int) and not isinstance(self.seed, bool) and self.seed >= -1,
@@ -139,14 +143,14 @@ def _usable_prompt(key: str, text) -> bool:
             and not check_placeholders(text, definition.placeholders, definition.required))
 
 
-def load_settings() -> AgentSettings:
-    """Defaults with whatever a person has saved applied on top. A saved value
+def _settings_from_overrides(overrides: dict) -> AgentSettings:
+    """Defaults with `overrides` (key -> value, as stored) applied on top. A value
     that no longer fits this version of the code (unknown key, wrong shape,
     a prompt written for placeholders that have since changed) is ignored
     rather than crashing every run."""
     settings = _defaults()
     known = {f.name for f in dataclasses.fields(AgentSettings)}
-    for key, value in repository.load_overrides().items():
+    for key, value in overrides.items():
         if key.startswith("prompt:"):
             if _usable_prompt(key[7:], value):
                 settings.prompts[key[7:]] = value
@@ -155,18 +159,44 @@ def load_settings() -> AgentSettings:
     return settings
 
 
+def _overrides_of(settings: AgentSettings) -> dict:
+    """Exactly what differs from the defaults, as stored."""
+    defaults = dataclasses.asdict(_defaults())
+    overrides = {name: value for name, value in dataclasses.asdict(settings).items()
+                 if name != "prompts" and value != defaults[name]}
+    overrides.update({f"prompt:{key}": text for key, text in settings.prompts.items()
+                      if text != PROMPT_DEFS[key].default})
+    return overrides
+
+
+def load_settings() -> AgentSettings:
+    """Defaults with whatever a person has saved applied on top."""
+    return _settings_from_overrides(repository.load_overrides())
+
+
 def save_settings(settings: AgentSettings) -> None:
     """Stores exactly what differs from the defaults. Raises ValueError with
     every problem if the settings don't validate - nothing is saved then."""
     problems = settings.validate()
     if problems:
         raise ValueError("\n".join(problems))
-    defaults = dataclasses.asdict(_defaults())
-    overrides = {name: value for name, value in dataclasses.asdict(settings).items()
-                 if name != "prompts" and value != defaults[name]}
-    overrides.update({f"prompt:{key}": text for key, text in settings.prompts.items()
-                      if text != PROMPT_DEFS[key].default})
-    repository.replace_overrides(overrides)
+    repository.replace_overrides(_overrides_of(settings))
+
+
+def save_user_default(settings: AgentSettings) -> None:
+    """Remembers `settings` as the person's own default, the one "Reset to my
+    default" returns to. The code's defaults are untouched. Raises ValueError
+    with every problem if the settings don't validate."""
+    problems = settings.validate()
+    if problems:
+        raise ValueError("\n".join(problems))
+    repository.save_user_default(_overrides_of(settings))
+
+
+def load_user_default() -> AgentSettings | None:
+    """The settings saved with save_user_default(), or None if there are none."""
+    overrides = repository.load_user_default()
+    return None if overrides is None else _settings_from_overrides(overrides)
 
 
 def apply_search_field_changes(changes: list[dict]) -> AgentSettings:

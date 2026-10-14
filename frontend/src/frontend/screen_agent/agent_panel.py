@@ -33,7 +33,7 @@ from ..services import field_layout
 from ..services.job_runner import now
 from ..visualization import coil_diagram
 from ..visualization.result_table import RESULT_FIELDS, draw_result_table
-from . import agent_candidate_card, agent_sidebar
+from . import agent_candidate_card, agent_sidebar, finished_summary
 
 _ERROR_COLOR = imgui.ImVec4(0.9, 0.35, 0.35, 1.0)
 # The baseline's own solve (and its diagram) - before the interview there's
@@ -164,6 +164,7 @@ class AgentPanelState:
         self.sidebar = agent_sidebar.AgentSidebarState()
         self.configs: list[dict] = []
         self.chat_input_active: bool = False
+        self.baseline_open: bool = True  # the baseline box above a finished search's results: shown, or minimized to its picker row
         # run id -> every saved chat touched in this session. Opening one again
         # returns the same object, so a running search is found as it is now.
         self._sessions: dict[str, ChatSession] = {}
@@ -294,10 +295,13 @@ class AgentPanelState:
 
     @property
     def baseline_locked(self) -> bool:
-        """The baseline can't be changed once a search has started ("+ New"
-        opens a chat on another one), nor mid-reply."""
+        """The baseline can't be changed once anything has been typed in the chat - a sent
+        message or an unsent draft - nor once a search has started, nor mid-reply. "+ New"
+        opens a chat on another baseline."""
         chat = self.chat
-        return chat.search_started or chat.interview_runner.busy or chat.restoring
+        said = chat.interview_state is not None and bool(chat.interview_state.transcript)
+        return (chat.search_started or chat.interview_runner.busy or chat.restoring
+                or said or bool(chat.chat_input.strip()))
 
     @property
     def baseline_error(self) -> str | None:
@@ -478,6 +482,15 @@ class AgentPanelState:
         if not chat.search_started:
             # Still planning: the same baseline solve picking a config starts.
             chat.baseline_runs = {BASELINE_DISTANCE: self._solve_one(chat, BASELINE_DISTANCE)}
+        else:
+            # The Baseline box shows the baseline's own numbers at the plan's distances, from
+            # the solves the search already made. Opening a chat never simulates anything, so
+            # a distance with no stored solve stays out until the search continues (_continue()).
+            spec = chat.interview_state.spec
+            for distance in (spec.distances if spec is not None else ()) or (BASELINE_DISTANCE,):
+                cached = self.job_runner.find_cached(chat.baseline_coilset, distance)
+                if cached is not None:
+                    chat.baseline_runs[distance] = cached
         return chat
 
     def delete_chat(self, run_id: str) -> bool:
@@ -685,8 +698,8 @@ class AgentPanelState:
         return True
 
     def stop_search(self) -> None:
-        """ "Stop and keep the best": ends the running search at its next
-        checkpoint. The chat stays open on it, with its best design and
+        """Ends the running search at its next checkpoint (the chat AI's stop_search tool does
+        the same for the chat it is in). The chat stays open on it, with its best design and
         report, and it can be continued."""
         if self.phase == "running":
             self.agent_runner.stop(self.run_state.id)
@@ -694,6 +707,22 @@ class AgentPanelState:
     def _can_continue(self) -> bool:
         chat = self.chat
         return not (chat.phase != "finished" or chat.interview_runner.busy or chat.restoring or chat.read_only_reason)
+
+    @property
+    def can_continue(self) -> bool:
+        """Whether this chat's ended search (any outcome, an interrupted one
+        included) can be searched on right now - what the Continue button shows on."""
+        return self._can_continue()
+
+    def request_continue(self, text: str = "continue") -> bool:
+        """The Continue button, or a message code recognised as "continue":
+        recorded in the chat as the user's message, then the search resumes
+        (continue_search()). False if there is nothing to continue."""
+        if not self._can_continue():
+            return False
+        chat = self.chat
+        chat.interview_runner.record_user_message(chat.interview_state, text)
+        return self.continue_search()
 
     def continue_search(self) -> bool:
         """Searches on from where the finished search stopped: same goal, same
@@ -718,6 +747,7 @@ class AgentPanelState:
         chat.error = ""
         chat.live = True
         chat.search_markers.append(len(chat.interview_state.transcript))
+        self._sync_baseline_distances(chat, chat.run_state.spec.distances)  # a reopened chat may hold none yet
         return True
 
     def _restore_then(self, chat: ChatSession, action) -> None:
@@ -750,7 +780,10 @@ class AgentPanelState:
         has ended the model may also answer with a revised plan or a Search
         fields proposal - both only shown here, for the user to start or apply."""
         def ask():
-            chat.interview_runner.send_followup(chat.interview_state, chat.run_state, text, allow_replan=True)
+            run_id = chat.run_state.id
+            # While the search runs the model may stop it, for a user who asked in the chat to.
+            chat.interview_runner.send_followup(chat.interview_state, chat.run_state, text, allow_replan=True,
+                                                stop_search=lambda: self.agent_runner.stop(run_id))
         if chat.run_state is None:
             self._restore_then(chat, ask)
         else:
@@ -763,14 +796,13 @@ class AgentPanelState:
             return
         if self.planning_blocked or chat.read_only_reason:
             return  # keeps the typed text - the chat's notice says why
-        if chat.phase == "finished" and text.lower() == "continue":
-            # Recognised by code, not by a model: the whole message is the
-            # word "continue". Recorded in the chat, then the search resumes.
+        if chat.phase == "finished" and _is_continue(text):
+            # Recognised by code, not by a model: the whole message is
+            # "continue" (_is_continue()). Recorded in the chat, then the search resumes.
             if not self._can_continue():
                 return  # keeps the typed text - chat.error says why
             chat.chat_input = ""
-            chat.interview_runner.record_user_message(chat.interview_state, text)
-            self.continue_search()
+            self.request_continue(text)
             return
         chat.chat_input = ""
         chat.error = ""
@@ -792,6 +824,15 @@ class AgentPanelState:
         chat.interview_runner.send(chat.interview_state, text)
 
 
+_CONTINUE_MESSAGES = ("continue", "please continue", "continue please")
+
+
+def _is_continue(text: str) -> bool:
+    """True when a whole chat message asks to search on: the word "continue",
+    with or without "please", any case, ignoring punctuation around it."""
+    return " ".join((text or "").lower().strip(" \t\n.!").split()) in _CONTINUE_MESSAGES
+
+
 def _stored_search_markers(record: dict, messages: list[dict]) -> list[int]:
     """Where a stored chat's search segments began, as positions in its
     transcript: Start Search (the messages written before the run's
@@ -802,7 +843,7 @@ def _stored_search_markers(record: dict, messages: list[dict]) -> list[int]:
     first = sum(1 for m in interview if (m["created_at"] or "") < started_at)
     markers = [first]
     for i, m in enumerate(interview):
-        said_continue = m["role"] == "user" and (m["content"] or "").strip().lower() == "continue"
+        said_continue = m["role"] == "user" and _is_continue(m["content"])
         answered = i + 1 < len(interview) and interview[i + 1]["role"] != "user"
         if i >= first and said_continue and not answered:
             markers.append(i + 1)
@@ -1007,25 +1048,6 @@ def _draw_chat_feed(state: AgentPanelState, size: imgui.ImVec2) -> None:
     imgui.end_child()
 
 
-_FINISHED_TEXT = {
-    "goal_met": "goal met",
-    "budget_exhausted": "target not achieved within the budget",
-    "stopped_by_model": "the AI stopped without meeting the goal",
-    "stalled": "stopped early, no longer getting closer",
-    "failed": "failed",
-    "interrupted": "interrupted",
-    "cancelled": "stopped by you",
-}
-# ai_runs.stop_reason -> the rule that ended the search, in a few words.
-STOP_REASON_TEXT = {
-    "nothing_left": "nothing left to improve", "plateau": "no better design for a while",
-    "stalled": "no longer getting closer", "rounds": "round limit", "time": "time limit",
-    "simulations": "simulation limit", "model_stopped": "the AI stopped proposing",
-    "user_stopped": "stopped by you", "llm_failed": "AI requests failed", "internal_error": "internal error",
-}
-_STOP_POPUP_ID = "Stop search?"  # also the popup's title bar
-
-
 def _format_elapsed(seconds: float) -> str:
     seconds = int(seconds)
     return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
@@ -1054,27 +1076,6 @@ def _running_status_text(run_state) -> str:
     if current.search_attempt > 1:
         where += ", resumed after failed AI requests"
     return f"Search running: {where}, {doing} ({elapsed}){best_text}"
-
-
-def _finished_line(status: str, stop_reason: str | None, rounds: int) -> str:
-    outcome = _FINISHED_TEXT.get(status, status)
-    rule = STOP_REASON_TEXT.get(stop_reason)
-    return f"Search finished: {outcome} after {rounds} round(s)" + (f" ({rule})." if rule else ".")
-
-
-def _finished_status_text(run_state) -> str:
-    return _finished_line(run_state.status.value, run_state.stop_reason, len(run_state.rounds))
-
-
-def _chat_ending(chat: ChatSession) -> tuple[str, str | None]:
-    """How the chat's search ended, in one line, and code's report of it -
-    from the live run, or for a chat reopened from the sidebar from its
-    stored row."""
-    if chat.live or chat.record is None:
-        return _finished_status_text(chat.run_state), chat.run_state.outcome_report
-    record = chat.record
-    return (_finished_line(record["status"], record.get("stop_reason"), len(agent_sidebar.stored_rounds(chat.messages))),
-            record["error"])
 
 
 def _queued_text(state: AgentPanelState) -> str:
@@ -1107,96 +1108,57 @@ def _marker_text(chat: ChatSession, index: int) -> str:
     return "Search continued with a fresh budget."
 
 
+def _finished_message(chat: ChatSession) -> str:
+    """The chat reply that closes a search - from the live run, or for a chat reopened
+    from the sidebar from its stored row."""
+    from agent.femm_agent.services.scorer import tool_result
+
+    can_continue = not chat.read_only_reason
+    if chat.live or chat.record is None:
+        run = chat.run_state
+        best = run.best
+        return finished_summary.summary_text(
+            run.status.value, run.stop_reason, tool_result(best, run.spec) if best is not None else None,
+            run.baseline_coilset, best.coilset if best is not None else None, run.outcome_report, can_continue)
+    record = chat.record
+    baseline, best = agent_sidebar._coilsets(record)
+    return finished_summary.summary_text(record["status"], record.get("stop_reason"), record.get("best_tool_result"),
+                                         baseline, best, record["error"], can_continue)
+
+
+def _plan_marker_index(chat: ChatSession) -> int:
+    """The search marker where the plan in force began: the last revised plan the user
+    started, else the first search."""
+    run = chat.run_state
+    entries = list(run.budget_history) if run is not None else list((chat.record or {}).get("budget") or [])
+    revised = [e.get("segment", 0) - 1 for e in entries if e.get("memory") and e.get("segment")]
+    return max(revised, default=0)
+
+
 def _draw_search_marker(state: AgentPanelState, width: float, index: int) -> None:
     """The point in the chat where the `index`-th search segment was started
     (Start Search, or a "continue" - two can share a place in the chat when
     nothing was said between them). For the latest one: while it runs the live
     status is pinned above the input instead (always visible, even scrolled
-    up); once it ends this line says how it ended and offers Continue."""
+    up); once it ends this line says how it ended (Continue is the button above the input)."""
+    if index == _plan_marker_index(state.chat) and state.interview_state.spec is not None and not (
+            state.interview_state.finalized and not state.plan_confirmed):
+        _draw_plan_card(state, state.interview_state.spec, width, "Plan", "chat")
     imgui.separator()
-    imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + width)
     started_text = _marker_text(state.chat, index)
-    if index != len(state.search_markers) - 1:
-        imgui.text_colored(_ACCENT_COLOR, started_text)
-    elif state.phase == "finished":
-        ending, report = _chat_ending(state.chat)
-        imgui.text_colored(_ACCENT_COLOR, ending)
-        if report:
-            agent_candidate_card.draw_outcome_report(report)
-        if state.chat.read_only_reason:
-            # Nothing can be asked or continued here - the notice under the input says why.
-            imgui.pop_text_wrap_pos()
-            imgui.separator()
-            imgui.dummy(imgui.ImVec2(width, _MSG_GAP))
-            return
-        imgui.text_colored(_PLACEHOLDER_COLOR, 'Ask anything about this run. To search further toward the same goal, '
-                                               'reply "continue" or click Continue. To change the goal, say what '
-                                               "to change: the revised plan is shown here for you to start.")
-        busy_elsewhere = state.search_busy_elsewhere
-        chat = state.chat
-        if chat.queued == "continue":
-            if imgui.button(f"Remove from queue##continue_{index}"):
-                state.unqueue()
-            imgui.same_line()
-            imgui.text_disabled(_queued_text(state))
-        else:
-            imgui.begin_disabled(bool(chat.read_only_reason or chat.restoring or chat.interview_runner.busy))
-            if imgui.button(f"{'Queue Continue' if busy_elsewhere else 'Continue'}##continue_{index}"):
-                state.continue_search()
-            imgui.end_disabled()
-            if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-                imgui.set_tooltip((busy_elsewhere + "\n" if busy_elsewhere else "") +
-                                  "Keep searching: same goal, everything tried so far kept in memory. The budget "
-                                  "counts on from what was used (a fresh one if a limit ended the search).")
-    else:
-        imgui.text_colored(_ACCENT_COLOR, started_text)
+    if index == len(state.search_markers) - 1 and state.phase == "finished":
+        # How it ended is a chat reply, written in plain words from the best design's numbers.
+        _draw_message_bubble(_finished_message(state.chat), is_user=False, width=width)
+        return
+    imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + width)
+    imgui.text_colored(_ACCENT_COLOR, started_text)
+    if index == len(state.search_markers) - 1 and state.phase != "finished":
         imgui.text_colored(_PLACEHOLDER_COLOR, "You can keep asking questions while it runs; the baseline and "
-                                               "plan are locked.")
+                                               "plan are locked. If you are satisfied with the result and want to "
+                                               "stop, say so in the chat.")
     imgui.pop_text_wrap_pos()
     imgui.separator()
     imgui.dummy(imgui.ImVec2(width, _MSG_GAP))
-
-
-def _draw_chat_header(state: AgentPanelState) -> None:
-    """Phase label on the left. On the right: "Stop and keep the best" while
-    this chat's search runs, otherwise Delete for a saved chat. A new chat
-    is the sidebar's "+ New" - it never closes this one."""
-    labels = {"interview": "Planning", "running": "Searching - questions only",
-              "finished": "Finished - ask, continue or change the goal"}
-    right_edge = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
-    imgui.align_text_to_frame_padding()
-    imgui.text_disabled("Read-only" if state.chat.read_only_reason else labels.get(state.phase, ""))
-    if state.phase == "running":
-        stop_label = "Stop and keep the best"
-        stop_w = imgui.calc_text_size(stop_label).x + 20.0
-        imgui.same_line(max(right_edge - stop_w, 0.0))
-        if imgui.button(stop_label, imgui.ImVec2(stop_w, 0)):
-            imgui.open_popup(_STOP_POPUP_ID)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("End the search now and keep its best design. You can continue it later.")
-    elif state.chat.ai_run_id is not None:
-        delete_w = 70.0
-        imgui.same_line(max(right_edge - delete_w, 0.0))
-        imgui.begin_disabled(state.chat.restoring)
-        if imgui.button("Delete", imgui.ImVec2(delete_w, 0)):
-            state.sidebar.request_delete(state.chat.ai_run_id)  # the sidebar asks for confirmation
-        imgui.end_disabled()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Delete this chat and its search rounds.")
-    # begin_popup_modal() returns a tuple - unpack it (see configs_panel.py).
-    stop_open, _ = imgui.begin_popup_modal(_STOP_POPUP_ID, flags=imgui.WindowFlags_.always_auto_resize.value)
-    if stop_open:
-        imgui.text("Stop the search and keep the best design so far?")
-        imgui.text_disabled("It stops after the step in progress. Reply \"continue\" afterwards to search on.")
-        imgui.separator()
-        if imgui.button("Cancel##stop"):
-            imgui.close_current_popup()
-        imgui.same_line()
-        if imgui.button("Stop search"):
-            state.stop_search()
-            imgui.close_current_popup()
-        imgui.end_popup()
-    imgui.separator()
 
 
 def _draw_no_config_state(state: AgentPanelState, avail: imgui.ImVec2) -> None:
@@ -1253,14 +1215,13 @@ def _plan_metric_rows(spec) -> list[str]:
     return list(SIM_RESULT_METRICS) + [m for m in DERIVED_QUANTITIES if m in objective_metrics]
 
 
-def _draw_plan_metrics_table(state: AgentPanelState) -> None:
+def _draw_plan_metrics_table(state: AgentPanelState, spec, table_id: str = "plan") -> None:
     """The baseline's own 12-metric solve, with each objective's target
     highlighted on its row - what needs to change read off real numbers,
     not the model's free-text restatement of the plan."""
     from agent.input_chat.models.objective import SIM_RESULT_METRICS
     from agent.femm_agent.services.scorer import coil_diameters
 
-    spec = state.interview_state.spec
     objectives = {o.metric: o for o in spec.objectives}
     plan_distance = spec.distances[0]
     baseline_result = _baseline_result(state, plan_distance) or {}
@@ -1268,11 +1229,23 @@ def _draw_plan_metrics_table(state: AgentPanelState) -> None:
 
     at = f"at {plan_distance:g} mm" + (" (first of several)" if len(spec.distances) > 1 else "")
     imgui.text_colored(_ACCENT_COLOR, f"Target metrics (baseline solve {at})")
-    imgui.begin_child("plan_metrics_child", imgui.ImVec2(0, _PLAN_TABLE_H), imgui.ChildFlags_.borders.value)
-    if imgui.begin_table("plan_metrics_table", 3, imgui.TableFlags_.borders.value | imgui.TableFlags_.row_bg.value):
-        imgui.table_setup_column("Metric")
-        imgui.table_setup_column("Baseline")
-        imgui.table_setup_column("Requirement")
+    def requirement_text(metric: str) -> str | None:
+        obj = objectives.get(metric)
+        if obj is None:
+            return None
+        return (f"{'Required' if obj.required else 'Preferred'}: {obj.describe()}")
+
+    # The table scrolls on its own, both ways: the Requirement column is as wide as its longest
+    # text, so a narrow chat column scrolls sideways instead of cutting the text off.
+    requirement_w = max([imgui.calc_text_size(requirement_text(m) or "No requirement").x for m in _plan_metric_rows(spec)]
+                        + [imgui.calc_text_size("Requirement").x]) + 24.0
+    flags = (imgui.TableFlags_.borders.value | imgui.TableFlags_.row_bg.value
+             | imgui.TableFlags_.scroll_x.value | imgui.TableFlags_.scroll_y.value)
+    if imgui.begin_table(f"{table_id}_metrics_table", 3, flags, imgui.ImVec2(0, _PLAN_TABLE_H)):
+        imgui.table_setup_scroll_freeze(0, 1)  # the header stays while the rows scroll
+        imgui.table_setup_column("Metric", imgui.TableColumnFlags_.width_fixed.value, 150.0)
+        imgui.table_setup_column("Baseline", imgui.TableColumnFlags_.width_fixed.value, 130.0)
+        imgui.table_setup_column("Requirement", imgui.TableColumnFlags_.width_fixed.value, requirement_w)
         imgui.table_headers_row()
         for metric in _plan_metric_rows(spec):
             obj = objectives.get(metric)
@@ -1288,14 +1261,32 @@ def _draw_plan_metrics_table(state: AgentPanelState) -> None:
             imgui.text(f"{value:.6g} {unit}" if isinstance(value, (int, float)) else "-")
             imgui.table_next_column()
             if obj is not None:
-                imgui.text_colored(_ACCENT_COLOR, f"{'Required' if obj.required else 'Preferred'}: {obj.describe()}")
+                imgui.text_colored(_ACCENT_COLOR, requirement_text(metric))
             else:
                 # Not "keep as-is": nothing in scoring/ranking (or the search prompt) holds
                 # a metric with no objective near baseline - it's simply unconstrained and
                 # free to land wherever the search's other changes happen to put it.
                 imgui.text_disabled("No requirement")
         imgui.end_table()
-    imgui.end_child()
+
+
+def _draw_plan_card(state: AgentPanelState, spec, avail_width: float, title: str, table_id: str, notes=()) -> None:
+    """The plan itself - what was asked, the distances, and the baseline table with each
+    requirement on its row. Drawn under the proposal (with the Start button below it) and
+    again in the chat once the search has started, so the plan stays on record."""
+    imgui.text_colored(_ACCENT_COLOR, title)
+    for line in _plan_context_lines(spec):
+        imgui.push_text_wrap_pos(avail_width)
+        imgui.text_wrapped(line)
+        imgui.pop_text_wrap_pos()
+    # A revised plan: what changed and what the search starts from, written by
+    # code - so a change the model made unasked is seen before Start Search.
+    for line in notes:
+        imgui.push_text_wrap_pos(avail_width)
+        imgui.text_colored(_PLACEHOLDER_COLOR, line)
+        imgui.pop_text_wrap_pos()
+    imgui.dummy(imgui.ImVec2(0, 4))
+    _draw_plan_metrics_table(state, spec, table_id)
 
 
 def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
@@ -1305,19 +1296,8 @@ def _draw_plan_summary(state: AgentPanelState, avail_width: float) -> None:
     AgentRunner.submit() ever runs (see AgentPanelState.poll())."""
     revised = state.chat.revised_plan is not None
     imgui.separator()
-    imgui.text_colored(_ACCENT_COLOR, "Revised plan" if revised else "Proposed plan")
-    for line in _plan_context_lines(state.interview_state.spec):
-        imgui.push_text_wrap_pos(avail_width)
-        imgui.text_wrapped(line)
-        imgui.pop_text_wrap_pos()
-    # A revised plan: what changed and what the search starts from, written by
-    # code - so a change the model made unasked is seen before Start Search.
-    for line in state.revised_plan_notes():
-        imgui.push_text_wrap_pos(avail_width)
-        imgui.text_colored(_PLACEHOLDER_COLOR, line)
-        imgui.pop_text_wrap_pos()
-    imgui.dummy(imgui.ImVec2(0, 4))
-    _draw_plan_metrics_table(state)
+    _draw_plan_card(state, state.interview_state.spec, avail_width, "Revised plan" if revised else "Proposed plan",
+                    "plan", state.revised_plan_notes())
     imgui.dummy(imgui.ImVec2(0, 10))
 
     # Full-width primary action with the hint centered beneath it, instead of
@@ -1396,7 +1376,22 @@ def _draw_field_change_card(state: AgentPanelState, avail_width: float, pending:
     imgui.dummy(imgui.ImVec2(0, 4))
 
 
-_INPUT_HEIGHT = 64.0  # a real multi-line text area, not a single-line box
+_INPUT_HEIGHT = 64.0  # a real multi-line text area, not a single-line box; the least it is
+_INPUT_MAX_FRACTION = 0.45  # it grows with the text up to this share of the chat pane...
+_INPUT_MAX_HEIGHT = 380.0   # ...and never past this, then it scrolls
+_INPUT_PAD = (14.0, 10.0)
+
+
+def _chat_input_height(text: str, width: float, max_height: float) -> float:
+    """The input box fits what is typed or pasted: its wrapped text plus padding, from the
+    one-two-line minimum up to `max_height`, beyond which the box scrolls."""
+    wrap_w = max(width - 2 * _INPUT_PAD[0] - 16.0, 40.0)  # 16: room for the scrollbar
+    text_h = imgui.calc_text_size(text + "x", wrap_width=wrap_w).y  # the "x": a trailing newline still takes a line
+    return min(max(text_h + 2 * _INPUT_PAD[1] + 4.0, _INPUT_HEIGHT), max(max_height, _INPUT_HEIGHT))
+
+
+def _chat_input_max_height(pane_height: float) -> float:
+    return min(pane_height * _INPUT_MAX_FRACTION, _INPUT_MAX_HEIGHT)
 
 _BLOCKED_NOTICE_H = 96.0
 
@@ -1413,11 +1408,11 @@ def _draw_baseline_blocked_notice(state: AgentPanelState, avail_width: float, er
         state.retry_baseline()
 
 
-def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
+def _draw_chat_input_bar(state: AgentPanelState, avail_width: float, height: float = _INPUT_HEIGHT) -> None:
     """One rounded bar: the multi-line text area. Enter sends - there is no
     send button."""
     imgui.push_style_var(imgui.StyleVar_.frame_rounding.value, 12.0)
-    imgui.push_style_var(imgui.StyleVar_.frame_padding.value, imgui.ImVec2(14.0, 10.0))
+    imgui.push_style_var(imgui.StyleVar_.frame_padding.value, imgui.ImVec2(*_INPUT_PAD))
 
     text_w = max(avail_width, 80.0)
 
@@ -1427,7 +1422,7 @@ def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
     # box's background and placeholder are drawn here first, and the
     # widget's own fill/border are made transparent so they show through.
     box_pos = imgui.get_cursor_screen_pos()
-    box_max = imgui.ImVec2(box_pos.x + avail_width, box_pos.y + _INPUT_HEIGHT)
+    box_max = imgui.ImVec2(box_pos.x + avail_width, box_pos.y + height)
     draw_list = imgui.get_window_draw_list()
     draw_list.add_rect_filled(box_pos, box_max, imgui.get_color_u32(_INPUT_BG_COLOR), 12.0)
     if not state.chat_input and not state.chat_input_active:
@@ -1451,9 +1446,9 @@ def _draw_chat_input_bar(state: AgentPanelState, avail_width: float) -> None:
     # being the more common convention in other chat apps; a true
     # Shift+Enter would need custom key-callback handling this codebase
     # doesn't have anywhere else.
-    flags = imgui.InputTextFlags_.ctrl_enter_for_new_line.value
+    flags = imgui.InputTextFlags_.ctrl_enter_for_new_line.value | imgui.InputTextFlags_.word_wrap.value
     changed, new_text = imgui.input_text_multiline(
-        "##chat_input", state.chat_input, imgui.ImVec2(text_w, _INPUT_HEIGHT), flags,
+        "##chat_input", state.chat_input, imgui.ImVec2(text_w, height), flags,
     )
     imgui.pop_style_color(2)
     if changed:
@@ -1487,7 +1482,6 @@ _RESULTS_COL_W = 330.0
 def _draw_one_baseline_result(distance: float, run) -> None:
     imgui.text(f"Simulated at {distance:g} mm")
     if isinstance(run, dict):  # a cache hit - already done
-        imgui.text_disabled("(cached result)")
         draw_result_table(run["result"], table_id=f"agent_baseline_result_{distance:g}")
         return
     if run.status.value == "failed":
@@ -1509,6 +1503,13 @@ def _draw_baseline_results(state: AgentPanelState) -> None:
     while FEMM runs each one, then the same 12-quantity table as a manual
     run's detail view. One block per distance, stacked (scrolls within the
     box's own child window if there are several)."""
+    if not state.baseline_runs:
+        # A reopened chat whose baseline was never solved on this machine (an imported one).
+        imgui.push_text_wrap_pos(0.0)
+        imgui.text_disabled("The baseline's simulated results are not stored on this machine. "
+                            "They are simulated when the search continues.")
+        imgui.pop_text_wrap_pos()
+        return
     for i, distance in enumerate(sorted(state.baseline_runs)):
         if i > 0:
             imgui.separator()
@@ -1550,15 +1551,23 @@ def _draw_baseline_inputs(buffer: dict, limits: dict[str, str]) -> None:
             imgui.end_table()
 
 
-def draw_baseline_box(state: AgentPanelState, size: imgui.ImVec2, show_body: bool = True) -> None:
+def draw_baseline_box(state: AgentPanelState, size: imgui.ImVec2, show_body: bool = True,
+                      collapsible: bool = False) -> None:
     """One box for the baseline: the config picker, then (show_body) its
-    geometry, its own simulated results and its input parameters."""
+    geometry, its own simulated results and its input parameters. `collapsible`
+    puts an arrow before the picker that minimizes or maximizes the box (state.baseline_open)."""
     state.refresh_configs()
     imgui.begin_child("agent_baseline_pane", size, imgui.ChildFlags_.borders.value)
     names = [c["name"] for c in state.configs]
     ids = [c["id"] for c in state.configs]
     current_index = ids.index(state.selected_config_id) if state.selected_config_id in ids else -1
 
+    if collapsible:
+        if imgui.arrow_button("##baseline_toggle", imgui.Dir.up if state.baseline_open else imgui.Dir.down):
+            state.baseline_open = not state.baseline_open
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Minimize the baseline" if state.baseline_open else "Show the baseline")
+        imgui.same_line()
     imgui.align_text_to_frame_padding()
     imgui.text("Baseline")
     imgui.same_line()
@@ -1568,8 +1577,8 @@ def draw_baseline_box(state: AgentPanelState, size: imgui.ImVec2, show_body: boo
     changed, new_index = imgui.combo("##baseline_combo", current_index, names)
     imgui.end_disabled()
     if locked and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-        imgui.set_tooltip("Locked for this chat - click + New to start one on another baseline."
-                          if state.chat.search_started else "Wait for the reply to finish.")
+        imgui.set_tooltip("Wait for the reply to finish." if state.chat.interview_runner.busy
+                          else "Locked once you have typed in this chat - click + New to start one on another baseline.")
     if changed and not locked:
         state.request_baseline(ids[new_index])  # a chat with messages stays in the sidebar; this opens a new one
 
@@ -1606,7 +1615,6 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
         imgui.end_child()
         return
 
-    _draw_chat_header(state)
     avail = imgui.get_content_region_avail()
 
     running = state.phase == "running"
@@ -1624,13 +1632,18 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
               if show_plan else 0.0)
     pending_change = state.pending_field_change
     plan_h += _field_change_card_height(pending_change) if pending_change else 0.0
-    input_h = _INPUT_HEIGHT
+    input_h = _chat_input_height(state.chat_input, avail.x, _chat_input_max_height(avail.y))
     blocked_error = state.baseline_error if state.planning_blocked else None
     notice_h = _BLOCKED_NOTICE_H if blocked_error else 0.0
     # One line kept free under the input for a notice (read-only reason, an error).
     notes_h = imgui.get_text_line_height_with_spacing() if (
         state.chat.read_only_reason or state.interview_state.error or state.chat.error) else 0.0
-    feed_h = max(avail.y - input_h - plan_h - status_h - notice_h - notes_h - 8.0, 60.0)
+    # A search that ended (an interrupted one included) can be searched on: the button sits
+    # above the input, where it stays visible however far the chat has scrolled. A revised
+    # plan waiting has its own Start Search instead.
+    show_continue = state.can_continue and not show_plan
+    continue_h = imgui.get_frame_height_with_spacing() if show_continue else 0.0
+    feed_h = max(avail.y - input_h - plan_h - status_h - notice_h - notes_h - continue_h - 8.0, 60.0)
 
     _draw_chat_feed(state, imgui.ImVec2(avail.x, feed_h))
 
@@ -1652,12 +1665,15 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
         imgui.text_colored(_ACCENT_COLOR, running_text)
         imgui.pop_text_wrap_pos()
 
+    if show_continue:
+        _draw_continue_row(state)
+
     # Only disabled while a reply is being generated - the chat stays open
     # through the search and after it (follow-up questions, agent/femm_agent/services/followup.py).
     chat = state.chat
     imgui.begin_disabled(state.interview_runner.busy or blocked_error is not None or chat.restoring
                          or chat.read_only_reason is not None)
-    _draw_chat_input_bar(state, avail.x)
+    _draw_chat_input_bar(state, avail.x, input_h)
     imgui.end_disabled()
 
     for notice in (chat.read_only_reason, state.interview_state.error, chat.error):
@@ -1666,6 +1682,21 @@ def draw_chat(state: AgentPanelState, size: imgui.ImVec2) -> None:
             imgui.text_colored(_ERROR_COLOR, notice)
             imgui.pop_text_wrap_pos()
     imgui.end_child()
+
+
+def _draw_continue_row(state: AgentPanelState) -> None:
+    """Continue (or, while another chat's search runs, Queue Continue) for an ended search;
+    Remove from queue once it is waiting its turn."""
+    if state.chat.queued == "continue":
+        if imgui.button("Remove from queue##continue_pinned"):
+            state.unqueue()
+        imgui.same_line()
+        imgui.text_disabled(_queued_text(state))
+        return
+    if imgui.button("Queue Continue" if state.search_busy_elsewhere else "Continue search"):
+        state.request_continue()
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Search on toward the same goal, keeping everything already tried.")
 
 
 def _round_header(r) -> str:
@@ -1686,8 +1717,8 @@ def _round_timing_text(r, settings) -> str:
     from datetime import datetime, timezone
 
     if r.evaluating_started_at is None:
-        if r.done_at is not None:
-            return ""  # no tool call this round - nothing to time-split
+        if r.done_at is not None or r.status.value == "done":
+            return ""  # no tool call this round (or no timing kept) - nothing to time-split, and nothing still running
         elapsed = (datetime.now(timezone.utc) - r.proposing_started_at).total_seconds()
         try_text = f", try {r.ai_try} of {settings.round_llm_attempts}" if r.ai_try > 1 else ""
         return f"[AI thinking: {elapsed:.0f}s so far, limit {settings.llm_time_limit_s:.0f}s{try_text}]"
@@ -1780,7 +1811,6 @@ def _draw_summary(state: AgentPanelState, size: imgui.ImVec2) -> None:
         dataclasses.asdict(best.coilset), tool_result(best, run_state.spec), spec_summary,
         distances, state.summary_distance, audit,
         baseline_coilset=run_state.baseline_coilset, best_coilset=best.coilset,
-        report=run_state.outcome_report,
     )
 
     # Same collapsed round-by-round detail as the stored replay of this
@@ -1802,6 +1832,13 @@ def _draw_summary(state: AgentPanelState, size: imgui.ImVec2) -> None:
     imgui.end_child()
 
 
+def _draw_baseline_for_results(state: AgentPanelState, width: float) -> None:
+    """The baseline box above a search's progress or results (running, finished or reopened):
+    the same box as while planning, with an arrow that minimizes it down to the picker row."""
+    height = _BASELINE_RUNNING_H if state.baseline_open else _BASELINE_PICKER_ONLY_H
+    draw_baseline_box(state, imgui.ImVec2(width, height), show_body=state.baseline_open, collapsible=True)
+
+
 def draw_right_column(state: AgentPanelState, size: imgui.ImVec2) -> None:
     """The right column, top to bottom - main.py doesn't need to know which
     is showing. Before a search: the Baseline box alone, filling the column.
@@ -1813,13 +1850,13 @@ def draw_right_column(state: AgentPanelState, size: imgui.ImVec2) -> None:
     fill = imgui.ImVec2(size.x, 0)
     chat = state.chat
     if not chat.live and chat.record is not None and chat.search_started:
-        draw_baseline_box(state, imgui.ImVec2(size.x, _BASELINE_PICKER_ONLY_H), show_body=False)
+        _draw_baseline_for_results(state, size.x)
         chat.summary_distance = agent_sidebar.draw_stored_run(chat.record, chat.messages, chat.summary_distance, fill)
     elif state.run_state is None:
         draw_baseline_box(state, fill)
     elif _search_finished(state):
-        draw_baseline_box(state, imgui.ImVec2(size.x, _BASELINE_PICKER_ONLY_H), show_body=False)
+        _draw_baseline_for_results(state, size.x)
         _draw_summary(state, fill)
     else:
-        draw_baseline_box(state, imgui.ImVec2(size.x, _BASELINE_RUNNING_H))
+        _draw_baseline_for_results(state, size.x)
         draw_progress(state, fill)

@@ -55,15 +55,6 @@ def _fmt(value) -> str:
     return f"{value:.6g}" if isinstance(value, float) else str(value)
 
 
-def design_name(candidate: dict) -> str:
-    """ "C7", or "C7, built on C3" - how the search itself names a simulated
-    design. "" for a rejected proposal and for runs saved before designs had labels."""
-    label, base = candidate.get("label"), candidate.get("base_label")
-    if not label:
-        return f"built on {base}" if base else ""
-    return f"{label}, built on {base}" if base else label
-
-
 def _draw_input_table(table_id: str, delta: dict, baseline_buffer: dict, step_fields=None) -> None:
     """step_fields: the fields this proposal itself changed, when it was built on
     an earlier design - marked with *, the rest being that design's changes."""
@@ -203,9 +194,6 @@ def draw_round_block(round_id: str, header: str, timing_text: str, reasoning: st
 
 def draw_candidate_card(card_id: str, candidate: dict, baseline_buffer: dict, spec_summary: dict, distance: float) -> None:
     """candidate: a plain dict shaped like agent.state.CandidateResult."""
-    name = design_name(candidate)
-    if name:
-        imgui.text_colored(_MUTED_COLOR, name)
     rationale = candidate.get("rationale")
     if rationale:
         imgui.push_text_wrap_pos(0.0)
@@ -278,12 +266,13 @@ _STATUS_HEADLINES = {
 }
 
 
-def draw_outcome_report(report: str) -> None:
-    """Why a finished search didn't meet its goal (agent/femm_agent/services/outcome.py) - the
-    live panel, the chat and a reopened chat all show the same text."""
+def draw_outcome_report(report: str, goal_met: bool = False) -> None:
+    """Why a search ended with no design to summarize (agent/femm_agent/services/outcome.py).
+    A search that has one says how it ended in the chat, not in the Search Summary."""
     imgui.push_text_wrap_pos(0.0)
     for i, line in enumerate(_ascii(report).splitlines()):
-        (imgui.text_colored(_FAIL_COLOR, line) if i == 0 else imgui.text_colored(_MUTED_COLOR, line))
+        first = _MUTED_COLOR if goal_met else _FAIL_COLOR
+        imgui.text_colored(first if i == 0 else _MUTED_COLOR, line)
     imgui.pop_text_wrap_pos()
 
 
@@ -446,58 +435,10 @@ def draw_full_input_table(pane_id: str, baseline_buffer: dict, best_buffer: dict
         imgui.end_table()
 
 
-def _trace_thickness_visible(field: str, baseline_buffer: dict, best_buffer: dict) -> bool:
-    """loop_trace_thickness/tank_trace_thickness only shift the TC-side
-    stack outward (tank_ferrite/tc_shield/backplane, if present);
-    rc_trace_thickness only shifts the RC-side stack (rc_ferrite/rc_shield/
-    rc_backplane). coil_diagram.py's axial math technically reads these
-    three fields (they're in DIAGRAM_FIELDS), but with none of the relevant
-    side's optional layers present, changing one moves nothing the diagram
-    actually draws - the coil bands themselves are fixed-size markers, not
-    a to-scale render of copper thickness (see that module's docstring).
-    Checked against BOTH buffers, not just baseline, since a search that
-    turns a feature on mid-run is exactly the case this distinction matters
-    for."""
-    if field == "loop_trace_thickness" or field == "tank_trace_thickness":
-        flags = ("tank_ferrite_present", "tc_shield", "backplane")
-    elif field == "rc_trace_thickness":
-        flags = ("rc_ferrite_present", "rc_shield", "rc_backplane")
-    else:
-        return True
-    return any(baseline_buffer.get(f) or best_buffer.get(f) for f in flags)
-
-
-def _draw_diagram_change_caption(changed_fields: set, baseline_buffer: dict, best_buffer: dict) -> None:
-    """Right under the two diagrams: which of the proposal's changed
-    fields the diagram actually draws, and which it can't - "the two
-    pictures look the same" is a real, recurring complaint when a search
-    only touches trace width/thickness/spacing or turn count, none of
-    which coil_diagram.py models at any scale (see its own module
-    docstring) - this spells out the real numbers either way, instead of
-    leaving "why didn't the picture change" to be guessed at."""
-    if not changed_fields:
-        return
-
-    shown = {f for f in changed_fields
-             if f in coil_diagram.DIAGRAM_FIELDS and _trace_thickness_visible(f, baseline_buffer, best_buffer)}
-    hidden = sorted(changed_fields - shown)
-    shown = sorted(shown)
-
-    def _pairs(fields):
-        return ", ".join(f"{f}: {_fmt(baseline_buffer.get(f))} -> {_fmt(best_buffer.get(f))}" for f in fields)
-
-    imgui.push_text_wrap_pos(0.0)
-    if shown:
-        imgui.text_colored(_WHY_COLOR, f"Reflected in the diagram: {_pairs(shown)}")
-    if hidden:
-        imgui.text_colored(_MUTED_COLOR, f"Not drawn above (trace/turn-level detail - see Inputs below): {_pairs(hidden)}")
-    imgui.pop_text_wrap_pos()
-
-
 def draw_search_summary(pane_id: str, status: str, rounds: list[tuple[int, list[dict]]], timing_text: str,
                         baseline_buffer: dict, best_buffer: dict, best_tool_result: dict, spec_summary: dict,
                         distances: list[float], selected_distance: float, audit: dict | None,
-                        baseline_coilset=None, best_coilset=None, report: str | None = None) -> float:
+                        baseline_coilset=None, best_coilset=None) -> float:
     """A finished search in one view - shared by the live panel (the moment
     a search ends) and the stored-run replay, from plain dicts: headline, best
     vs. baseline geometry, the full result table (baseline vs. best, every
@@ -536,14 +477,9 @@ def draw_search_summary(pane_id: str, status: str, rounds: list[tuple[int, list[
     imgui.separator()
     goal_met = best_tool_result.get("goal_met", False)
     headline = _STATUS_HEADLINES.get(status, status)
-    imgui.text_colored(
-        _PASS_COLOR if goal_met else _FAIL_COLOR,
-        f"{headline} - {len(rounds)} rounds, {len(steps)} candidates tried, the proposed design was step {best_label}.",
-    )
+    imgui.text_colored(_PASS_COLOR if goal_met else _FAIL_COLOR, f"{headline} - proposed design: step {best_label}")
     if timing_text:
         imgui.text_disabled(timing_text)
-    if report:
-        draw_outcome_report(report)
     if len(distances) > 1:
         imgui.align_text_to_frame_padding()
         imgui.text("Viewing distance:")
@@ -564,7 +500,6 @@ def draw_search_summary(pane_id: str, status: str, rounds: list[tuple[int, list[
     coil_diagram.draw(best_buffer, distance, imgui.ImVec2(half_w, _SUMMARY_DIAGRAM_H),
                       child_id=f"{pane_id}_best_diagram", title=f"Proposed (step {best_label})",
                       femm_label=f"{baseline_name} proposed step {best_label}")
-    _draw_diagram_change_caption(changed_fields, baseline_buffer, best_buffer)
 
     imgui.spacing()
     imgui.text(f"Result: baseline vs. proposed at {distance:g} mm")

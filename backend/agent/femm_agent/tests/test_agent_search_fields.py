@@ -134,7 +134,7 @@ def test_invalid_geometry_is_rejected_without_a_single_solve(monkeypatch):
     jobs = _CountingJobs()
     reply = {"role": "assistant", "content": "", "tool_calls": [
         {"id": "c1", "type": "function", "function": {"name": "propose_coilset",
-                                                      "arguments": _args(tank_center_r=0.5)}}]}  # winding crosses the axis
+                                                      "arguments": _args(tank_turn_spacing=2.5)}}]}  # turns closer than a trace is wide
     monkeypatch.setattr(optimize, "call_llm", lambda messages, tools, **kwargs: reply)
     optimize.optimize_loop(state, jobs)
 
@@ -142,8 +142,8 @@ def test_invalid_geometry_is_rejected_without_a_single_solve(monkeypatch):
         "only the baseline was ever solved"
     (candidate,) = state.rounds[0].candidates
     assert not candidate.valid and candidate.error_code == "invalid_geometry"
-    assert candidate.candidate_coilset["tank_center_r"] == 0.5, "the geometry is still kept for the GUI to draw"
-    assert "tank" in candidate.error and "too large for a center radius" in candidate.error
+    assert candidate.candidate_coilset["tank_turn_spacing"] == 2.5, "the geometry is still kept for the GUI to draw"
+    assert "tank" in candidate.error and "turn space" in candidate.error
 
 
 # ---- the fixed error format ---------------------------------------------------------------------
@@ -161,7 +161,7 @@ def _all_rejections(monkeypatch):
         "out_of_range": _prepare(_args(num_tank_layers=16)),
         "not_allowed_value": _prepare(_args(loop_trace_thickness=0.5)),
         "no_change": _prepare(_args(tank_center_r=baseline.tank_center_r)),
-        "invalid_geometry": _prepare(_args(tank_center_r=0.5)),
+        "invalid_geometry": _prepare(_args(tank_turn_spacing=2.5)),
     }
     results = {code: p.rejection.as_result() for code, p in prepared.items()}
 

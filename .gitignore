@@ -34,17 +34,6 @@ backend/data/femm_automation.db-shm
 # next to them.
 backend/data/femm_models/
 
-# Local-only notes on writing system prompts (kept on disk, not in the repo)
-docs/agent-skills.md
-
-# Local-only tooling and scratch (kept on disk, not in the repo)
-template/
-.claude/
-
-# Personal Claude Code files
-CLAUDE.local.md
-.claude/settings.local.json
-
 # Search benchmark working copy: database copy, results and full AI request logs
 # (backend/agent/benchmark.py). The summary is docs/summarize_result.md.
 backend/data/benchmark/

@@ -16,7 +16,7 @@ frame. Two views share the panel:
 v1/v2 scope (per plan): a proportional schematic in both views - sized/
 positioned by real geometry, but turn count, trace width, winding path, and
 the sub-mm per-PCB-layer offset inside draw_coil_traces() are not modeled -
-not a literal render. See docs/GUI.md for the reasoning.
+not a literal render. See DESIGN.md for the reasoning.
 """
 
 from imgui_bundle import imgui

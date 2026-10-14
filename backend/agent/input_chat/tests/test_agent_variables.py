@@ -141,7 +141,11 @@ def test_a_baseline_outside_a_table_limit_is_named_but_code_floors_do_not_apply_
     assert "num_tank_layers" in problem and "1 to 8" in problem
     assert limit_problems(_baseline(num_tank_layers=12), VariableSpec(excluded_fields={"num_tank_layers"})) == [], \
         "an excluded field is never proposed, so its limit does not block the search"
-    assert limit_problems(_baseline(num_tank_turns=0)) == [], "a tank-less baseline is below the count floor and still opens"
+    no_limits = {name: FieldRule(enabled=rule.enabled) for name, rule in DEFAULT_SEARCH_FIELDS.items()}
+    assert limit_problems(_baseline(num_tank_turns=0), table=no_limits) == [], \
+        "a tank-less baseline is below the count floor and still opens when the table sets no limit"
+    (problem,) = limit_problems(_baseline(num_tank_turns=0))
+    assert "num_tank_turns" in problem and "3 to 12" in problem, "the shipped limits name the field and the range"
 
 
 def test_runs_stored_before_the_table_are_audited_by_the_old_rule():

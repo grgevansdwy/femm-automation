@@ -23,7 +23,6 @@ from agent.input_chat.models.objective import QUANTITY_GLOSSES, is_per_distance
 from agent.femm_agent.models.schema import _THICKNESS_ENUM, limit_text
 from agent.femm_agent.services.scorer import coil_diameters
 from agent.input_chat.models.variables import FIELD_GROUPS
-from agent.settings.settings import AgentSettings
 from agent.settings.templating import render
 
 _METAL_FEATURES = ("tc_shield", "rc_shield", "backplane", "rc_backplane")

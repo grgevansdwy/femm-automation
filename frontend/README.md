@@ -7,7 +7,7 @@ at a given RC separation distance, and see its self-inductance, mutual
 inductance, and ESR - one local process, no browser, no HTTP.
 
 Replaced the old FastAPI web app (`legacy/webapp/`, removed from the tree on
-2026-09-18 - still in git history at commit `321b8d7`). See `docs/GUI.md` for what was built and its known
+2026-09-18 - still in git history at commit `321b8d7`). See DESIGN.md for what was built and its known
 concerns.
 
 ## Prerequisites
@@ -44,7 +44,7 @@ tabs, everything visible at once:
   silently overwriting). **Delete removes any config, including
   built-ins, permanently** - a confirmation popup stands between the button
   and the actual deletion, but there's still no undo once confirmed (see
-  `docs/GUI.md`'s Concerns for the two real accidental deletions that led
+  git history for the two real accidental deletions that led
   to that popup existing).
 - **Right, top: Coil Geometry** - two live views of the selected config,
   redrawn every frame as you edit the form or change the Run distance: a
@@ -53,7 +53,7 @@ tabs, everything visible at once:
   space - Loop below Tank on the transmit side, RC drawn `distance` mm
   above them facing down, with ferrite/shield/backplane stacked further out
   on each side when present. Proportional, not a literal turn-by-turn
-  render (see `docs/GUI.md` for the scope) - **Open in FEMM** on its title
+  render (see DESIGN.md for the scope) - **Open in FEMM** on its title
   row draws the real thing (see below).
 - **Right, middle: Run** - pick a config and an RC separation distance
   (mm), then **Run**. If that exact geometry + distance was already solved
@@ -102,7 +102,7 @@ solver's first of three solves), an `mi_saveas()`, and an
 `mi_zoomnatural()`.
 
 Requirements: Wine, and FEMM 4.2 installed under it - see
-`docs/Engine.md`. Without either, the button says so instead of
+DESIGN.md. Without either, the button says so instead of
 failing silently. `FEMM_EXE` overrides where `femm.exe` is looked for
 (default `~/.wine/drive_c/femm42/bin/femm.exe`).
 

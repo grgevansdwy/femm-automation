@@ -11,6 +11,7 @@ from agent.repositories import agent_settings_repository
 from agent.settings.prompt_defs import PROMPT_DEFS
 from agent.settings.settings import AgentSettings, load_settings
 from frontend.screen_settings.settings_panel import SettingsPanelState
+from frontend.services import toast
 
 
 def test_opens_on_the_defaults_with_nothing_to_save():
@@ -25,12 +26,12 @@ def test_editing_a_number_marks_it_changed_and_save_stores_only_that():
 
     assert state.save() is True
     assert agent_settings_repository.load_overrides() == {"candidates_per_round": 2}
-    assert not state.dirty and load_settings().candidates_per_round == 2 and "Saved" in state.message
+    assert not state.dirty and load_settings().candidates_per_round == 2 and toast.active()[-1] == ("Settings saved.", False)
 
 
-def test_the_screen_offers_one_prompt_and_six_numbers():
+def test_the_screen_offers_one_prompt_and_its_numbers():
     from frontend.screen_settings import settings_panel
-    assert settings_panel.SECTIONS == ("System Prompt", "LLM & Budget", "Field Config")
+    assert settings_panel.SECTIONS == ("Field Config", "System Prompt", "LLM & Budget")
     assert settings_panel.SHOWN_PROMPT == "search_system"
     assert settings_panel.SHOWN_FIELDS == ("api_base_url", "model", "max_tool_calls", "search_time_limit_s",
                                            "max_simulations", "candidates_per_round")
@@ -107,21 +108,14 @@ def test_preview_shows_each_placeholder_as_what_it_stands_for():
     assert "{{#n_candidates}}" in preview and "{{^n_candidates}}" in preview, "block tags stay so every branch can be read"
 
 
-def test_discard_and_reset_all():
+def test_discard():
     state = SettingsPanelState()
     state.set_field("model", "other")
     state.set_prompt("followup_system", "x {{run_data}}")
     state.discard()
     assert not state.dirty and state.draft.model == AgentSettings().model
+    assert toast.active()[-1] == ("Changes discarded.", False)
 
-    state.set_field("model", "other")
-    assert state.save()
-    state.reset_all()
-    assert state.dirty and state.draft == AgentSettings(), "reset is a draft change until saved"
-    assert state.save() and agent_settings_repository.load_overrides() == {}
-
-
-# ---- the Field Config page ----------------------------------------------------------------------
 
 def test_search_fields_page_lists_every_numeric_field_once_in_the_forms_groups():
     from agent.input_chat.models.variables import DEFAULT_SEARCH_FIELDS
@@ -137,7 +131,7 @@ def test_search_fields_page_lists_every_numeric_field_once_in_the_forms_groups()
 def test_unticking_a_field_and_setting_limits_is_saved_as_only_those_rows():
     state = SettingsPanelState()
     assert state.search_rule("tank_trace_width").enabled and not state.search_rule("tank_mu").enabled
-    assert state.limit_text("num_tank_layers", "max") == "8" and state.limit_text("tank_center_r", "max") == ""
+    assert state.limit_text("num_tank_layers", "max") == "8" and state.limit_text("tank_center_r", "max") == "120"
 
     state.set_search_enabled("tank_trace_width", False)
     state.set_limit_text("tank_center_r", "max", "80")
@@ -146,7 +140,7 @@ def test_unticking_a_field_and_setting_limits_is_saved_as_only_those_rows():
 
     assert state.save() is True
     assert agent_settings_repository.load_overrides() == {"search_fields": {
-        "tank_trace_width": {"enabled": False, "min": None, "max": None},
+        "tank_trace_width": {"enabled": False, "min": None, "max": 10},
         "tank_center_r": {"enabled": True, "min": 20.5, "max": 80},
     }}
     assert not SettingsPanelState().search_rule("tank_trace_width").enabled, "a fresh panel loads what was saved"
@@ -169,7 +163,7 @@ def test_half_typed_or_inconsistent_limits_block_save():
     state.set_limit_text("tank_center_r", "max", "8o")
     assert state.limit_text("tank_center_r", "max") == "8o", "what was typed stays in the box"
     assert state.save() is False and any("tank_center_r: maximum must be a number" in p for p in state.problems())
-    assert state.search_rule("tank_center_r").max is None, "text that isn't a number is never stored as a limit"
+    assert state.search_rule("tank_center_r").max == 120, "text that isn't a number is never stored as a limit"
 
     state.set_limit_text("tank_center_r", "max", "50")
     state.set_limit_text("tank_center_r", "min", "60")
@@ -179,13 +173,64 @@ def test_half_typed_or_inconsistent_limits_block_save():
 
     state.set_limit_text("loop_r", "min", "x")
     state.discard()
-    assert state.problems() == [] and state.limit_text("loop_r", "min") == ""
+    assert state.problems() == [] and state.limit_text("loop_r", "min") == "25"
 
 
-def test_reset_everything_puts_the_table_back():
+def test_back_with_nothing_unsaved_just_leaves_and_with_changes_asks_first():
     state = SettingsPanelState()
-    state.set_search_enabled("tank_mu", True)
-    assert state.save() is True
-    state.reset_all()
-    assert not state.search_rule("tank_mu").enabled and state.save() is True
-    assert agent_settings_repository.load_overrides() == {}
+    assert state.section == "Field Config", "the screen opens on Field Config"
+    assert state.request_leave() is True and not state.leaving
+    assert state.take_leave(), "Back with nothing unsaved leaves at once"
+
+    state.set_field("candidates_per_round", 2)
+    assert state.request_leave() is False and state.leaving
+    state.keep_editing()
+    assert not state.leaving and state.dirty and not state.take_leave()
+
+    state.request_leave()
+    state.discard_and_leave()
+    assert not state.dirty and state.take_leave() and not state.take_leave(), "leaving is taken once"
+    assert load_settings().candidates_per_round == AgentSettings().candidates_per_round
+
+    state.set_field("candidates_per_round", 3)
+    state.request_leave()
+    state.save_and_leave()
+    assert state.take_leave() and load_settings().candidates_per_round == 3
+
+
+def test_back_does_not_leave_while_a_limit_box_holds_text_that_is_not_a_number():
+    state = SettingsPanelState()
+    state.set_limit_text("loop_r", "min", "1.2x")
+    assert state.request_leave() is False and state.leaving
+    state.save_and_leave()
+    assert not state.take_leave() and state.leaving, "it cannot be saved, so the question stays open"
+    state.discard_and_leave()
+    assert state.take_leave() and state.limit_text("loop_r", "min") == "25", "back to the shipped limit"
+
+
+def test_save_as_default_remembers_the_settings_and_reset_to_my_default_returns_to_them():
+    state = SettingsPanelState()
+    assert state.user_default is None
+
+    state.reset_to_user_default()  # nothing remembered yet: leaves the draft alone
+    assert state.draft == AgentSettings()
+
+    state.set_field("candidates_per_round", 2)
+    state.set_limit_text("loop_r", "min", "0.20334")
+    assert state.save_as_default() is True
+    assert toast.active()[-1] == ("Saved as your default.", False)
+    assert load_settings().candidates_per_round == 2, "it is also saved as the current settings"
+    assert SettingsPanelState().user_default.candidates_per_round == 2, "and survives reopening the screen"
+    assert SettingsPanelState().search_rule("loop_r").min == 0.20334
+
+    state.set_field("candidates_per_round", 5)
+    assert state.save() is True and load_settings().candidates_per_round == 5
+    state.reset_to_user_default()
+    assert state.draft.candidates_per_round == 2 and state.draft.search_fields == state.user_default.search_fields
+
+
+def test_save_as_default_does_nothing_while_the_settings_have_a_problem():
+    state = SettingsPanelState()
+    state.set_field("candidates_per_round", 0)
+    assert state.problems() and state.save_as_default() is False
+    assert state.user_default is None and agent_settings_repository.load_user_default() is None

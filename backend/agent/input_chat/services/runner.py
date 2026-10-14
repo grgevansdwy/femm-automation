@@ -86,7 +86,8 @@ class InterviewRunner:
         self._run_turn_async(state, lambda: run_interview_turn(state, should_abort=lambda: self.discarded,
                                                                 log=self._phase_log("interview")))
 
-    def send_followup(self, state: InterviewState, run_state, user_message: str, allow_replan: bool = False) -> None:
+    def send_followup(self, state: InterviewState, run_state, user_message: str, allow_replan: bool = False,
+                      stop_search=None) -> None:
         """A message after the search has started (running or finished) -
         agent/femm_agent/services/followup.py, same transcript. Persisted under the
         same ai_run as the planning chat, after it, so History's
@@ -96,12 +97,13 @@ class InterviewRunner:
         to change the goal into a revised plan (state.spec; the row moves to
         'plan_ready'). Only a caller that can then show that plan and start it
         (AgentRunner.start_revised()) should pass True. While the search runs
-        the turn has no tools either way."""
+        the turn has no tools either way - except stop_search (a callable): while it runs the
+        model may stop the search for a user who asked to."""
         from agent.femm_agent.services.followup import run_followup_turn
         self._run_turn_async(state, lambda: run_followup_turn(state, user_message, run_state,
                                                               should_abort=lambda: self.discarded,
                                                               log=self._phase_log("followup"),
-                                                              allow_replan=allow_replan))
+                                                              allow_replan=allow_replan, stop_search=stop_search))
 
     def record_user_message(self, state: InterviewState, user_message: str) -> None:
         """Adds a user message that code acts on itself (no AI turn) to the

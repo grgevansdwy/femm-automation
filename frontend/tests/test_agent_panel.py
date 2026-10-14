@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import frontend._sim_path  # noqa: F401 - adds backend to sys.path
 
 from frontend.services.job_runner import JobRunner
-from frontend.screen_agent.agent_panel import AgentPanelState, _finished_status_text, _message_display_text
+from frontend.screen_agent.agent_panel import AgentPanelState, _message_display_text
 
 
 def _poll_until(predicate, timeout=300, interval=0.1):
@@ -116,10 +116,10 @@ def test_interview_hands_off_to_a_real_optimize_run_only_after_confirmation():
     assert get_ai_run(finished_id)["status"] == finished_status
 
 
-def test_picking_another_baseline_opens_a_new_chat_and_keeps_the_one_with_messages(monkeypatch):
+def test_the_baseline_is_locked_once_anything_is_typed_in_the_chat(monkeypatch):
     """A scripted interview AI - no server needed."""
     from agent.input_chat.services import interview
-    from agent.repositories.ai_run_repository import get_ai_run, list_ai_runs
+    from agent.repositories.ai_run_repository import list_ai_runs
     from engine.repositories.coilset_repository import restore_config, get_config
 
     other = {**get_config("base_coil"), "id": "other_coil", "name": "other_coil"}
@@ -130,27 +130,34 @@ def test_picking_another_baseline_opens_a_new_chat_and_keeps_the_one_with_messag
     state = AgentPanelState(JobRunner())
     state.select_config("base_coil")
     untouched = state.chat
+    assert not state.baseline_locked
     state.request_baseline("base_coil")
     assert state.chat is untouched, "re-picking the same baseline does nothing"
 
-    # An empty chat has nothing to keep: its unsent draft moves to the new one.
-    state.chat_input = "half-typed objective"
+    # Nothing typed yet: the baseline can still be changed, in the same empty chat.
     state.request_baseline("other_coil")
-    assert state.selected_config_id == "other_coil" and state.chat_input == "half-typed objective"
-    assert list_ai_runs() == []
+    assert state.selected_config_id == "other_coil" and list_ai_runs() == []
 
-    # A chat with messages stays as it is - still planning, and it can be opened again.
+    # An unsent draft already locks it.
+    state.chat_input = "half-typed objective"
+    assert state.baseline_locked
+    state.request_baseline("base_coil")
+    assert state.selected_config_id == "other_coil" and state.chat_input == "half-typed objective"
+    state.chat_input = ""
+    assert not state.baseline_locked
+
+    # A sent message locks it for good: "+ New" is the way to another baseline.
+    state.chat_input = "half-typed objective"
     state.send_chat()
     _poll_until(lambda: not state.interview_runner.busy, timeout=10)
-    first_id, first_chat = state.interview_runner.ai_run_id, state.chat
+    assert state.baseline_locked
+    first_chat = state.chat
     state.request_baseline("base_coil")
-    assert state.selected_config_id == "base_coil" and not state.interview_state.transcript
-    assert state.interview_runner.ai_run_id is None and state.chat_input == ""
-    assert get_ai_run(first_id)["status"] == "interviewing", "not cancelled, not deleted"
-
-    state.open_chat(first_id)
     assert state.chat is first_chat and state.selected_config_id == "other_coil"
     assert [m["content"] for m in state.interview_state.transcript] == ["half-typed objective", "At which distances?"]
+
+    state.new_chat("base_coil")
+    assert state.selected_config_id == "base_coil" and not state.baseline_locked and not state.interview_state.transcript
 
 
 # --- run lifecycle, Stop and Continue: scripted AI and an instant solver, no server needed ---------
@@ -281,7 +288,8 @@ def test_stop_and_keep_the_best_ends_the_search_but_stays_on_the_run(monkeypatch
     assert state.run_state is run_state, "the chat stays on the stopped run"
     assert (row["status"], row["stop_reason"], row["best_round"]) == ("cancelled", "user_stopped", 1)
     assert run_state.best.coilset.tank_center_r == 71.0 and run_state.outcome_report.startswith("Target not achieved: you stopped")
-    assert _finished_status_text(run_state) == "Search finished: stopped by you after 2 round(s) (stopped by you)."
+    from frontend.screen_agent.agent_panel import _finished_message
+    assert "The search was stopped by you." in _finished_message(state.chat)
 
 
 def test_typing_continue_resumes_the_same_run_with_a_fresh_budget(monkeypatch):
@@ -304,16 +312,22 @@ def test_typing_continue_resumes_the_same_run_with_a_fresh_budget(monkeypatch):
     assert list_messages(run_state.id, phase="interview")[-1]["content"] == "Continue", "the chat shows why it resumed"
     assert "'tank_center_r': 71.0" in calls[2][2]["content"], "the model still knows what the first segment tried"
 
-    # The Continue button is the same function; a message that merely contains the word is a question.
-    assert state.continue_search()
+    # The Continue button records the same message; a message that merely contains the word is a question.
+    assert state.can_continue and state.request_continue()
     _finished(state)
     assert len(run_state.rounds) == 6 and len(state.search_markers) == 3
+    assert list_messages(run_state.id, phase="interview")[-1]["content"] == "continue"
+    state.chat_input = "Please continue."
+    state.send_chat()
+    assert not state.interview_runner.busy, "code handles it: no AI turn"
+    _finished(state)
+    assert len(run_state.rounds) == 8 and len(state.search_markers) == 4
     monkeypatch.setattr("agent.femm_agent.services.followup.call_llm",
                         lambda messages, tools, **kwargs: {"role": "assistant", "content": "It ran out of rounds."})
     state.chat_input = "should I continue?"
     state.send_chat()
     _poll_until(lambda: not state.interview_runner.busy, timeout=10)
-    assert len(run_state.rounds) == 6 and state.interview_state.transcript[-1]["content"] == "It ran out of rounds."
+    assert len(run_state.rounds) == 8 and state.interview_state.transcript[-1]["content"] == "It ran out of rounds."
 
 
 # --- changing the goal after a search (M5): the revised plan card and Start Search ---------------
@@ -408,18 +422,27 @@ def test_start_search_on_a_revised_plan_waits_for_the_baseline_at_a_new_distance
     assert state.chat.error == "The baseline is still being simulated at 8 mm." and run_state.segment == 1
 
 
-def test_while_the_search_runs_the_chat_cannot_change_the_plan(monkeypatch):
+def test_while_the_search_runs_the_chat_cannot_change_the_plan_but_can_stop_the_search_when_asked(monkeypatch):
     state, calls = _planned_state(monkeypatch, _wait_for_abort)
-    _start(state)
+    run_state = _start(state)
     asked = []
+    replies = [{"role": "assistant", "content": "Stop it first."}]
     monkeypatch.setattr("agent.femm_agent.services.followup.call_llm",
-                        lambda messages, tools, **kwargs: asked.append(tools) or {"role": "assistant", "content": "Stop it first."})
+                        lambda messages, tools, **kwargs: asked.append(tools) or replies.pop(0))
     _say(state, "make it 1% instead")
 
-    assert asked == [None], "no tools while a search is running"
+    assert [[t["function"]["name"] for t in tools] for tools in asked] == [["stop_search"]], \
+        "while a search runs the one tool is stop_search - never finalize_spec"
     assert state.chat.revised_plan is None and state.plan_confirmed
-    state.stop_search()
+    assert not run_state.cancelled, "a question does not stop anything"
+
+    stop = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "s1", "type": "function", "function": {"name": "stop_search", "arguments": {}}}]}
+    replies[:] = [stop, {"role": "assistant", "content": "Stopping; the best design is kept."}]
+    _say(state, "I am satisfied, please stop and keep the best")
+    assert run_state.cancelled, "the AI's tool call stopped the search"
     _finished(state)
+    assert state.interview_state.transcript[-1]["content"] == "Stopping; the best design is kept."
 
 
 def test_a_revised_plan_left_waiting_can_be_started_after_the_chat_is_reopened(monkeypatch):
@@ -434,6 +457,8 @@ def test_a_revised_plan_left_waiting_can_be_started_after_the_chat_is_reopened(m
     reopened.poll()
     chat = reopened.chat
     assert chat.run_state is None and chat.revised_plan is not None and not reopened.plan_confirmed
+    assert set(chat.baseline_runs) == set(chat.revised_plan.distances), "the Baseline box has results to show"
+    assert reopened.can_continue, "a reopened, ended search offers Continue"
     notes = reopened.revised_plan_notes()
     assert "reopened chat" in notes[0] and notes[1].startswith("Continues from the designs already simulated")
 

@@ -29,7 +29,7 @@ NOISE_POINTS = 1.0
 # The prompt asks it to use all of them unless fewer would genuinely be more
 # useful. The LLM call dominates a round (~77 s median vs ~8 s of FEMM per
 # candidate, from real runs), so several candidates per call is where the time
-# win is - see docs/Agent.md §7. 1 restores one-candidate-per-turn.
+# win is - see DESIGN.md. 1 restores one-candidate-per-turn.
 CANDIDATES_PER_ROUND = 5
 # The search's memory (agent/femm_agent/services/optimize.py's search_memory()): each request
 # carries the latest round's full results, this many best candidates so far
@@ -46,6 +46,12 @@ MAX_DISTANCES = 5  # each one is a full extra FEMM solve per candidate - a hard 
 # idle server.
 LLM_TIME_LIMIT_S = float(os.environ.get("AGENT_LLM_TIME_LIMIT_S", "900"))
 LLM_MAX_TOKENS = int(os.environ.get("AGENT_LLM_MAX_TOKENS", "32000"))
+# How long a search round's AI request may spend thinking (counted from its first
+# token) before code stops it and asks for the proposal straight away, with the
+# thinking so far handed back and thinking switched off (optimize.py's
+# _ask_for_proposals). At ~12 tokens/s a hard goal used the whole 900 s on
+# thinking alone, twice in a row, and the round produced nothing.
+LLM_THINKING_LIMIT_S = float(os.environ.get("AGENT_LLM_THINKING_LIMIT_S", "600"))
 # Sampling, sent explicitly with every request so a run doesn't change when the
 # server's own defaults do. These are the office server's defaults as read from
 # its /props on 2026-10-07 (it also applies top_k 20 and min_p 0.05, left to it).

@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS agent_settings (
     value_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_user_default (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    overrides_json TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
 """
 
 
@@ -49,3 +54,23 @@ def replace_overrides(overrides: dict) -> None:
                    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at""",
                 [(key, json.dumps(value), now) for key, value in overrides.items()],
             )
+
+
+def save_user_default(overrides: dict) -> None:
+    """Stores `overrides` (key -> value, the same shape as the saved settings) as
+    the person's own default; the single row is replaced each time."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as conn:
+        with conn:
+            conn.execute(
+                """INSERT INTO agent_user_default (id, overrides_json, updated_at) VALUES (1, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET overrides_json = excluded.overrides_json,
+                                                 updated_at = excluded.updated_at""",
+                (json.dumps(overrides), now))
+
+
+def load_user_default() -> dict | None:
+    """The person's own default as stored, or None if they never saved one."""
+    with _connection() as conn:
+        row = conn.execute("SELECT overrides_json FROM agent_user_default WHERE id = 1").fetchone()
+    return None if row is None else json.loads(row["overrides_json"])

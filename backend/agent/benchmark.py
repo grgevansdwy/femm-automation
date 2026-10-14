@@ -307,6 +307,7 @@ def main() -> None:
     # Everything from NOTES_MARKER down is written by hand and kept across regenerations.
     old = REPORT_PATH.read_text() if REPORT_PATH.exists() else ""
     notes = old[old.index(NOTES_MARKER):] if NOTES_MARKER in old else f"{NOTES_MARKER}\n\n## Findings\n\nNot written yet.\n"
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)  # docs/ is not in the repo
     REPORT_PATH.write_text(report(args.label) + "\n" + notes)
     print(f"Wrote {REPORT_PATH}")
 

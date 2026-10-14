@@ -1,126 +1,149 @@
 # FEMM Coil Automation
 
-## What this project does
+Simulate three-coil wireless-power links (Loop, Tank and Receive, at 6.78 MHz) and compare coil designs without
+building them. For a chosen separation distance it reports each coil's inductance, the mutual inductance
+between them, the resistance (ESR) and the coupling. Edit designs by hand, or describe a goal in plain English
+("keep the coupling, lower the resistance") and an AI agent tries geometry changes, simulating each one, then
+shows you the best design next to your original.
 
-A wireless power link is built from three coils (Loop, Tank and Receive, running at 6.78 MHz), and how well
-it works depends on the exact geometry of each coil: turns, radius, trace width and thickness, layers,
-ferrite and so on. This app runs a physics simulation of a design (a finite-element solve, using the
-open-source xfemm solver, a Linux version of FEMM) and reports the inductance of each coil, the mutual
-inductance between them, the resistance (ESR) and the coupling at a chosen separation distance, so you can
-compare designs without building them. You can run and edit designs by hand in the window, or describe a goal
-in plain English ("keep the coupling, lower the resistance") and an AI agent will ask you a few questions,
-then try many geometry changes on its own, simulating each one, and show you the best design it found next to
-your original.
+How it is built: [`DESIGN.md`](DESIGN.md).
 
-**You need:** a Linux computer with a desktop (these steps assume Ubuntu or Debian), an internet connection,
-and, for the AI, a connection to the office network.
+## What you need
 
-## Set up
+| | |
+|---|---|
+| **Computer** | Linux with a desktop (steps below are for Ubuntu / Debian) |
+| **Internet** | For the first install only |
+| **For the AI agent** | A reachable LLM server (see [AI server](#ai-server)). Manual runs need no AI |
+| **Wine** | **Not needed.** The simulator (xfemm) runs natively on Linux. Wine is only for the optional [Open in FEMM](#optional-open-in-femm) button |
 
-**1. Download the project.** This needs your Bitbucket account set up with an SSH key. If it says
-"Permission denied", ask a teammate for help or for a zip of the folder (unzip it and skip this step).
+## Install (about 5 minutes)
+
+Open a terminal (`Ctrl+Alt+T`) and run these in order.
+
+**1. System packages.** A fresh Linux install may lack these:
+
+```
+sudo apt update
+sudo apt install -y git curl libgl1 libx11-6 libxrandr2 libxinerama1 libxcursor1 libxi6
+```
+
+**2. Download the project.** This needs your Bitbucket account set up with an SSH key. If it says
+"Permission denied", ask a teammate for help, or for a zip (unzip it and skip the `git clone` line).
 
 ```
 git clone git@bitbucket.org:example-org/femm-automation.git femm_automation
 ```
 
-**2. Install `uv`**, a helper that installs everything else the project needs (including Python):
+**3. Install `uv`**, which installs Python and everything else the project needs:
 
 ```
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**3. Close the terminal and open a new one** (`Ctrl+Alt+T` again).
+**4. Close the terminal and open a new one.** (This lets it find `uv`.)
 
 ## Start it
-
-In the terminal:
 
 ```
 cd femm_automation
 uv run femm
 ```
 
-The very first time it downloads what it needs (a few minutes; you'll see text scrolling). Then a window called
-**FEMM Coil Automation** opens with 13 example designs loaded. From now on, starting it is just these two
-lines, and it opens in seconds. Close the window to stop it.
+The first time it downloads what it needs (a few minutes, lots of scrolling text). Then a window called
+**FEMM Coil Automation** opens with 13 example designs. After that it starts in seconds. Close the window to stop it.
 
-## How to use it
+## Use it
 
-**Manual Runs** (top of the window, no AI needed)
+**Manual Runs** (no AI needed)
 1. Click a design on the left, for example **Gen2**.
-2. Under **Run** on the right, pick a distance in mm (try `5`) and click **Run**.
+2. Pick a distance in mm (try `5`) and click **Run**.
 3. The result appears in **Run History**: L, M, ESR and k.
 
-Edit the numbers in the middle and click **Save** to change a design. **Clone** first to keep the original.
-**Export** / **Import** send a design to a coworker as a small file.
+Edit the numbers in the middle and click **Save**. **Clone** first to keep the original. **Export** and
+**Import** send a design to a coworker as a small file.
 
-**AI Agent** (top of the window)
-1. Pick the design to improve, then say what you want, for example
-   *"Keep the mutual inductance the same but cut the resistance."*
-2. Click **Start Search** and watch it try designs. At the end you can compare the best one with the original.
-   Only one search runs at a time. Start another chat's search meanwhile and it waits in a queue, then starts
-   by itself when the running one ends (the queue is forgotten if you close the app).
-3. Want something different once it has finished? Say so in the same chat (*"5% is enough"*, *"also check 8 mm"*).
-   It shows the changed plan and what is different; click **Start Search** again to run it.
-4. To share a chat, right-click it in the list on the left: **Export JSON...** saves the whole chat as a
-   file a coworker opens with **Import...** on their computer, and **Export PDF report...** saves a
-   report to read or print.
+**AI Agent**
+1. Pick the design to improve and say what you want, for example
+   *"Keep the mutual inductance within 5% and cut the tank resistance by at least 20%."*
+2. Answer its few questions, check the plan table, then click **Start Search**. Watch it try designs; when it
+   finishes it summarises the best one.
+3. Anything you don't mention is **free to change**. If you care about it, say so in the goal
+   (*"keep every inductance within 10%"*), or the search may trade it away.
+4. Want to stop early? Tell it in the chat ("I'm satisfied, stop"). Want to change the goal afterwards? Say so
+   in the same chat and start the revised plan. Type `continue` to search further.
+5. Only one search runs at a time; others wait in a queue. To share a chat, right-click it in the list:
+   **Export JSON...** (a coworker opens it with **Import...**) or **Export PDF report...**.
 
-Your designs and results are saved on your computer. **Backup All** / **Restore All** at the top of the
-window save or load everything as one file, which is how to move your work to another computer.
+Your designs and results are saved on your computer. **Backup All** / **Restore All** (top of the window) save
+or load everything as one file, which is how to move to another computer.
+
+## AI server
+
+The agent talks to an LLM server over the network. By default that is the office server, so you must be on the
+office network or VPN. To use a different one: start the AI Agent, click **Settings**, and under
+**LLM & Budget** set **LLM server URL** and **Model name**. Any server that speaks the OpenAI
+`/v1/chat/completions` API with tool calling works (for example `llama-server` from llama.cpp). Nothing is sent
+anywhere else.
+
+## Optional: Open in FEMM
+
+The **Open in FEMM** button draws a design in the real FEMM program so you can look at the mesh yourself. FEMM is
+Windows software, so this one button needs Wine and FEMM 4.2. Everything else works without them.
+
+```
+sudo apt install -y wine
+```
+
+Then download the FEMM 4.2 installer from <https://www.femm.info> and run it with `wine <installer>.exe`, keeping
+the default folder (`C:\femm42`). If you put it elsewhere, set `FEMM_EXE` to the path of `femm.exe` before
+starting the app. Without Wine or FEMM the button simply tells you what is missing.
 
 ## Something wrong?
 
 | What you see | What to do |
 |---|---|
-| `uv: command not found` | Close the terminal, open a new one, and try again (step 5) |
-| `No such file or directory` after `cd femm_automation` | You're in the wrong folder. Type `cd ~` and try again, or `ls` to see where the folder is |
-| The window doesn't open, or a message mentions `libGL` | Run `sudo apt install -y libgl1`, then start it again |
-| The AI can't connect | Check you're on the office network or VPN. Then open **Settings** (in AI Agent mode) and check **LLM server URL** |
+| `uv: command not found` | Close the terminal, open a new one, try again (step 4) |
+| `No such file or directory` after `cd femm_automation` | Wrong folder. `cd ~` then `ls` to find where it is |
+| The window doesn't open, or a message mentions `libGL` or `libX11` | Run step 1 again, then start it again |
+| Black or empty window on a remote or virtual machine | The app needs a desktop with OpenGL. Use the machine's own screen, not a bare SSH session |
+| The AI can't connect | Check the office network or VPN, then **Settings > LLM & Budget > LLM server URL** |
+| The AI is very slow, or a search ends early | Keep the computer awake (a sleeping machine stretches the time limits) |
 | A run says "failed" | Click it in Run History; the message says why |
 
-## Use it from terminal (PI)
+## Use it from a terminal (pi)
 
-Prefer chatting in a terminal? The `pi` agent runs the same simulations on the same designs. Do the setup
-above first (it needs `uv`).
-
-**Once: install pi.** It needs Node.js 22.19 or newer, which Ubuntu's own version usually is not, so:
+Prefer chatting in a terminal? The `pi` agent runs the same simulations on the same designs. Finish the install
+above first. Once, install Node.js 22.19 or newer (Ubuntu's own is usually older) and pi:
 
 ```
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 ```
 
-Close the terminal and open a new one, then:
+Close the terminal, open a new one, then:
 
 ```
 nvm install 22
 npm install -g @earendil-works/pi-coding-agent
 ```
 
-**Every time:**
+Every time:
 
 ```
 cd femm_automation
 pi --approve
 ```
 
-It's already set up to use the office AI server. (`--approve` lets pi use this project's coil tools; without it
-they stay switched off.) Then just ask in plain English:
+It is set up for the office AI server. (`--approve` lets pi use this project's coil tools.) Then ask in plain
+English, for example *"Simulate Gen2 at 5 mm."* or *"On Gen2, cut the tank resistance by about 5% and keep
+everything else within 2%."* Designs it saves are the same ones the window shows.
 
-- *"List the coil designs."*
-- *"Simulate Gen2 at 5 mm."*
-- *"On Gen2, cut the tank resistance by about 5% and keep everything else within 2%."*
+## For developers
 
-It runs the simulations for you and ends with a table of baseline vs. final numbers. Designs it saves are
-the same ones the window shows, but it only saves when you ask it to.
+Read [`DESIGN.md`](DESIGN.md). Run the tests (about 10 seconds, no AI server needed):
 
-## For developers and AI coding agents
+```
+uv run --package frontend --group test pytest backend
+```
 
-Read [`docs/README.md`](docs/README.md) first. It points to one document per component:
-[`Engine.md`](docs/Engine.md), [`GUI.md`](docs/GUI.md) and [`Agent.md`](docs/Agent.md).
-
-Tests: `uv run --package frontend --group test pytest backend` (about 10 s, no AI server needed).
 Run the AI search without the window: `cd backend && uv run python -m agent`.
-The solver is [xfemm](backend/engine/vendor/README.md), a Linux-native reimplementation of FEMM, so there
-is no Wine or Windows install.

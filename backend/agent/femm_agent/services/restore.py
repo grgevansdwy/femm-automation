@@ -9,7 +9,7 @@ the run's objectives. A solve that isn't cached any more is run again.
 """
 
 import dataclasses
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from agent.femm_agent.models.state import AgentRunState, AgentRunStatus, Budget, CandidateResult, RoundState, RoundStatus
 from agent.femm_agent.services import replan
@@ -81,6 +81,22 @@ def restore_interview(record: dict, messages: list[dict]) -> InterviewState:
         settings=spec.settings if spec is not None else load_settings())
 
 
+def _restore_timing(round_state, message: dict, payload: dict) -> None:
+    """A restored round is finished, so it gets finished timestamps: it ended when its row was
+    saved, FEMM took `femm_seconds` before that and the AI `llm_seconds` before that. Without
+    them it would read as a round still waiting on the AI, counting up from the moment it was loaded."""
+    try:
+        ended = datetime.fromisoformat(message["created_at"])
+    except (TypeError, ValueError, KeyError):
+        ended = datetime.now(timezone.utc)
+    round_state.done_at = ended
+    llm_s, femm_s = payload.get("llm_seconds"), payload.get("femm_seconds")
+    if femm_s is None:
+        return  # a reply with no designs: nothing to split
+    round_state.evaluating_started_at = ended - timedelta(seconds=femm_s)
+    round_state.proposing_started_at = round_state.evaluating_started_at - timedelta(seconds=llm_s or 0.0)
+
+
 def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
     """The AgentRunState of a stored run: its plan, every saved round, the
     tried list (the model's memory, design labels included), the best design
@@ -121,6 +137,7 @@ def restore_run(ai_run_id: str, job_runner) -> AgentRunState:
         for stored in payload.get("candidates") or []:
             candidate = CandidateResult(**{k: v for k, v in stored.items() if k in candidate_fields})
             round_state.candidates.append(candidate)
+        _restore_timing(round_state, message, payload)
         state.rounds.append(round_state)
 
     state.rounds_persisted = len(state.rounds)

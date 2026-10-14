@@ -12,6 +12,7 @@ from pathlib import Path
 from imgui_bundle import imgui, portable_file_dialogs as pfd
 
 from ..files_backup import run_io
+from ..services import toast
 from ..services.job_runner import JobRunner, JobStatus, RESULTS_ROOT, coilset_signature
 from ..visualization import femm_open
 from ..visualization.result_table import draw_result_table
@@ -64,8 +65,6 @@ class RunsPanelState:
         self.selected_run_id: str | None = None
         self.new_run_error: str = ""
         self.new_run_status: str = ""
-        self.io_error: str = ""
-        self.io_status: str = ""
         self._export_dialog = None  # a pfd.save_file() handle while one is open, else None
         self._import_dialog = None  # a pfd.open_file() handle while one is open, else None
         self.refresh_configs()
@@ -123,26 +122,25 @@ class RunsPanelState:
 
     def export(self, path) -> None:
         if not self.selected_run_id:
-            self.io_error = "Select a run to export first."
+            toast.error("Export failed: select a run first.")
             return
         row = next((r for r in self.history_rows() if r["run_id"] == self.selected_run_id), None)
         if row is None:
-            self.io_error = "Selected run no longer exists."
+            toast.error("Export failed: the selected run no longer exists.")
             return
         Path(path).write_text(run_io.export_record(row))
-        self.io_status = f"Exported to {path}"
-        self.io_error = ""
+        toast.success(f"Exported successfully to {path}")
 
     def import_from(self, path) -> None:
         try:
             text = Path(path).read_text()
         except OSError as exc:
-            self.io_error, self.io_status = f"Couldn't read {path}: {exc}", ""
+            toast.error(f"Import failed: couldn't read {path}: {exc}")
             return
         try:
             row = run_io.parse_import(text)
         except ValueError as exc:
-            self.io_error, self.io_status = str(exc), ""
+            toast.error(f"Import failed: {exc}")
             return
 
         row = run_io.resolve_import_id(row)
@@ -150,8 +148,7 @@ class RunsPanelState:
 
         RunResultRepository(run_id=row["run_id"]).save_result_json(row)
         self.selected_run_id = row["run_id"]
-        self.io_status = f"Imported run {row['run_id']}"
-        self.io_error = ""
+        toast.success(f"Imported run {row['run_id']} successfully")
 
 
 def _poll_export_import_dialogs(state: RunsPanelState) -> None:
@@ -235,11 +232,6 @@ def draw_history(state: RunsPanelState, configs_panel_state, size: imgui.ImVec2 
     imgui.same_line()
     if imgui.button("Import run"):
         state._import_dialog = pfd.open_file("Import run", filters=["JSON files", "*.json"])
-
-    if state.io_error:
-        imgui.text_colored(_ERROR_COLOR, state.io_error)
-    elif state.io_status:
-        imgui.text_colored(_STATUS_COLORS[JobStatus.DONE.value], state.io_status)
 
     # Narrower than the old standalone Run History tab's 420px: this now
     # shares the dashboard's right column instead of a whole tab's width.

@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import frontend._sim_path  # noqa: F401 - adds backend to sys.path
 
+from frontend.services import toast
 from frontend.services.field_layout import _ALL_FIELDS
 from frontend.screen_manual.configs_panel import ConfigsPanelState
 
@@ -157,15 +158,17 @@ def test_export_then_import_round_trips_via_tmp_path(tmp_path):
     original_name = state.buffer["config_name"]
     export_path = tmp_path / "base_coil_export.json"
 
+    toast.clear()
     state.export(export_path)
-    assert state.error == ""
+    assert toast.active() == [(f"Exported successfully to {export_path}", False)]
 
     state.import_from(export_path)
 
     assert state.error == ""
     # base_coil's record name is already taken, so dedupe_name must have
     # kicked in - the imported CoilSet content is still identical otherwise.
-    assert state.status.startswith("Imported")
+    text, is_error = toast.active()[-1]
+    assert text.startswith("Imported") and "successfully" in text and not is_error
     # config_name must follow the *deduped* name, matching the left list -
     # not the original pre-dedupe name baked into the imported file, which
     # would leave the list and the form disagreeing (a real reported bug).
@@ -224,10 +227,11 @@ def test_import_rejects_invalid_geometry_and_writes_nothing(tmp_path):
     before = {c["id"] for c in list_configs()}
     state = ConfigsPanelState()
 
+    toast.clear()
     state.import_from(bad_path)
 
-    assert state.error != ""
-    assert "too large" in state.error
+    (text, is_error), = toast.active()
+    assert is_error and text.startswith("Import failed") and "too large" in text
     after = {c["id"] for c in list_configs()}
     assert after == before  # nothing written
 

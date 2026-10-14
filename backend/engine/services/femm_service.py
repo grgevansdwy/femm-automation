@@ -38,10 +38,6 @@ def draw_coil_traces(femm_like, central_radius, number_of_turns, number_of_paral
         layer_spacing = pcb_thickness/(layer_count-1)
         for i in range(1, layer_count-1):
             layer_coords.append(top_of_trace-winding_thickness+(winding_thickness/2)-(i*layer_spacing))
-    # if ((planar_or_axisymmetric=='axi') or (planar_or_axisymmetric=='axisymmetric')):
-    #     images = [1]
-    # else: #planar requires reflecting across the z-axis for full symmetry
-    #     images = [-1,1]
     for y_coord in layer_coords:
         for turn_index, turn in enumerate(coil_turns):
             for single_trace in turn: #draw axially symettric windings

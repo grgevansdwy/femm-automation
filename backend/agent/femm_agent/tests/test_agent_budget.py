@@ -156,7 +156,9 @@ def test_nothing_left_a_match_only_goal_stops_at_the_first_pass(monkeypatch):
 
 def test_plateau_the_search_goes_on_after_a_pass_until_two_rounds_bring_nothing_better(monkeypatch):
     # 60 passes (17.5% against 10%); 50 is far better (31.2%); then two rounds within solver noise.
-    state, row, requests = _search(monkeypatch, [_propose(60.0), _propose(50.0), _propose(50.2), _propose(49.9)], _spec())
+    # (a wide radius limit: the default one stops at 50)
+    state, row, requests = _search(monkeypatch, [_propose(60.0), _propose(50.0), _propose(50.2), _propose(49.9)],
+                                   _spec(search_fields={"tank_center_r": {"enabled": True, "min": 1, "max": 200}}))
     assert _ending(state, row) == ("goal_met", "plateau", 4)
     assert [r.verdict for r in state.rounds] == ["improving", "improving", "improving", "plateau"]
     assert [r.rounds_since_improvement for r in state.rounds] == [0, 0, 1, 2]
@@ -413,6 +415,15 @@ def test_the_budget_is_saved_every_round_and_a_search_cut_short_continues_from_i
     later = AgentRunner(jobs)
     restored = restore_run(state.id, jobs)
     assert restored.budget.rounds_used == 4 and restored.budget.simulations_used == state.budget.simulations_used
+    # Restored rounds are finished rounds: with a finish time, never one still waiting on the AI.
+    for original, back in zip(state.rounds, restored.rounds):
+        assert back.done_at is not None, "a restored round must not look like it is still running"
+        if original.evaluating_started_at is not None:
+            assert back.evaluating_started_at is not None
+            assert abs((back.evaluating_started_at - back.proposing_started_at).total_seconds()
+                       - (original.evaluating_started_at - original.proposing_started_at).total_seconds()) < 1e-3
+            assert abs((back.done_at - back.evaluating_started_at).total_seconds()
+                       - (original.done_at - original.evaluating_started_at).total_seconds()) < 1e-3
     later.adopt(restored)
     later.continue_run(state.id)
     row = _wait(restored)

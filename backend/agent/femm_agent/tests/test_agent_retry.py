@@ -15,7 +15,6 @@
 import dataclasses
 import time
 
-import pytest
 
 from agent.femm_agent.services import optimize
 from agent.services.llm_client import LLMError
@@ -104,6 +103,40 @@ def test_one_failed_ai_try_is_retried_within_the_round(monkeypatch):
     assert sent[1] == sent[2], "the retry resends the same request"
     assert state.outcome_report.startswith("Goal met:") and state.error is None
     print("  ok  a single failed AI try is retried in the same round")
+
+
+def test_a_round_still_thinking_at_the_thinking_limit_is_asked_to_propose_from_its_notes(monkeypatch):
+    calls = []
+
+    def thinking_limit():
+        return LLMError("thinking_limit", "600 s", elapsed_s=600.0, tokens=7000, time_limit_s=900.0,
+                        reasoning="Trying a smaller tank looks best: 60.")
+
+    def fake_call_llm(messages, tools, **kwargs):
+        calls.append((messages, kwargs))
+        step = [thinking_limit(), _propose(60.0)][len(calls) - 1] if len(calls) <= 2 else _done()
+        if isinstance(step, Exception):
+            raise step
+        kwargs["stats"].update(elapsed_s=40.0, tokens=300)
+        return step
+
+    monkeypatch.setattr(optimize, "call_llm", fake_call_llm)
+    runner = AgentRunner(_Jobs())
+    state = runner.submit(_spec())
+    deadline = time.monotonic() + 20
+    while (get_ai_run(state.id) or {}).get("status") == "running" and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    (first_messages, first), (wrap_messages, wrap) = calls[0], calls[1]
+    assert first["thinking_limit_s"] == state.spec.settings.llm_thinking_limit_s == 600 and "thinking" not in first
+    assert wrap["thinking"] is False and wrap["max_tokens"] == optimize.WRAP_UP_MAX_TOKENS
+    assert wrap_messages[:-1] == first_messages, "the same request, plus one message"
+    assert wrap_messages[-1]["role"] == "user" and "Trying a smaller tank looks best: 60." in wrap_messages[-1]["content"]
+    round_1 = state.rounds[0]
+    assert round_1.candidates[0].delta["tank_center_r"] == 60.0 and not round_1.llm_failures, "not a failed try"
+    assert round_1.reasoning_text.startswith("Trying a smaller tank") and "Thinking stopped" in round_1.reasoning_text
+    assert round_1.llm_stats["thinking_stopped"] and round_1.llm_stats["tokens"] == 7300
+    assert state.status.value == "goal_met"
 
 
 def test_a_failed_round_resumes_the_search_with_its_memory_kept(monkeypatch):
@@ -279,7 +312,7 @@ def _run_logged(monkeypatch, server_script, spec, jobs=None):
     from agent.services import llm_client
     served = []
 
-    def fake_request(stream, body, settings, time_limit_s, max_tokens, should_abort, on_update):
+    def fake_request(stream, body, settings, time_limit_s, max_tokens, should_abort, on_update, thinking_limit_s=None):
         served.append(body)
         step = server_script[len(served) - 1] if len(served) <= len(server_script) else _done()
         if isinstance(step, Exception):

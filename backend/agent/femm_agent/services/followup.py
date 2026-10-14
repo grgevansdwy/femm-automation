@@ -226,8 +226,26 @@ def _conversation_messages(transcript: list[dict]) -> list[dict]:
     return messages
 
 
+STOP_SEARCH_TOOL_NAME = "stop_search"
+
+STOP_SEARCH_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": STOP_SEARCH_TOOL_NAME,
+        "description": (
+            "Stops the running search now and keeps its best design so far (its rounds and results are kept, "
+            "and the user can say \"continue\" later). Call this ONLY when the user's latest message clearly "
+            "asks to stop the search, or says they are satisfied and want to stop. Never call it for a question "
+            "about stopping, for a question about progress, or on your own judgment that the search has gone "
+            "on long enough."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}]
+
+
 def run_followup_turn(conversation, user_message: str, run_state, should_abort=None, log=None,
-                      allow_replan: bool = False, settings=None) -> None:
+                      allow_replan: bool = False, settings=None, stop_search=None) -> None:
     """One follow-up exchange, appended in place to `conversation.transcript`
     (the planning chat's agent.input_chat.services.interview.InterviewState - same chat, same
     transcript). `log` (a RunLog), if given, records the request.
@@ -244,7 +262,10 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
       Nothing is written here.
     `settings`: the settings a revised plan is built with - the saved ones
     as they are now by default (so a Field Config change the user applied
-    counts), like a first plan."""
+    counts), like a first plan.
+    `stop_search`: while the search runs, a callable that stops it and keeps its best design. With
+    it the model is offered the one tool stop_search, for a user who asked in the chat to stop; the
+    reply after the call is tool-less, telling them what happened."""
     from agent.input_chat.services.interview import (
         PROPOSE_FIELDS_TOOL_NAME, PROPOSE_SEARCH_FIELDS_TOOL, accept_field_change_call, accept_finalize_call,
         finalize_spec_tool,
@@ -254,6 +275,7 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
     conversation.live_reasoning = ""
     conversation.transcript.append({"role": "user", "content": user_message})
     can_replan = allow_replan and run_state.status != AgentRunStatus.RUNNING
+    can_stop = stop_search is not None and run_state.status == AgentRunStatus.RUNNING
     if can_replan and settings is None:
         from agent.settings.settings import load_settings
         settings = load_settings()
@@ -268,11 +290,12 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
         )
 
     try:
-        msg = ask(send_messages, finalize_spec_tool(settings.max_distances) + PROPOSE_SEARCH_FIELDS_TOOL if can_replan else None)
+        msg = ask(send_messages, finalize_spec_tool(settings.max_distances) + PROPOSE_SEARCH_FIELDS_TOOL if can_replan
+                  else STOP_SEARCH_TOOL if can_stop else None)
     except Exception as exc:
         conversation.error = str(exc)
         return
-    tool_calls = msg.get("tool_calls") if can_replan else None
+    tool_calls = msg.get("tool_calls") if (can_replan or can_stop) else None
     if not tool_calls:
         conversation.transcript.append({"role": "assistant", "content": msg.get("content") or "(no reply)"})
         return
@@ -282,7 +305,14 @@ def run_followup_turn(conversation, user_message: str, run_state, should_abort=N
     function = call.get("function") if isinstance(call, dict) else None
     if not isinstance(function, dict):
         function = {}
-    if function.get("name") == PROPOSE_FIELDS_TOOL_NAME:
+    if function.get("name") == STOP_SEARCH_TOOL_NAME and can_stop:
+        spec = None
+        if run_state.status == AgentRunStatus.RUNNING:
+            stop_search()
+            result = {"stopped": True, "message": "The search will end at its next checkpoint; its best design so far is kept."}
+        else:
+            result = {"stopped": False, "message": "The search had already ended."}
+    elif function.get("name") == PROPOSE_FIELDS_TOOL_NAME and can_replan:
         # Shown to the user as a card with Apply / Dismiss. The reply after it is
         # tool-less, as in the interview: the model says what it proposed and why.
         spec, (proposal, result) = None, accept_field_change_call(function)

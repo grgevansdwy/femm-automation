@@ -357,6 +357,45 @@ def _conversation(state):
                           transcript=[{"role": "user", "content": "cut tank ESR by half"}])
 
 
+def _stop_call():
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "s1", "type": "function", "function": {"name": "stop_search", "arguments": {}}}]}
+
+
+def test_while_the_search_runs_the_model_may_stop_it_only_through_stop_search_and_only_when_given_the_means(monkeypatch):
+    state = _first_search(monkeypatch).state
+    state.status = AgentRunStatus.RUNNING
+    stops = []
+    sent = _chat(monkeypatch, [{"role": "assistant", "content": "It is at round 2."},
+                               _stop_call(), {"role": "assistant", "content": "Stopping now; the best design is kept."},
+                               {"role": "assistant", "content": "No tools."}])
+
+    conversation = _conversation(state)
+    followup.run_followup_turn(conversation, "how far along is it?", state, stop_search=lambda: stops.append(1))
+    assert [t["function"]["name"] for t in sent[-1][1]] == ["stop_search"] and stops == [], "offered, not used"
+    assert "Stopping the search" in sent[-1][0][0]["content"] and "{{" not in sent[-1][0][0]["content"]
+
+    followup.run_followup_turn(conversation, "I'm satisfied, please stop it and keep the best", state,
+                               stop_search=lambda: stops.append(1))
+    assert stops == [1], "the call stopped the search once"
+    assert sent[-1][1] is None, "the reply after the call is tool-less"
+    roles = [m["role"] for m in conversation.transcript[-3:]]
+    assert roles == ["assistant", "tool", "assistant"]
+    assert json.loads(conversation.transcript[-2]["content"])["stopped"] is True
+    assert conversation.transcript[-1]["content"] == "Stopping now; the best design is kept."
+    assert conversation.spec == state.spec, "stopping never touches the plan"
+
+    followup.run_followup_turn(_conversation(state), "stop it", state)  # no means given: no tool
+    assert sent[-1][1] is None
+
+
+def test_the_stop_tool_is_never_offered_once_the_search_has_ended(monkeypatch):
+    state = _first_search(monkeypatch).state
+    sent = _chat(monkeypatch, [{"role": "assistant", "content": "ok"}])
+    followup.run_followup_turn(_conversation(state), "stop", state, stop_search=lambda: None)
+    assert sent[-1][1] is None
+
+
 def test_the_model_gets_finalize_spec_only_after_the_search_has_ended_and_only_when_allowed(monkeypatch):
     state = _first_search(monkeypatch).state
     sent = _chat(monkeypatch, [{"role": "assistant", "content": "ok"}] * 3)
@@ -375,7 +414,7 @@ def test_the_model_gets_finalize_spec_only_after_the_search_has_ended_and_only_w
     state.status = AgentRunStatus.RUNNING
     followup.run_followup_turn(_conversation(state), "make it 3%", state, allow_replan=True)
     assert sent[-1][1] is None, "a running search: no tools even when allowed"
-    assert "Stop and keep" in sent[-1][0][0]["content"] and "Revising the plan" not in sent[-1][0][0]["content"]
+    assert "ask you to stop it" in sent[-1][0][0]["content"] and "Revising the plan" not in sent[-1][0][0]["content"]
 
 
 def test_an_accepted_revised_plan_waits_for_start_search_and_then_runs_on_the_same_run(monkeypatch):
