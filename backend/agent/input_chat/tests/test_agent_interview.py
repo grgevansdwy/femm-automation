@@ -133,6 +133,19 @@ def test_flag_off_topic_triggers_one_toolless_followup_and_never_touches_build_s
     print("  ok  flag_off_topic triggers one toolless follow-up call and never reaches _build_spec")
 
 
+def test_a_flag_off_topic_with_no_reason_is_ignored_and_the_reply_text_kept(monkeypatch):
+    # Seen live: an on-topic clarifying question, plus flag_off_topic(reason="n/a").
+    question = "Do you mean at least 10% lower than baseline?"
+    stray = {**_off_topic(reason="n/a"), "content": question}
+    state, calls = _run(monkeypatch, [stray])
+    assert len(calls) == 1 and state.transcript[-1] == {"role": "assistant", "content": question}
+
+    # With no text either, the model is asked again without tools.
+    state, calls = _run(monkeypatch, [_off_topic(reason=""), _text(question)])
+    assert len(calls) == 2 and calls[1][1] is None
+    assert [m["role"] for m in state.transcript] == ["user", "assistant"] and state.transcript[-1]["content"] == question
+
+
 def test_flag_off_topics_tool_result_carries_no_explanation_text(monkeypatch):
     # The raw transcript DOES still carry the model's own tool-call arguments
     # (including its stated reason) - that's normal, needed conversation

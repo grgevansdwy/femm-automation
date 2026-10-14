@@ -135,7 +135,7 @@ FLAG_OFF_TOPIC_TOOL = [{
             "properties": {
                 "reason": {"type": "string", "description": "One short phrase: what the message was actually about."},
             },
-            "required": [],
+            "required": ["reason"],
         },
     },
 }]
@@ -419,6 +419,23 @@ def accept_field_change_call(function: dict) -> tuple[dict | None, dict]:
         return None, {"valid": False, "error": str(exc)}
 
 
+# What a flag_off_topic `reason` looks like when the model gave none. Seen live: an
+# on-topic clarifying question in the reply's text, plus flag_off_topic(reason="n/a").
+_NO_REASON = frozenset({"", "n/a", "na", "none", "null", "unknown", "-"})
+
+
+def _is_stray_off_topic_flag(msg: dict) -> bool:
+    """True when the reply calls flag_off_topic without saying what the message was
+    about. The flag is only acted on with a real reason."""
+    tool_calls = msg.get("tool_calls") or []
+    function = tool_calls[0].get("function") if tool_calls and isinstance(tool_calls[0], dict) else None
+    if not isinstance(function, dict) or function.get("name") != "flag_off_topic":
+        return False
+    args = function.get("arguments")
+    reason = args.get("reason") if isinstance(args, dict) else None
+    return not isinstance(reason, str) or reason.strip().strip(".").lower() in _NO_REASON
+
+
 def run_interview_turn(state: InterviewState, user_message: str | None = None, should_abort=None,
                        log=None) -> None:
     """One exchange, mutated in place - the same in-place-mutation
@@ -464,6 +481,18 @@ def run_interview_turn(state: InterviewState, user_message: str | None = None, s
         msg = _ask(_interview_tools(state.settings.max_distances))
     except Exception as exc:
         state.error = str(exc)
+        return
+    if _is_stray_off_topic_flag(msg):
+        # The fixed redirect would hide the reply's own text, so a flag that
+        # can't say what the message was about is dropped and the reply is
+        # kept as plain text (or, with no text, the model is asked again without tools).
+        if log is not None:
+            log.warning("interview", "flag_off_topic with no reason ignored")
+        msg = {k: v for k, v in msg.items() if k != "tool_calls"}
+        if (msg.get("content") or "").strip():
+            state.transcript.append(msg)
+        else:
+            _toolless_followup()
         return
     state.transcript.append(msg)
 
