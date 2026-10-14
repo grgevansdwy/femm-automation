@@ -133,10 +133,10 @@ def outcome_report(state, internal_error: str | None = None, status=None) -> str
     if status == "goal_met":
         score = blended_score(tool_result(state.best, state.spec), state.spec.favourite_metric)
         scored = "" if score is None else (
-            f" Its score is {score:+.1f} points past the bar"
+            f" Score: {score:+.1f} points past the bar"
             + (f" on {state.spec.favourite_metric}" if state.spec.favourite_metric else "") + ".")
         ended = _ended_text(state)
-        return f"Goal met: {ended[0].upper() + ended[1:]} ({spent}). {closest}{scored}{_continue_invite(state)}"
+        return f"Goal met: {ended[0].upper() + ended[1:]} ({spent}).{scored}{_continue_invite(state)}"
 
     if state.stop_reason == "llm_failed":
         return "\n".join(_llm_failure_lines(state) + [f"Before failing: {spent}. {closest}"])

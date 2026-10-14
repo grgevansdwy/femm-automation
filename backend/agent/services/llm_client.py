@@ -54,6 +54,8 @@ class LLMError(RuntimeError):
     - "no_response":  the time limit hit and the server had sent back no tokens
                       (busy with other requests, or still reading the prompt).
     - "too_slow":     the time limit hit while tokens were still arriving.
+    - "thinking_limit": thinking_limit_s hit with nothing but thinking received; the
+                      request was stopped on purpose and `reasoning` holds that thinking.
     - "length_limit": the reply hit max_tokens without finishing (runaway thinking).
     - "bad_reply":    the reply couldn't be parsed (broken stream or tool arguments).
     - "aborted":      should_abort() asked to stop (the user restarted).
@@ -61,8 +63,9 @@ class LLMError(RuntimeError):
 
     def __init__(self, kind: str, detail: str, *, elapsed_s: float, tokens: int = 0,
                  first_token_s: float | None = None, time_limit_s: float | None = None,
-                 max_tokens: int | None = None, base_url: str | None = None) -> None:
+                 max_tokens: int | None = None, base_url: str | None = None, reasoning: str = "") -> None:
         self.kind, self.detail = kind, detail
+        self.reasoning = reasoning
         self.elapsed_s, self.tokens, self.first_token_s = elapsed_s, tokens, first_token_s
         self.time_limit_s, self.max_tokens = time_limit_s, max_tokens
         self.base_url = base_url
@@ -82,6 +85,9 @@ class LLMError(RuntimeError):
             rate = f" ({self.tokens / self.elapsed_s:.0f} tokens/s)" if self.tokens and self.elapsed_s else ""
             return (f"The AI was still generating when the {limit} limit hit ({self.tokens} tokens "
                     f"received{rate}) - the server was too slow or the AI thought for too long.")
+        if self.kind == "thinking_limit":
+            return (f"The AI was still thinking after {self.detail} ({self.tokens} tokens received) - "
+                    "it was stopped and asked for its answer straight away.")
         if self.kind == "length_limit":
             cap = f"{self.max_tokens:,} token" if self.max_tokens else "token"
             return (f"The AI's reply hit the {cap} limit without finishing (after {self.elapsed_s:.0f} s) - "
@@ -238,15 +244,21 @@ def _worker(stream: _Stream, body: bytes, socket_timeout: float, base_url: str, 
         stream.done.set()
 
 
-def build_payload(messages, tools, settings: AgentSettings, max_tokens: int) -> dict:
+def build_payload(messages, tools, settings: AgentSettings, max_tokens: int, thinking: bool = True) -> dict:
     """The request body for one call - the one place it is assembled, so a
-    logged request can be rebuilt exactly (agent/report.py's rebuild_request)."""
+    logged request can be rebuilt exactly (agent/report.py's rebuild_request).
+    `thinking` False asks for the answer with no chain-of-thought and makes a
+    tool call mandatory (both checked against the office llama.cpp server)."""
     payload = {"model": settings.model, "messages": messages, "stream": True, "max_tokens": max_tokens,
                "temperature": settings.temperature, "top_p": settings.top_p, "seed": settings.seed,
                # Asks the server for a final usage block (prompt and reply token counts).
                "stream_options": {"include_usage": True}}
     if tools:  # no tools at all (the follow-up chat) - omit the key rather than send an empty list
         payload["tools"] = tools
+    if not thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if tools:
+            payload["tool_choice"] = "required"
     return payload
 
 
@@ -270,7 +282,7 @@ def _system_prompt_sha256(messages) -> str | None:
 
 
 def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_limit_s: float | None = None,
-             max_tokens: int | None = None,
+             max_tokens: int | None = None, thinking_limit_s: float | None = None, thinking: bool = True,
              should_abort=None, stats: dict | None = None, on_update=None, log=None):
     """One request/response round trip. messages is whatever the caller
     decides to send - chat APIs are stateless per request, so the server
@@ -282,7 +294,11 @@ def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_lim
     limits and sampling; time_limit_s / max_tokens override its limits for one call.
     time_limit_s is a hard wall-clock limit for the whole request (waiting in
     the server's queue, reading the prompt, and generating), enforced even
-    when the server sends nothing. should_abort() is polled while waiting.
+    when the server sends nothing. thinking_limit_s, if given, stops a request that
+    has sent only thinking for that long since its first token (LLMError kind
+    "thinking_limit", carrying the thinking) so the caller can ask again with
+    `thinking` False - no chain-of-thought, a tool call required. should_abort()
+    is polled while waiting.
     stats, if given, is filled with elapsed_s/tokens/prompt_tokens/first_token_s for a
     successful request too. on_update(content_so_far, reasoning_so_far), if
     given, is called (from the request's own worker thread) every time new
@@ -292,12 +308,13 @@ def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_lim
     settings = settings or load_settings()
     time_limit_s = settings.llm_time_limit_s if time_limit_s is None else time_limit_s
     max_tokens = settings.llm_max_tokens if max_tokens is None else max_tokens
-    body = encode_payload(build_payload(messages, tools, settings, max_tokens))
+    body = encode_payload(build_payload(messages, tools, settings, max_tokens, thinking))
 
     stream = _Stream()
     message, error = None, None
     try:
-        message = _request(stream, body, settings, time_limit_s, max_tokens, should_abort, on_update)
+        message = _request(stream, body, settings, time_limit_s, max_tokens, should_abort, on_update,
+                           thinking_limit_s)
         return message
     except LLMError as exc:
         error = exc
@@ -313,7 +330,7 @@ def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_lim
             entry = {
                 "base_url": settings.api_base_url, "model": settings.model,
                 "sampling": {"temperature": settings.temperature, "top_p": settings.top_p, "seed": settings.seed},
-                "max_tokens": max_tokens, "time_limit_s": time_limit_s,
+                "max_tokens": max_tokens, "time_limit_s": time_limit_s, "thinking": thinking,
                 "prompt_sha256": _system_prompt_sha256(messages), "tools_sha256": tools_sha256(tools),
                 "messages": messages,
                 "chars_in": len(body), "chars_out": len(stream.content) + len(stream.reasoning),
@@ -331,7 +348,7 @@ def call_llm(messages, tools, *, settings: AgentSettings | None = None, time_lim
 
 
 def _request(stream: _Stream, body: bytes, settings: AgentSettings, time_limit_s: float, max_tokens: int,
-             should_abort, on_update) -> dict:
+             should_abort, on_update, thinking_limit_s: float | None = None) -> dict:
     """Sends `body` and assembles the streamed reply into `stream`; returns the
     assistant message or raises LLMError."""
     worker = threading.Thread(target=_worker, args=(stream, body, time_limit_s + 60.0, settings.api_base_url, on_update), daemon=True)
@@ -342,7 +359,8 @@ def _request(stream: _Stream, body: bytes, settings: AgentSettings, time_limit_s
         tokens = stream.server_tokens if stream.server_tokens is not None else stream.tokens
         first = None if stream.first_token_at is None else stream.first_token_at - stream.started
         return LLMError(kind, detail, elapsed_s=elapsed, tokens=tokens, first_token_s=first,
-                        time_limit_s=time_limit_s, max_tokens=max_tokens, base_url=settings.api_base_url)
+                        time_limit_s=time_limit_s, max_tokens=max_tokens, base_url=settings.api_base_url,
+                        reasoning=stream.reasoning)
 
     while not stream.done.wait(0.25):
         if should_abort is not None and should_abort():
@@ -351,6 +369,12 @@ def _request(stream: _Stream, body: bytes, settings: AgentSettings, time_limit_s
         if time.monotonic() - stream.started >= time_limit_s:
             stream.close()  # a streaming disconnect also stops generation on the server
             raise fail("no_response" if stream.tokens == 0 else "too_slow")
+        # Still only thinking (no answer text, no tool call begun) this long after the first token.
+        if (thinking_limit_s is not None and stream.first_token_at is not None
+                and time.monotonic() - stream.first_token_at >= thinking_limit_s
+                and not stream.content and not stream.tool_calls):
+            stream.close()
+            raise fail("thinking_limit", f"{thinking_limit_s:.0f} s")
 
     if stream.error:
         raise fail(*stream.error)

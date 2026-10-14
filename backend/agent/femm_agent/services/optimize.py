@@ -43,6 +43,16 @@ class RoundFailed(Exception):
 
 RETRY_PAUSE_S = 5.0  # between AI tries - long enough for a momentary server hiccup to clear
 MIN_REQUEST_S = 1.0  # with less than this left of the search's time limit, no AI request is started
+# The wrap-up request after a round's thinking was stopped (_request_proposals()): a
+# proposal is a tool call of a few hundred tokens per candidate, so this is a generous cap.
+WRAP_UP_MAX_TOKENS = 4000
+WRAP_UP_NOTES_CHARS = 24000  # the end of the stopped thinking that is handed back (its conclusions are last)
+WRAP_UP_MESSAGE = (
+    "You ran out of thinking time for this round. Your notes so far are below; they were cut off, "
+    "so the last line may be incomplete.\n\n<notes>\n{notes}\n</notes>\n\n"
+    "Do not analyse any further. Call propose_coilset now with the candidates your notes point to. "
+    "Where the notes had not settled on a value, pick the most promising one. Every rule you were "
+    "given still applies.")
 
 
 
@@ -65,17 +75,7 @@ def _ask_for_proposals(state, round_state, send_messages, tools):
         round_state.proposing_started_at = now()
         stats: dict = {}
         try:
-            msg = call_llm(
-                send_messages, tools, settings=settings, should_abort=lambda: state.cancelled, stats=stats,
-                time_limit_s=min(settings.llm_time_limit_s, budget.remaining_s()),
-                log=_bound_log(state, round_state),
-                # Live chain-of-thought, visible in the GUI the instant it
-                # arrives - not just after the whole round finishes (see
-                # llm_client.call_llm's docstring). Overwritten with the
-                # same value again just below once the reply lands, so the
-                # two paths can never disagree.
-                on_update=lambda content, reasoning: setattr(round_state, "reasoning_text", reasoning or content),
-            )
+            msg = _request_proposals(state, round_state, send_messages, tools, stats)
             round_state.llm_stats = stats
             return msg
         except LLMError as exc:
@@ -94,6 +94,45 @@ def _ask_for_proposals(state, round_state, send_messages, tools):
             while time.monotonic() < deadline and not state.cancelled:
                 time.sleep(0.2)
     return None
+
+
+def _request_proposals(state, round_state, send_messages, tools, stats: dict) -> dict:
+    """One AI try for the round. A request still thinking after
+    settings.llm_thinking_limit_s is stopped, and a second, short request asks
+    for the proposal straight away: the same messages plus the thinking so far
+    (WRAP_UP_MESSAGE), thinking switched off, a tool call required. Both share
+    the try's one time limit. The model cannot watch a clock or be told
+    anything mid-reply, so code does it. Raises LLMError like call_llm()."""
+    settings = state.spec.settings
+    time_limit_s = min(settings.llm_time_limit_s, state.budget.remaining_s())
+    started = time.monotonic()
+    common = dict(settings=settings, should_abort=lambda: state.cancelled, stats=stats,
+                  log=_bound_log(state, round_state))
+    try:
+        return call_llm(
+            send_messages, tools, time_limit_s=time_limit_s, thinking_limit_s=settings.llm_thinking_limit_s,
+            # Live chain-of-thought, visible in the GUI the instant it
+            # arrives - not just after the whole round finishes (see
+            # llm_client.call_llm's docstring). Overwritten with the
+            # same value again once the reply lands, so the
+            # two paths can never disagree.
+            on_update=lambda content, reasoning: setattr(round_state, "reasoning_text", reasoning or content),
+            **common)
+    except LLMError as exc:
+        if exc.kind != "thinking_limit":
+            raise
+        thinking, thinking_tokens = exc.reasoning, exc.tokens
+    stopped_note = (f"\n\n[Thinking stopped by the {settings.llm_thinking_limit_s:.0f} s thinking limit; "
+                    "the AI was asked to propose from these notes.]")
+    round_state.reasoning_text = thinking + stopped_note
+    wrap_up = {"role": "user", "content": WRAP_UP_MESSAGE.format(notes=thinking[-WRAP_UP_NOTES_CHARS:])}
+    msg = call_llm(send_messages + [wrap_up], tools, thinking=False, max_tokens=WRAP_UP_MAX_TOKENS,
+                   time_limit_s=max(time_limit_s - (time.monotonic() - started), MIN_REQUEST_S), **common)
+    # The round shows, and counts, the thinking that led to the proposal.
+    msg["reasoning_content"] = thinking + stopped_note
+    stats.update(elapsed_s=round(time.monotonic() - started, 1), tokens=(stats.get("tokens") or 0) + thinking_tokens,
+                 thinking_stopped=True)
+    return msg
 
 
 def _bound_log(state, round_state):
@@ -167,7 +206,7 @@ def optimize_loop(state, job_runner, on_round_done=None) -> None:
 
     # The search's memory, rebuilt into each request instead of accumulating
     # raw messages round after round (a batched run's raw history hit ~129 KB
-    # by round 5 and timed out - see docs/Agent.md §6):
+    # by round 5 and timed out - see DESIGN.md, "Memory"):
     # - the latest round, raw: its tool calls and every full tool result,
     # - the spec.keep_best_candidates best candidates so far, one line each,
     # - every other candidate already tried, a shorter line each,

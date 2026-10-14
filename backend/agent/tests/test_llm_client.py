@@ -204,6 +204,35 @@ def test_slow_generation_is_too_slow_and_the_connection_is_closed(serve):
     print("  ok  tokens still arriving at the limit -> too_slow, connection closed")
 
 
+def test_thinking_past_the_thinking_limit_is_stopped_and_handed_back(serve):
+    server = serve(lambda h: h.sse([_chunk({"reasoning_content": "hmm "})] * 1000, pause=0.05))
+    with pytest.raises(LLMError) as err:
+        call_llm([{"role": "user", "content": "hi"}], None, time_limit_s=30.0, thinking_limit_s=0.5)
+    assert err.value.kind == "thinking_limit" and err.value.elapsed_s < 3
+    assert err.value.reasoning.startswith("hmm hmm ") and "still thinking after" in str(err.value)
+    deadline = time.monotonic() + 3
+    while server.disconnects == 0 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.disconnects == 1, "the server stops generating once the client is gone"
+
+
+def test_a_reply_that_has_started_its_answer_is_not_stopped_by_the_thinking_limit(serve):
+    serve(lambda h: h.sse([_chunk({"reasoning_content": "hmm "})] + [_chunk({"content": "a"})] * 12
+                          + [_chunk({}, finish="stop")], pause=0.1))
+    msg = call_llm([{"role": "user", "content": "hi"}], None, time_limit_s=30.0, thinking_limit_s=0.5)
+    assert msg["content"] == "a" * 12
+
+
+def test_thinking_off_is_sent_as_a_template_switch_with_a_required_tool_call(serve):
+    server = serve(lambda h: h.sse([_chunk({"content": "ok"}), _chunk({}, finish="stop")]))
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object", "properties": {}}}}]
+    call_llm([{"role": "user", "content": "hi"}], tools)
+    call_llm([{"role": "user", "content": "hi"}], tools, thinking=False)
+    plain, off = server.requests
+    assert "chat_template_kwargs" not in plain and "tool_choice" not in plain
+    assert off["chat_template_kwargs"] == {"enable_thinking": False} and off["tool_choice"] == "required"
+
+
 def test_hitting_max_tokens_is_length_limit(serve):
     serve(lambda h: h.sse([_chunk({"reasoning_content": "loop "}), _chunk({}, finish="length")]))
     with pytest.raises(LLMError) as err:

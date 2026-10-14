@@ -230,7 +230,8 @@ def rebuild_request(events: list[dict], round_num: int, ai_try: int | None = Non
         sampling = call["sampling"]
         settings = dataclasses.replace(AgentSettings(), model=call["model"], temperature=sampling["temperature"],
                                        top_p=sampling["top_p"], seed=sampling["seed"])
-        return encode_payload(build_payload(call["messages"], tools, settings, call["max_tokens"]))
+        return encode_payload(build_payload(call["messages"], tools, settings, call["max_tokens"],
+                                            call.get("thinking", True)))
     except KeyError as exc:
         raise ValueError(f"that request's log line is incomplete: no {exc.args[0]!r}") from exc
 
